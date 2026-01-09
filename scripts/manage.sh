@@ -19,6 +19,15 @@ DEFAULT_REDIS_HOST="localhost"
 DEFAULT_REDIS_PORT="6379"
 DEFAULT_REDIS_PASSWORD=""
 DEFAULT_APP_PORT="3000"
+# 默认仓库配置（用于 install / update 拉取）
+DEFAULT_REPO_URL="https://github.com/nanashi-hub/claude-relay-service-nanashi.git"
+DEFAULT_REPO_BRANCH="main"
+DEFAULT_WEB_DIST_BRANCH="web-dist"
+
+# 可通过环境变量覆盖：
+#   CRS_REPO_URL：仓库地址（HTTPS/SSH 均可）
+#   CRS_REPO_BRANCH：主分支名（默认 main）
+#   CRS_WEB_DIST_BRANCH：前端预构建分支名（默认 web-dist）
 
 # 全局变量
 INSTALL_DIR=""
@@ -45,6 +54,42 @@ print_error() {
 
 print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+# 获取仓库配置（允许通过环境变量覆盖）
+get_repo_url() {
+    echo "${CRS_REPO_URL:-${DEFAULT_REPO_URL}}"
+}
+
+get_repo_branch() {
+    echo "${CRS_REPO_BRANCH:-${DEFAULT_REPO_BRANCH}}"
+}
+
+get_web_dist_branch() {
+    echo "${CRS_WEB_DIST_BRANCH:-${DEFAULT_WEB_DIST_BRANCH}}"
+}
+
+# 确保 origin 指向期望仓库（避免从上游误更新）
+ensure_origin_remote() {
+    local repo_url
+    repo_url="$(get_repo_url)"
+
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+    local current_url
+    current_url="$(git remote get-url origin 2>/dev/null || true)"
+
+    if [ -z "$current_url" ]; then
+        git remote add origin "$repo_url" >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    if [ "$current_url" != "$repo_url" ]; then
+        print_info "同步远程仓库地址: $current_url -> $repo_url"
+        git remote set-url origin "$repo_url" >/dev/null 2>&1 || return 1
+    fi
+
+    return 0
 }
 
 # 检测操作系统
@@ -422,7 +467,14 @@ install_service() {
         rm -rf "$APP_DIR"
     fi
     
-    if ! git clone https://github.com/nanashi-hub/claude-relay-service-nanashi.git "$APP_DIR"; then
+    local repo_url
+    repo_url="$(get_repo_url)"
+    local repo_branch
+    repo_branch="$(get_repo_branch)"
+    local web_dist_branch
+    web_dist_branch="$(get_web_dist_branch)"
+
+    if ! git clone --branch "$repo_branch" "$repo_url" "$APP_DIR"; then
         print_error "克隆项目失败"
         return 1
     fi
@@ -480,19 +532,19 @@ EOF
     mkdir -p web/admin-spa/dist
     
     # 从 web-dist 分支获取构建好的文件
-    if git ls-remote --heads origin web-dist | grep -q web-dist; then
+    if git ls-remote --heads origin "$web_dist_branch" | grep -q "$web_dist_branch"; then
         print_info "从 web-dist 分支下载前端文件..."
         
         # 创建临时目录用于 clone
         TEMP_CLONE_DIR=$(mktemp -d)
         
         # 使用 sparse-checkout 来只获取需要的文件
-        git clone --depth 1 --branch web-dist --single-branch \
-            https://github.com/nanashi-hub/claude-relay-service-nanashi.git \
+        git clone --depth 1 --branch "$web_dist_branch" --single-branch \
+            "$repo_url" \
             "$TEMP_CLONE_DIR" 2>/dev/null || {
             # 如果 HTTPS 失败，尝试使用当前仓库的 remote URL
             REPO_URL=$(git config --get remote.origin.url)
-            git clone --depth 1 --branch web-dist --single-branch "$REPO_URL" "$TEMP_CLONE_DIR"
+            git clone --depth 1 --branch "$web_dist_branch" --single-branch "$REPO_URL" "$TEMP_CLONE_DIR"
         }
         
         # 复制文件到目标目录（排除 .git 和 README.md）
@@ -572,6 +624,18 @@ update_service() {
     print_info "更新 Claude Relay Service..."
     
     cd "$APP_DIR"
+
+    local repo_url
+    repo_url="$(get_repo_url)"
+    local repo_branch
+    repo_branch="$(get_repo_branch)"
+    local web_dist_branch
+    web_dist_branch="$(get_web_dist_branch)"
+
+    if ! ensure_origin_remote; then
+        print_error "无法同步远程仓库地址到: $repo_url"
+        return 1
+    fi
     
     # 保存当前运行状态
     local was_running=false
@@ -628,14 +692,14 @@ update_service() {
     print_info "获取最新代码..."
     
     # 先获取远程更新
-    if ! git fetch origin main; then
+    if ! git fetch origin "$repo_branch"; then
         print_error "获取远程代码失败，请检查网络连接"
         return 1
     fi
     
     # 强制重置到远程版本
     print_info "应用远程更新..."
-    if ! git reset --hard origin/main; then
+    if ! git reset --hard "origin/$repo_branch"; then
         print_error "重置到远程版本失败"
         # 尝试恢复
         print_info "尝试恢复..."
@@ -673,7 +737,7 @@ update_service() {
     fi
     
     # 从 web-dist 分支获取构建好的文件
-    if git ls-remote --heads origin web-dist | grep -q web-dist; then
+    if git ls-remote --heads origin "$web_dist_branch" | grep -q "$web_dist_branch"; then
         print_info "从 web-dist 分支下载最新前端文件..."
         
         # 创建临时目录用于 clone
@@ -690,8 +754,8 @@ update_service() {
         for attempt in 1 2 3; do
             print_info "尝试下载前端文件 (第 $attempt 次)..."
             
-            if git clone --depth 1 --branch web-dist --single-branch \
-                https://github.com/nanashi-hub/claude-relay-service-nanashi.git \
+            if git clone --depth 1 --branch "$web_dist_branch" --single-branch \
+                "$repo_url" \
                 "$TEMP_CLONE_DIR" 2>/dev/null; then
                 clone_success=true
                 break
@@ -699,7 +763,7 @@ update_service() {
             
             # 如果 HTTPS 失败，尝试使用当前仓库的 remote URL
             REPO_URL=$(git config --get remote.origin.url)
-            if git clone --depth 1 --branch web-dist --single-branch "$REPO_URL" "$TEMP_CLONE_DIR" 2>/dev/null; then
+            if git clone --depth 1 --branch "$web_dist_branch" --single-branch "$REPO_URL" "$TEMP_CLONE_DIR" 2>/dev/null; then
                 clone_success=true
                 break
             fi
@@ -1048,6 +1112,13 @@ switch_branch() {
     fi
     
     cd "$APP_DIR"
+
+    local repo_url
+    repo_url="$(get_repo_url)"
+    local web_dist_branch
+    web_dist_branch="$(get_web_dist_branch)"
+
+    ensure_origin_remote || print_warning "无法同步 origin 远程地址，将继续尝试使用当前 origin"
     
     # 获取当前分支
     local current_branch=$(git branch --show-current 2>/dev/null)
@@ -1214,9 +1285,9 @@ switch_branch() {
         if git ls-remote --heads origin "web-dist-$target_branch" | grep -q "web-dist-$target_branch"; then
             print_info "从 web-dist-$target_branch 分支下载前端文件..."
             local web_branch="web-dist-$target_branch"
-        elif git ls-remote --heads origin web-dist | grep -q web-dist; then
+        elif git ls-remote --heads origin "$web_dist_branch" | grep -q "$web_dist_branch"; then
             print_info "从 web-dist 分支下载前端文件..."
-            local web_branch="web-dist"
+            local web_branch="$web_dist_branch"
         else
             print_warning "未找到预构建的前端文件"
             web_branch=""
@@ -1228,7 +1299,7 @@ switch_branch() {
             
             # 下载前端文件
             if git clone --depth 1 --branch "$web_branch" --single-branch \
-                https://github.com/nanashi-hub/claude-relay-service-nanashi.git \
+                "$repo_url" \
                 "$TEMP_CLONE_DIR" 2>/dev/null; then
                 
                 # 复制文件到目标目录
