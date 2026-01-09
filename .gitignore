@@ -103,6 +103,10 @@ jspm_packages/
 .cache/
 public
 
+# Allow Vite public assets for admin-spa
+!web/admin-spa/public/
+!web/admin-spa/public/**
+
 # Vuepress build output
 .vuepress/dist
 
