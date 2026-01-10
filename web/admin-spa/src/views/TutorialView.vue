@@ -372,8 +372,32 @@
             class="mb-3 flex items-center text-lg font-semibold text-gray-800 dark:text-gray-300 sm:mb-4 sm:text-xl"
           >
             <span
-              class="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-purple-500 text-xs font-bold text-white sm:mr-3 sm:h-8 sm:w-8 sm:text-sm"
+              class="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-sky-500 text-xs font-bold text-white sm:mr-3 sm:h-8 sm:w-8 sm:text-sm"
               >5</span
+            >
+            🧭 Cursor 配置使用
+          </h4>
+          <div
+            class="rounded-xl border border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50 p-4 dark:border-sky-500/40 dark:from-sky-950/30 dark:to-cyan-950/30 sm:p-6"
+          >
+            <ol
+              class="ml-2 list-inside list-decimal space-y-1 text-xs text-gray-700 dark:text-gray-300 sm:ml-4 sm:space-y-2 sm:text-sm"
+            >
+              <li>打开 Cursor → 扩展商店（Extensions）</li>
+              <li>搜索 “Codex”，安装插件</li>
+              <li>在插件中选择 “Use API Key”</li>
+              <li>填入 <code class="rounded bg-gray-100 px-1 dark:bg-gray-800">cr_</code> 开头的密钥并确认，即可调用</li>
+            </ol>
+          </div>
+        </div>
+
+        <div class="mb-6 sm:mb-10">
+          <h4
+            class="mb-3 flex items-center text-lg font-semibold text-gray-800 dark:text-gray-300 sm:mb-4 sm:text-xl"
+          >
+            <span
+              class="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-purple-500 text-xs font-bold text-white sm:mr-3 sm:h-8 sm:w-8 sm:text-sm"
+              >6</span
             >
             🔧 进阶配置（密钥更新）
           </h4>
