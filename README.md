@@ -131,7 +131,7 @@
 ### 快速安装
 
 ```bash
-curl -fsSL https://pincc.ai/manage.sh -o manage.sh && chmod +x manage.sh && ./manage.sh install
+curl -fsSL https://raw.githubusercontent.com/nanashiwang/claude-relay-service-nanashi/main/scripts/manage.sh -o manage.sh && chmod +x manage.sh && ./manage.sh install
 ```
 
 ### 脚本功能
