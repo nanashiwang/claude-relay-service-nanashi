@@ -120,6 +120,40 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# 判断 systemd 是否可用（避免容器/WSL 环境下调用 systemctl 失败）
+is_systemd_ready() {
+    command_exists systemctl && [ -d /run/systemd/system ]
+}
+
+# 启动 Redis 服务（兼容 systemd / service / 直接进程）
+start_redis_service() {
+    local started=false
+
+    if is_systemd_ready; then
+        if sudo systemctl start redis-server >/dev/null 2>&1 || sudo systemctl start redis >/dev/null 2>&1; then
+            started=true
+        fi
+        sudo systemctl enable redis-server >/dev/null 2>&1 || sudo systemctl enable redis >/dev/null 2>&1 || true
+    elif command_exists service; then
+        if sudo service redis-server start >/dev/null 2>&1 || sudo service redis start >/dev/null 2>&1; then
+            started=true
+        fi
+    fi
+
+    if [ "$started" = false ] && command_exists redis-server; then
+        if redis-server --daemonize yes >/dev/null 2>&1; then
+            started=true
+        elif [ -f /etc/redis/redis.conf ]; then
+            redis-server /etc/redis/redis.conf --daemonize yes >/dev/null 2>&1 && started=true
+        fi
+    fi
+
+    if [ "$started" = true ]; then
+        return 0
+    fi
+    return 1
+}
+
 # 检查端口是否被占用
 check_port() {
     local port=$1
@@ -372,18 +406,21 @@ install_local_redis() {
         "debian")
             sudo $PACKAGE_MANAGER update
             sudo $PACKAGE_MANAGER install -y redis-server
-            sudo systemctl start redis-server
-            sudo systemctl enable redis-server
+            if ! start_redis_service; then
+                print_warning "Redis 服务未能自动启动，请手动启动 Redis 后重试"
+            fi
             ;;
         "redhat")
             sudo $PACKAGE_MANAGER install -y redis
-            sudo systemctl start redis
-            sudo systemctl enable redis
+            if ! start_redis_service; then
+                print_warning "Redis 服务未能自动启动，请手动启动 Redis 后重试"
+            fi
             ;;
         "arch")
             sudo $PACKAGE_MANAGER -S --noconfirm redis
-            sudo systemctl start redis
-            sudo systemctl enable redis
+            if ! start_redis_service; then
+                print_warning "Redis 服务未能自动启动，请手动启动 Redis 后重试"
+            fi
             ;;
         "macos")
             brew install redis
