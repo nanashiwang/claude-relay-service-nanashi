@@ -459,6 +459,26 @@ GEMINI_API_KEY="后台创建的API密钥"
 GEMINI_MODEL="gemini-2.5-pro" # 如果你有gemini3权限可以填： gemini-3-pro-preview
 ```
 
+**Windows PowerShell 一键配置（示例）**
+
+> **重要**：下面的 `GEMINI_API_KEY` 为作者个人密钥，仅用于演示。其他人请替换为你自己的 API Key（`cr_` 开头），避免泄露。
+
+```powershell
+npm install -g @google/gemini-cli
+gemini --version
+
+[System.Environment]::SetEnvironmentVariable("GOOGLE_GEMINI_BASE_URL", "https://crss.nanashiwang.com/gemini", [System.EnvironmentVariableTarget]::User)
+[System.Environment]::SetEnvironmentVariable("GEMINI_API_KEY", "cr_bc5e17d5a8ba33d09e7e8f209378d24c6ce420a5decba7cd7964922ea15154f8", [System.EnvironmentVariableTarget]::User)
+[System.Environment]::SetEnvironmentVariable("GEMINI_MODEL", "gemini-2.5-pro", [System.EnvironmentVariableTarget]::User)
+
+# 当前窗口立即生效（可选）
+$env:GOOGLE_GEMINI_BASE_URL="https://crss.nanashiwang.com/gemini"
+$env:GEMINI_API_KEY="cr_bc5e17d5a8ba33d09e7e8f209378d24c6ce420a5decba7cd7964922ea15154f8"
+$env:GEMINI_MODEL="gemini-2.5-pro"
+
+gemini
+```
+
 > **认证**：只能选 ```Use Gemini API Key``` 进行认证，如果提示 ```Enter Gemini API Key``` 请直接留空按回车。如果一打开就跳 Google请删除 ```~/.gemini/settings.json``` 后再尝试启动```gemini```。
 
 > 💡 **进阶用法**：想在 Claude Code 中直接使用 Gemini 3 模型？请参考 [Claude Code 调用 Gemini 3 模型指南](docs/claude-code-gemini3-guide/README.md)

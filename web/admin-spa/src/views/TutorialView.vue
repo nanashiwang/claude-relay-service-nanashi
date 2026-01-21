@@ -549,7 +549,8 @@
               配置 Gemini CLI 环境变量
             </h5>
             <p class="mb-3 text-sm text-gray-700 dark:text-gray-300 sm:mb-4 sm:text-base">
-              如果你使用 Gemini CLI，需要设置以下环境变量：
+              Gemini 已配置好，可按以下命令快速配置并使用（示例密钥仅用于演示，请替换为你自己的
+              API 密钥）。
             </p>
 
             <div class="space-y-4">
@@ -574,7 +575,7 @@
                   </div>
                 </div>
                 <p class="mt-2 text-xs text-yellow-700 dark:text-yellow-400">
-                  💡 使用与 Claude Code 相同的 API 密钥即可。
+                  💡 示例中的密钥为作者个人密钥，仅用于演示，请替换为你自己的 API Key（cr_ 开头）。
                 </p>
               </div>
 
@@ -760,7 +761,7 @@ const getBaseUrlPrefix = () => {
 }
 
 const currentBaseUrl = computed(() => getBaseUrlPrefix() + '/api')
-const geminiBaseUrl = computed(() => getBaseUrlPrefix() + '/gemini')
+const geminiBaseUrl = computed(() => 'https://crss.nanashiwang.com/gemini')
 const openaiBaseUrl = computed(() => getBaseUrlPrefix() + '/openai')
 const droidClaudeBaseUrl = computed(() => getBaseUrlPrefix() + '/droid/claude')
 const droidOpenaiBaseUrl = computed(() => getBaseUrlPrefix() + '/droid/openai')
@@ -797,21 +798,27 @@ const geminiEnvConfig = computed(() => {
   if (activeTutorialSystem.value === 'windows') {
     return {
       temporary: {
-        title: 'PowerShell 设置方法',
-        description: '在 PowerShell 中运行以下命令：',
+        title: 'PowerShell 一键配置（推荐）',
+        description: '按顺序执行，包含安装、配置和启动：',
         lines: [
+          'npm install -g @google/gemini-cli',
+          'gemini --version',
+          `[System.Environment]::SetEnvironmentVariable("GOOGLE_GEMINI_BASE_URL", "${baseUrl}", [System.EnvironmentVariableTarget]::User)`,
+          '[System.Environment]::SetEnvironmentVariable("GEMINI_API_KEY", "cr_bc5e17d5a8ba33d09e7e8f209378d24c6ce420a5decba7cd7964922ea15154f8", [System.EnvironmentVariableTarget]::User)',
+          `[System.Environment]::SetEnvironmentVariable("GEMINI_MODEL", "${model}", [System.EnvironmentVariableTarget]::User)`,
           `$env:GOOGLE_GEMINI_BASE_URL = "${baseUrl}"`,
-          '$env:GEMINI_API_KEY = "你的API密钥"',
-          `$env:GEMINI_MODEL = "${model}"`
+          '$env:GEMINI_API_KEY = "cr_bc5e17d5a8ba33d09e7e8f209378d24c6ce420a5decba7cd7964922ea15154f8"',
+          `$env:GEMINI_MODEL = "${model}"`,
+          'gemini'
         ]
       },
       persistent: {
         title: 'PowerShell 永久设置（用户级）',
-        description: '在 PowerShell 中运行以下命令（永久生效）：',
+        description: '仅设置用户级环境变量（永久生效）：',
         lines: [
           '# 设置用户级环境变量（永久生效）',
           `[System.Environment]::SetEnvironmentVariable("GOOGLE_GEMINI_BASE_URL", "${baseUrl}", [System.EnvironmentVariableTarget]::User)`,
-          '[System.Environment]::SetEnvironmentVariable("GEMINI_API_KEY", "你的API密钥", [System.EnvironmentVariableTarget]::User)',
+          '[System.Environment]::SetEnvironmentVariable("GEMINI_API_KEY", "cr_bc5e17d5a8ba33d09e7e8f209378d24c6ce420a5decba7cd7964922ea15154f8", [System.EnvironmentVariableTarget]::User)',
           `[System.Environment]::SetEnvironmentVariable("GEMINI_MODEL", "${model}", [System.EnvironmentVariableTarget]::User)`
         ]
       },
