@@ -139,6 +139,20 @@
                 </div>
               </div>
 
+              <!-- 状态筛选器 -->
+              <div class="group relative min-w-[140px]">
+                <div
+                  class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
+                ></div>
+                <CustomDropdown
+                  v-model="selectedStatusFilter"
+                  icon="fa-toggle-on"
+                  icon-color="text-emerald-500"
+                  :options="statusOptions"
+                  placeholder="所有状态"
+                />
+              </div>
+
               <!-- 搜索模式与搜索框 -->
               <div class="flex min-w-[240px] flex-col gap-2 sm:flex-row sm:items-center">
                 <div class="sm:w-44">
@@ -2247,6 +2261,9 @@ const availableTags = ref([])
 const selectedModels = ref([])
 const availableModels = ref([])
 
+// 状态筛选相关
+const selectedStatusFilter = ref('')
+
 // 搜索相关
 const searchKeyword = ref('')
 const searchMode = ref('apiKey')
@@ -2270,6 +2287,12 @@ const modelOptions = computed(() => {
     icon: 'fa-cube'
   }))
 })
+
+const statusOptions = computed(() => [
+  { value: '', label: '所有状态', icon: 'fa-asterisk' },
+  { value: 'true', label: '活跃', icon: 'fa-check-circle' },
+  { value: 'false', label: '禁用', icon: 'fa-ban' }
+])
 
 const selectedTagCount = computed(() => {
   if (!selectedTagFilter.value) return 0
@@ -2547,6 +2570,10 @@ const loadApiKeys = async (clearStatsCache = true) => {
     // 筛选参数
     if (selectedTagFilter.value) {
       params.set('tag', selectedTagFilter.value)
+    }
+
+    if (selectedStatusFilter.value !== '') {
+      params.set('isActive', selectedStatusFilter.value)
     }
 
     // 模型筛选参数
@@ -4728,7 +4755,7 @@ const exportToExcel = () => {
 
 // 监听筛选条件变化，重置页码和选中状态
 // 监听筛选条件变化（不包括搜索），清空选中状态
-watch([selectedTagFilter, apiKeyStatsTimeRange], () => {
+watch([selectedTagFilter, selectedStatusFilter, apiKeyStatsTimeRange], () => {
   currentPage.value = 1
   // 清空选中状态
   selectedApiKeys.value = []
@@ -4759,6 +4786,12 @@ watch(searchMode, () => {
 
 // 监听标签筛选变化，重新加载数据
 watch(selectedTagFilter, () => {
+  currentPage.value = 1
+  loadApiKeys(false)
+})
+
+// 监听状态筛选变化，重新加载数据
+watch(selectedStatusFilter, () => {
   currentPage.value = 1
   loadApiKeys(false)
 })
