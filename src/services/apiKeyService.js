@@ -985,24 +985,25 @@ class ApiKeyService {
         tokenLimit: toNumber(sourceKey.tokenLimit)
       }
 
+      const isActivationMode = targetSettings.expirationMode === 'activation'
       let hasMergeableQuota = false
 
-      Object.keys(targetTotals).forEach((field) => {
-        const targetValue = targetTotals[field]
-        const sourceValue = sourceTotals[field]
-        if (targetValue > 0 && sourceValue > 0) {
-          updates[field] = targetValue + sourceValue
-          hasMergeableQuota = true
-        }
-      })
+      if (!isActivationMode) {
+        Object.keys(targetTotals).forEach((field) => {
+          const targetValue = targetTotals[field]
+          const sourceValue = sourceTotals[field]
+          if (targetValue > 0 && sourceValue > 0) {
+            updates[field] = targetValue + sourceValue
+            hasMergeableQuota = true
+          }
+        })
+      }
 
       const targetActivationDays = toNumber(targetKey.activationDays)
       const sourceActivationDays = toNumber(sourceKey.activationDays)
-      if (targetSettings.expirationMode === 'activation' && targetActivationDays > 0) {
+      if (isActivationMode && targetActivationDays > 0 && sourceActivationDays > 0) {
         updates.activationDays = targetActivationDays + sourceActivationDays
-        if (sourceActivationDays > 0) {
-          hasMergeableQuota = true
-        }
+        hasMergeableQuota = true
 
         if (targetKey.isActivated === 'true') {
           const baseTime = targetKey.expiresAt ? new Date(targetKey.expiresAt) : new Date()
