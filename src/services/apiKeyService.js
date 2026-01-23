@@ -784,6 +784,272 @@ class ApiKeyService {
     }
   }
 
+  // 🔀 密钥融合（将新密钥额度合并到旧密钥）
+  async mergeApiKeys({ targetApiKey, sourceApiKey, operator = 'self-service' }) {
+    try {
+      if (!targetApiKey || !sourceApiKey) {
+        throw new Error('请同时提供旧密钥和新密钥')
+      }
+      if (targetApiKey === sourceApiKey) {
+        throw new Error('旧密钥和新密钥不能相同')
+      }
+
+      const [targetValidation, sourceValidation] = await Promise.all([
+        this.validateApiKeyForStats(targetApiKey),
+        this.validateApiKeyForStats(sourceApiKey)
+      ])
+
+      if (!targetValidation.valid) {
+        throw new Error(`旧密钥无效：${targetValidation.error || '无法验证'}`)
+      }
+      if (!sourceValidation.valid) {
+        throw new Error(`新密钥无效：${sourceValidation.error || '无法验证'}`)
+      }
+
+      const targetKeyId = targetValidation.keyData.id
+      const sourceKeyId = sourceValidation.keyData.id
+
+      if (targetKeyId === sourceKeyId) {
+        throw new Error('旧密钥和新密钥不能相同')
+      }
+
+      const [targetKey, sourceKey] = await Promise.all([
+        redis.getApiKey(targetKeyId),
+        redis.getApiKey(sourceKeyId)
+      ])
+
+      if (!targetKey || !sourceKey) {
+        throw new Error('API key not found')
+      }
+
+      if (targetKey.isDeleted === 'true' || sourceKey.isDeleted === 'true') {
+        throw new Error('已删除的密钥不支持融合')
+      }
+
+      if (targetKey.isActive !== 'true' || sourceKey.isActive !== 'true') {
+        throw new Error('仅支持融合启用状态的密钥')
+      }
+
+      const now = new Date()
+      const isExpired = (key) => {
+        if (!key.expiresAt) {
+          return false
+        }
+        const expiresAt = new Date(key.expiresAt)
+        return Number.isFinite(expiresAt.getTime()) && expiresAt < now
+      }
+
+      if (isExpired(targetKey)) {
+        throw new Error('旧密钥已过期，无法融合')
+      }
+      if (isExpired(sourceKey)) {
+        throw new Error('新密钥已过期，无法融合')
+      }
+
+      if ((targetKey.userId || sourceKey.userId) && targetKey.userId !== sourceKey.userId) {
+        throw new Error('密钥归属不一致，无法融合')
+      }
+
+      const [sourceUsage, sourceCostStats] = await Promise.all([
+        redis.getUsageStats(sourceKeyId),
+        redis.getCostStats(sourceKeyId)
+      ])
+
+      const sourceUsageTotal = sourceUsage?.total || {}
+      const sourceHasUsage =
+        (sourceUsageTotal.requests || 0) > 0 ||
+        (sourceUsageTotal.tokens || 0) > 0 ||
+        (sourceUsageTotal.allTokens || 0) > 0 ||
+        (sourceCostStats?.total || 0) > 0
+
+      if (sourceHasUsage) {
+        throw new Error('新密钥已有使用记录，无法融合')
+      }
+
+      const toNumber = (value) => {
+        const num = Number(value)
+        return Number.isFinite(num) ? num : 0
+      }
+      const toString = (value) => (value === null || value === undefined ? '' : String(value))
+      const toBoolean = (value) => value === true || value === 'true'
+      const toSortedList = (value) => {
+        if (!value) {
+          return []
+        }
+        if (Array.isArray(value)) {
+          return value.map((item) => String(item)).filter(Boolean).sort()
+        }
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value)
+            if (Array.isArray(parsed)) {
+              return parsed.map((item) => String(item)).filter(Boolean).sort()
+            }
+          } catch (error) {
+            // 忽略解析错误，按单值处理
+          }
+          return [value].filter(Boolean).sort()
+        }
+        return [String(value)].filter(Boolean).sort()
+      }
+
+      const normalizePermissionsForCompare = (value) => {
+        return normalizePermissions(value).map((item) => String(item)).sort()
+      }
+
+      const buildSettings = (key) => ({
+        concurrencyLimit: toNumber(key.concurrencyLimit),
+        rateLimitWindow: toNumber(key.rateLimitWindow),
+        rateLimitRequests: toNumber(key.rateLimitRequests),
+        rateLimitCost: toNumber(key.rateLimitCost),
+        tokenLimit: toNumber(key.tokenLimit),
+        claudeAccountId: toString(key.claudeAccountId),
+        claudeConsoleAccountId: toString(key.claudeConsoleAccountId),
+        geminiAccountId: toString(key.geminiAccountId),
+        openaiAccountId: toString(key.openaiAccountId),
+        azureOpenaiAccountId: toString(key.azureOpenaiAccountId),
+        bedrockAccountId: toString(key.bedrockAccountId),
+        droidAccountId: toString(key.droidAccountId),
+        permissions: normalizePermissionsForCompare(key.permissions),
+        enableModelRestriction: toBoolean(key.enableModelRestriction),
+        restrictedModels: toSortedList(key.restrictedModels),
+        enableClientRestriction: toBoolean(key.enableClientRestriction),
+        allowedClients: toSortedList(key.allowedClients),
+        tags: toSortedList(key.tags),
+        expirationMode: toString(key.expirationMode || 'fixed'),
+        activationUnit: toString(key.activationUnit || 'days'),
+        activationDays: toNumber(key.activationDays),
+        dailyCostLimit: toNumber(key.dailyCostLimit),
+        totalCostLimit: toNumber(key.totalCostLimit),
+        weeklyOpusCostLimit: toNumber(key.weeklyOpusCostLimit)
+      })
+
+      const targetSettings = buildSettings(targetKey)
+      const sourceSettings = buildSettings(sourceKey)
+      const mismatchFields = []
+
+      const compareValue = (field, aValue, bValue) => {
+        const isArray = Array.isArray(aValue) || Array.isArray(bValue)
+        const same = isArray
+          ? Array.isArray(aValue) &&
+            Array.isArray(bValue) &&
+            aValue.length === bValue.length &&
+            aValue.every((item, index) => item === bValue[index])
+          : aValue === bValue
+        if (!same) {
+          mismatchFields.push({
+            field,
+            target: aValue,
+            source: bValue
+          })
+        }
+      }
+
+      Object.keys(targetSettings).forEach((field) => {
+        compareValue(field, targetSettings[field], sourceSettings[field])
+      })
+
+      if (targetSettings.expirationMode === 'fixed') {
+        const targetExpiresAt = toString(targetKey.expiresAt)
+        const sourceExpiresAt = toString(sourceKey.expiresAt)
+        if (targetExpiresAt !== sourceExpiresAt) {
+          mismatchFields.push({
+            field: 'expiresAt',
+            target: targetExpiresAt,
+            source: sourceExpiresAt
+          })
+        }
+      }
+
+      if (mismatchFields.length > 0) {
+        const error = new Error('密钥设置不一致，无法融合')
+        error.details = { mismatchFields }
+        throw error
+      }
+
+      const updates = {}
+      const targetTotals = {
+        totalCostLimit: toNumber(targetKey.totalCostLimit),
+        dailyCostLimit: toNumber(targetKey.dailyCostLimit),
+        weeklyOpusCostLimit: toNumber(targetKey.weeklyOpusCostLimit),
+        rateLimitCost: toNumber(targetKey.rateLimitCost),
+        rateLimitRequests: toNumber(targetKey.rateLimitRequests),
+        tokenLimit: toNumber(targetKey.tokenLimit)
+      }
+      const sourceTotals = {
+        totalCostLimit: toNumber(sourceKey.totalCostLimit),
+        dailyCostLimit: toNumber(sourceKey.dailyCostLimit),
+        weeklyOpusCostLimit: toNumber(sourceKey.weeklyOpusCostLimit),
+        rateLimitCost: toNumber(sourceKey.rateLimitCost),
+        rateLimitRequests: toNumber(sourceKey.rateLimitRequests),
+        tokenLimit: toNumber(sourceKey.tokenLimit)
+      }
+
+      let hasMergeableQuota = false
+
+      Object.keys(targetTotals).forEach((field) => {
+        const targetValue = targetTotals[field]
+        const sourceValue = sourceTotals[field]
+        if (targetValue > 0 && sourceValue > 0) {
+          updates[field] = targetValue + sourceValue
+          hasMergeableQuota = true
+        }
+      })
+
+      const targetActivationDays = toNumber(targetKey.activationDays)
+      const sourceActivationDays = toNumber(sourceKey.activationDays)
+      if (targetSettings.expirationMode === 'activation' && targetActivationDays > 0) {
+        updates.activationDays = targetActivationDays + sourceActivationDays
+        if (sourceActivationDays > 0) {
+          hasMergeableQuota = true
+        }
+
+        if (targetKey.isActivated === 'true') {
+          const baseTime = targetKey.expiresAt ? new Date(targetKey.expiresAt) : new Date()
+          const baseMs = Number.isFinite(baseTime.getTime()) ? baseTime.getTime() : Date.now()
+          const unit = targetSettings.activationUnit === 'hours' ? 'hours' : 'days'
+          const extraMs =
+            unit === 'hours'
+              ? sourceActivationDays * 60 * 60 * 1000
+              : sourceActivationDays * 24 * 60 * 60 * 1000
+          updates.expiresAt = new Date(baseMs + extraMs).toISOString()
+        }
+      }
+
+      if (!hasMergeableQuota) {
+        throw new Error('未检测到可融合的额度')
+      }
+
+      await this.updateApiKey(targetKeyId, updates)
+      await this.updateApiKey(sourceKeyId, { isActive: false })
+
+      logger.success(
+        `🔀 API Key merged: ${sourceKeyId} -> ${targetKeyId} by ${operator || 'unknown'}`
+      )
+
+      return {
+        targetKeyId,
+        targetKeyName: targetKey.name || '',
+        sourceKeyId,
+        sourceKeyName: sourceKey.name || '',
+        merged: {
+          totalCostLimit: updates.totalCostLimit ?? targetTotals.totalCostLimit,
+          dailyCostLimit: updates.dailyCostLimit ?? targetTotals.dailyCostLimit,
+          weeklyOpusCostLimit: updates.weeklyOpusCostLimit ?? targetTotals.weeklyOpusCostLimit,
+          rateLimitCost: updates.rateLimitCost ?? targetTotals.rateLimitCost,
+          rateLimitRequests: updates.rateLimitRequests ?? targetTotals.rateLimitRequests,
+          tokenLimit: updates.tokenLimit ?? targetTotals.tokenLimit,
+          activationDays: updates.activationDays ?? targetActivationDays,
+          activationUnit: targetSettings.activationUnit,
+          expiresAt: updates.expiresAt || targetKey.expiresAt || ''
+        }
+      }
+    } catch (error) {
+      logger.error('❌ Failed to merge API keys:', error)
+      throw error
+    }
+  }
+
   // 🗑️ 软删除API Key (保留使用统计)
   async deleteApiKey(keyId, deletedBy = 'system', deletedByType = 'system') {
     try {

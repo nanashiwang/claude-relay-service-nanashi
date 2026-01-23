@@ -6,7 +6,13 @@
         <LogoTitle
           :loading="oemLoading"
           :logo-src="oemSettings.siteIconData || oemSettings.siteIcon"
-          :subtitle="currentTab === 'stats' ? 'API Key 使用统计' : '使用教程'"
+          :subtitle="
+            currentTab === 'stats'
+              ? 'API Key 使用统计'
+              : currentTab === 'merge'
+                ? '密钥融合'
+                : '使用教程'
+          "
           :title="oemSettings.siteName"
         />
         <div class="flex items-center gap-2 md:gap-4">
@@ -47,7 +53,7 @@
     <div class="mb-6 md:mb-8">
       <div class="flex justify-center">
         <div
-          class="inline-flex w-full max-w-md rounded-full border border-white/20 bg-white/10 p-1 shadow-lg backdrop-blur-xl md:w-auto"
+          class="inline-flex w-full max-w-lg rounded-full border border-white/20 bg-white/10 p-1 shadow-lg backdrop-blur-xl md:w-auto"
         >
           <button
             :class="['tab-pill-button', currentTab === 'stats' ? 'active' : '']"
@@ -55,6 +61,13 @@
           >
             <i class="fas fa-chart-line mr-1 md:mr-2" />
             <span class="text-sm md:text-base">统计查询</span>
+          </button>
+          <button
+            :class="['tab-pill-button', currentTab === 'merge' ? 'active' : '']"
+            @click="currentTab = 'merge'"
+          >
+            <i class="fas fa-link mr-1 md:mr-2" />
+            <span class="text-sm md:text-base">密钥融合</span>
           </button>
           <button
             :class="['tab-pill-button', currentTab === 'tutorial' ? 'active' : '']"
@@ -158,6 +171,11 @@
       </div>
     </div>
 
+    <!-- 密钥融合 -->
+    <div v-if="currentTab === 'merge'" class="tab-content">
+      <KeyMergePanel />
+    </div>
+
     <!-- API Key 测试弹窗 -->
     <ApiKeyTestModal
       :api-key-name="statsData?.name || ''"
@@ -182,6 +200,7 @@ import TokenDistribution from '@/components/apistats/TokenDistribution.vue'
 import LimitConfig from '@/components/apistats/LimitConfig.vue'
 import AggregatedStatsCard from '@/components/apistats/AggregatedStatsCard.vue'
 import ModelUsageStats from '@/components/apistats/ModelUsageStats.vue'
+import KeyMergePanel from '@/components/apistats/KeyMergePanel.vue'
 import TutorialView from './TutorialView.vue'
 import ApiKeyTestModal from '@/components/apikeys/ApiKeyTestModal.vue'
 

@@ -63,7 +63,64 @@ router.post('/api/get-key-id', async (req, res) => {
   }
 })
 
-// 📊 用户API Key统计查询接口 - 安全的自查询接口
+// 🔀 API Key 密钥融合（将新密钥额度合并到旧密钥）
+router.post('/api/merge-keys', async (req, res) => {
+  try {
+    const { targetApiKey, sourceApiKey } = req.body || {}
+
+    const normalizedTarget = typeof targetApiKey === 'string' ? targetApiKey.trim() : ''
+    const normalizedSource = typeof sourceApiKey === 'string' ? sourceApiKey.trim() : ''
+
+    if (!normalizedTarget || !normalizedSource) {
+      return res.status(400).json({
+        error: 'Invalid input',
+        message: '请同时提供旧密钥和新密钥'
+      })
+    }
+
+    if (normalizedTarget.length < 10 || normalizedTarget.length > 512) {
+      return res.status(400).json({
+        error: 'Invalid API key format',
+        message: '旧密钥格式无效'
+      })
+    }
+
+    if (normalizedSource.length < 10 || normalizedSource.length > 512) {
+      return res.status(400).json({
+        error: 'Invalid API key format',
+        message: '新密钥格式无效'
+      })
+    }
+
+    if (normalizedTarget === normalizedSource) {
+      return res.status(400).json({
+        error: 'Invalid input',
+        message: '旧密钥和新密钥不能相同'
+      })
+    }
+
+    const result = await apiKeyService.mergeApiKeys({
+      targetApiKey: normalizedTarget,
+      sourceApiKey: normalizedSource,
+      operator: req.ip || 'api-stats'
+    })
+
+    return res.json({
+      success: true,
+      data: result
+    })
+  } catch (error) {
+    const statusCode = error?.details?.mismatchFields ? 409 : 400
+    logger.error('❌ Failed to merge API keys via apiStats:', error)
+    return res.status(statusCode).json({
+      error: 'Merge failed',
+      message: error.message || '密钥融合失败',
+      details: error.details || null
+    })
+  }
+})
+
+// 📊 用户API Key统计查询接口 - 安全的自查查询接口
 router.post('/api/user-stats', async (req, res) => {
   try {
     const { apiKey, apiId } = req.body

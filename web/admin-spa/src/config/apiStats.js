@@ -26,7 +26,10 @@ class ApiStatsClient {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.message || `请求失败: ${response.status}`)
+        const error = new Error(data.message || `请求失败: ${response.status}`)
+        error.data = data
+        error.status = response.status
+        throw error
       }
 
       return data
@@ -90,6 +93,14 @@ class ApiStatsClient {
     return this.request('/apiStats/api/batch-model-stats', {
       method: 'POST',
       body: JSON.stringify({ apiIds, period })
+    })
+  }
+
+  // 密钥融合
+  async mergeKeys(payload) {
+    return this.request('/apiStats/api/merge-keys', {
+      method: 'POST',
+      body: JSON.stringify(payload)
     })
   }
 }
