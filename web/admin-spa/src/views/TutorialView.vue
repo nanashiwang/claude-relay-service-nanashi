@@ -514,6 +514,49 @@
               class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800 sm:p-4"
             >
               <summary class="cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-200">
+                🧩 IDE 工具通用设置
+              </summary>
+              <div class="mt-3 space-y-3 text-sm text-gray-700 dark:text-gray-300">
+                <div>
+                  <p class="mb-1 font-medium text-gray-800 dark:text-gray-200">适用工具</p>
+                  <p>任何支持 OpenAI 协议的工具，都可以使用。</p>
+                </div>
+                <div>
+                  <p class="mb-1 font-medium text-gray-800 dark:text-gray-200">安装和配置方法</p>
+                  <ol class="ml-2 list-inside list-decimal space-y-1">
+                    <li>找到适配 OpenAI 协议的 Provider</li>
+                    <li>
+                      添加/替换 OpenAI Base URL 为
+                      <code class="rounded bg-gray-100 px-1 dark:bg-gray-900">{{ openaiBaseUrl }}</code>
+                    </li>
+                    <li>
+                      输入自己的 Key，如需模型参数则填写需要的模型（Cursor / Zcode 等工具适用）
+                    </li>
+                  </ol>
+                </div>
+                <div
+                  class="rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-900 sm:p-4"
+                >
+                  <img
+                    v-if="!ideToolSetupLoadFailed"
+                    :src="ideToolSetupUrl"
+                    alt="IDE 工具通用设置"
+                    class="w-full rounded-md border border-gray-200 shadow-sm dark:border-gray-700"
+                    loading="lazy"
+                    @error="ideToolSetupLoadFailed = true"
+                  />
+                  <div v-else class="text-xs text-gray-600 dark:text-gray-400">
+                    未找到图片，请确保文件位于
+                    <code class="rounded bg-gray-100 px-1 dark:bg-gray-900">web/admin-spa/public/ide-tool-setup.png</code>
+                  </div>
+                </div>
+              </div>
+            </details>
+
+            <details
+              class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800 sm:p-4"
+            >
+              <summary class="cursor-pointer text-sm font-medium text-gray-800 dark:text-gray-200">
                 ⚠️ 注意事项 / 获取帮助
               </summary>
               <div class="mt-3 space-y-2 text-sm text-gray-700 dark:text-gray-300">
@@ -700,6 +743,10 @@ const activeTutorialSystem = ref('windows')
 const joinGroupQrFileName = 'join-group-qr.png'
 const joinGroupQrUrl = computed(() => `${import.meta.env.BASE_URL}${joinGroupQrFileName}`)
 const joinGroupQrLoadFailed = ref(false)
+
+const ideToolSetupFileName = 'ide-tool-setup.png'
+const ideToolSetupUrl = computed(() => `${import.meta.env.BASE_URL}${ideToolSetupFileName}`)
+const ideToolSetupLoadFailed = ref(false)
 
 const tutorialClients = [
   { key: 'claude', name: 'Claude', icon: 'fas fa-robot' },
