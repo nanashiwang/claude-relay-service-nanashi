@@ -6,7 +6,7 @@
         密钥融合
       </h2>
       <p class="text-base text-gray-600 dark:text-gray-400">
-        将新密钥的额度合并到旧密钥中，融合成功后新密钥会被禁用。
+        将新密钥额度合并到旧密钥中；若旧密钥已禁用，则直接用新密钥配置替换旧密钥。完成后新密钥会被禁用。
       </p>
     </div>
 
@@ -59,7 +59,7 @@
 
       <div class="merge-notice mt-4">
         <i class="fas fa-shield-alt mr-2" />
-        密钥融合仅在两把密钥设置完全一致且新密钥未使用的情况下才可执行，融合会叠加额度与有效期。
+        密钥融合仅在两把密钥设置一致且新密钥未使用时可执行（天卡有效期天数、按量总量额度允许不一致）；旧密钥已禁用时将直接替换配置并保留旧密钥。
       </div>
 
       <div v-if="error" class="mt-4">
@@ -89,9 +89,9 @@
         <div
           class="rounded-xl border border-emerald-400/40 bg-emerald-50 p-3 text-sm text-emerald-700 dark:border-emerald-400/30 dark:bg-emerald-900/20 dark:text-emerald-200"
         >
-          <div class="mb-2 font-semibold">融合成功</div>
+          <div class="mb-2 font-semibold">{{ successTitle }}</div>
           <div class="space-y-1">
-            <div>旧密钥已更新，新密钥已禁用。</div>
+            <div>{{ successSummary }}</div>
             <div v-for="item in mergedItems" :key="item.field">
               {{ item.label }}：{{ item.value }}
             </div>
@@ -216,6 +216,16 @@ const mergedItems = computed(() => {
       value: formatRawValue(item.value, item.field)
     }))
 })
+
+const successTitle = computed(() =>
+  result.value?.action === 'replace' ? '替换成功' : '融合成功'
+)
+
+const successSummary = computed(() =>
+  result.value?.action === 'replace'
+    ? '旧密钥已替换为新密钥配置，新密钥已禁用。'
+    : '旧密钥额度已合并，新密钥已禁用。'
+)
 
 const mergeKeys = async () => {
   if (!canSubmit.value) {

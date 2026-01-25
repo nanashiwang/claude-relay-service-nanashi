@@ -826,8 +826,12 @@ class ApiKeyService {
         throw new Error('已删除的密钥不支持融合')
       }
 
-      if (targetKey.isActive !== 'true' || sourceKey.isActive !== 'true') {
-        throw new Error('仅支持融合启用状态的密钥')
+      const targetIsActive = targetKey.isActive === 'true'
+      const sourceIsActive = sourceKey.isActive === 'true'
+      const shouldReplace = !targetIsActive
+
+      if (!sourceIsActive) {
+        throw new Error('新密钥必须为启用状态')
       }
 
       const now = new Date()
@@ -839,7 +843,7 @@ class ApiKeyService {
         return Number.isFinite(expiresAt.getTime()) && expiresAt < now
       }
 
-      if (isExpired(targetKey)) {
+      if (!shouldReplace && isExpired(targetKey)) {
         throw new Error('旧密钥已过期，无法融合')
       }
       if (isExpired(sourceKey)) {
@@ -892,6 +896,86 @@ class ApiKeyService {
         }
         return [String(value)].filter(Boolean).sort()
       }
+      const parseListValue = (value) => {
+        if (!value) {
+          return []
+        }
+        if (Array.isArray(value)) {
+          return value
+        }
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value)
+            if (Array.isArray(parsed)) {
+              return parsed
+            }
+          } catch (error) {
+            // 忽略解析错误，按单值处理
+          }
+          return [value]
+        }
+        return [String(value)]
+      }
+
+      if (shouldReplace) {
+        const replacementUpdates = {
+          description: toString(sourceKey.description),
+          tokenLimit: toNumber(sourceKey.tokenLimit),
+          concurrencyLimit: toNumber(sourceKey.concurrencyLimit),
+          rateLimitWindow: toNumber(sourceKey.rateLimitWindow),
+          rateLimitRequests: toNumber(sourceKey.rateLimitRequests),
+          rateLimitCost: toNumber(sourceKey.rateLimitCost),
+          claudeAccountId: toString(sourceKey.claudeAccountId),
+          claudeConsoleAccountId: toString(sourceKey.claudeConsoleAccountId),
+          geminiAccountId: toString(sourceKey.geminiAccountId),
+          openaiAccountId: toString(sourceKey.openaiAccountId),
+          azureOpenaiAccountId: toString(sourceKey.azureOpenaiAccountId),
+          bedrockAccountId: toString(sourceKey.bedrockAccountId),
+          droidAccountId: toString(sourceKey.droidAccountId),
+          permissions: toString(sourceKey.permissions),
+          enableModelRestriction: toBoolean(sourceKey.enableModelRestriction),
+          restrictedModels: parseListValue(sourceKey.restrictedModels),
+          enableClientRestriction: toBoolean(sourceKey.enableClientRestriction),
+          allowedClients: parseListValue(sourceKey.allowedClients),
+          tags: parseListValue(sourceKey.tags),
+          expirationMode: toString(sourceKey.expirationMode || 'fixed'),
+          activationUnit: toString(sourceKey.activationUnit || 'days'),
+          activationDays: toNumber(sourceKey.activationDays),
+          isActivated: toBoolean(sourceKey.isActivated),
+          activatedAt: toString(sourceKey.activatedAt),
+          expiresAt: toString(sourceKey.expiresAt),
+          dailyCostLimit: toNumber(sourceKey.dailyCostLimit),
+          totalCostLimit: toNumber(sourceKey.totalCostLimit),
+          weeklyOpusCostLimit: toNumber(sourceKey.weeklyOpusCostLimit),
+          isActive: true
+        }
+
+        await this.updateApiKey(targetKeyId, replacementUpdates)
+        await this.updateApiKey(sourceKeyId, { isActive: false })
+
+        logger.success(
+          `🔁 API Key replaced: ${sourceKeyId} -> ${targetKeyId} by ${operator || 'unknown'}`
+        )
+
+        return {
+          action: 'replace',
+          targetKeyId,
+          targetKeyName: targetKey.name || '',
+          sourceKeyId,
+          sourceKeyName: sourceKey.name || '',
+          merged: {
+            totalCostLimit: replacementUpdates.totalCostLimit,
+            dailyCostLimit: replacementUpdates.dailyCostLimit,
+            weeklyOpusCostLimit: replacementUpdates.weeklyOpusCostLimit,
+            rateLimitCost: replacementUpdates.rateLimitCost,
+            rateLimitRequests: replacementUpdates.rateLimitRequests,
+            tokenLimit: replacementUpdates.tokenLimit,
+            activationDays: replacementUpdates.activationDays,
+            activationUnit: replacementUpdates.activationUnit,
+            expiresAt: replacementUpdates.expiresAt || ''
+          }
+        }
+      }
 
       const normalizePermissionsForCompare = (value) => {
         return normalizePermissions(value).map((item) => String(item)).sort()
@@ -927,8 +1011,19 @@ class ApiKeyService {
       const targetSettings = buildSettings(targetKey)
       const sourceSettings = buildSettings(sourceKey)
       const mismatchFields = []
+      const ignoredFields = new Set()
+
+      if (targetSettings.expirationMode === 'activation') {
+        ignoredFields.add('activationDays')
+      }
+      if (targetSettings.totalCostLimit > 0 && sourceSettings.totalCostLimit > 0) {
+        ignoredFields.add('totalCostLimit')
+      }
 
       const compareValue = (field, aValue, bValue) => {
+        if (ignoredFields.has(field)) {
+          return
+        }
         const isArray = Array.isArray(aValue) || Array.isArray(bValue)
         const same = isArray
           ? Array.isArray(aValue) &&
@@ -1029,6 +1124,7 @@ class ApiKeyService {
       )
 
       return {
+        action: 'merge',
         targetKeyId,
         targetKeyName: targetKey.name || '',
         sourceKeyId,
