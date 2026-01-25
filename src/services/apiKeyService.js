@@ -1022,6 +1022,7 @@ class ApiKeyService {
       if (targetSettings.totalCostLimit > 0 && sourceSettings.totalCostLimit > 0) {
         ignoredFields.add('totalCostLimit')
       }
+      ignoredFields.add('tags')
 
       const compareValue = (field, aValue, bValue) => {
         if (ignoredFields.has(field)) {
