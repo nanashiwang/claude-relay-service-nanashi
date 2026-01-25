@@ -410,8 +410,10 @@ class ApiKeyService {
   }
 
   // 🔍 验证API Key（仅用于统计查询，不触发激活）
-  async validateApiKeyForStats(apiKey) {
+  async validateApiKeyForStats(apiKey, options = {}) {
     try {
+      const { allowDisabled = false, allowExpired = false } = options || {}
+
       if (!apiKey || !apiKey.startsWith(this.prefix)) {
         return { valid: false, error: 'Invalid API key format' }
       }
@@ -427,7 +429,7 @@ class ApiKeyService {
       }
 
       // 检查是否激活
-      if (keyData.isActive !== 'true') {
+      if (!allowDisabled && keyData.isActive !== 'true') {
         const keyName = keyData.name || 'Unknown'
         return { valid: false, error: `API Key "${keyName}" 已被禁用`, keyName }
       }
@@ -436,6 +438,7 @@ class ApiKeyService {
 
       // 检查是否过期（仅对已激活的 Key 检查）
       if (
+        !allowExpired &&
         keyData.isActivated === 'true' &&
         keyData.expiresAt &&
         new Date() > new Date(keyData.expiresAt)
@@ -795,7 +798,7 @@ class ApiKeyService {
       }
 
       const [targetValidation, sourceValidation] = await Promise.all([
-        this.validateApiKeyForStats(targetApiKey),
+        this.validateApiKeyForStats(targetApiKey, { allowDisabled: true, allowExpired: true }),
         this.validateApiKeyForStats(sourceApiKey)
       ])
 
