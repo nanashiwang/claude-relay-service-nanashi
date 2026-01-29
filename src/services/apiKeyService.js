@@ -954,6 +954,7 @@ class ApiKeyService {
         }
 
         await this.updateApiKey(targetKeyId, replacementUpdates)
+        await redis.resetApiKeyUsageStats(targetKeyId)
         await this.updateApiKey(sourceKeyId, { isActive: false })
 
         logger.success(
@@ -1381,8 +1382,9 @@ class ApiKeyService {
       )
 
       // 记录费用统计
+      let costTotals = null
       if (costInfo.costs.total > 0) {
-        await redis.incrementDailyCost(keyId, costInfo.costs.total)
+        costTotals = await redis.incrementDailyCost(keyId, costInfo.costs.total)
         logger.database(
           `💰 Recorded cost for ${keyId}: $${costInfo.costs.total.toFixed(6)}, model: ${model}`
         )
@@ -1419,6 +1421,8 @@ class ApiKeyService {
         }
       }
 
+      await this._disableKeyIfTotalCostLimitReached(keyData, costTotals?.total)
+
       // 记录单次请求的使用详情
       const usageCost = costInfo && costInfo.costs ? costInfo.costs.total || 0 : 0
       await redis.addUsageRecord(keyId, {
@@ -1449,7 +1453,42 @@ class ApiKeyService {
     }
   }
 
-  // 📊 记录 Opus 模型费用（仅限 claude 和 claude-console 账户）
+  async _disableKeyIfTotalCostLimitReached(keyData, totalCost) {
+    try {
+      if (!keyData || !keyData.id) {
+        return false
+      }
+
+      const totalCostLimit = Number(keyData.totalCostLimit || 0)
+      if (!Number.isFinite(totalCostLimit) || totalCostLimit <= 0) {
+        return false
+      }
+
+      const currentTotalCost = Number(totalCost)
+      if (!Number.isFinite(currentTotalCost) || currentTotalCost < totalCostLimit) {
+        return false
+      }
+
+      const isActive = keyData.isActive === 'true' || keyData.isActive === true
+      if (!isActive) {
+        return false
+      }
+
+      await this.updateApiKey(keyData.id, { isActive: false })
+      logger.security(
+        `Total cost limit reached, API key disabled: ${keyData.id} (${
+          keyData.name || 'Unnamed'
+        }), cost: $${currentTotalCost.toFixed(2)}/$${totalCostLimit}`
+      )
+
+      return true
+    } catch (error) {
+      logger.warn(
+        `Failed to disable API key by total cost limit: ${keyData?.id || 'unknown'}, ${error.message}`
+      )
+      return false
+    }
+  }
   async recordOpusCost(keyId, cost, model, accountType) {
     try {
       // 判断是否为 Opus 模型
@@ -1571,8 +1610,9 @@ class ApiKeyService {
       )
 
       // 记录费用统计
+      let costTotals = null
       if (costInfo.totalCost > 0) {
-        await redis.incrementDailyCost(keyId, costInfo.totalCost)
+        costTotals = await redis.incrementDailyCost(keyId, costInfo.totalCost)
         logger.database(
           `💰 Recorded cost for ${keyId}: $${costInfo.totalCost.toFixed(6)}, model: ${model}`
         )
@@ -1628,6 +1668,8 @@ class ApiKeyService {
           )
         }
       }
+
+      await this._disableKeyIfTotalCostLimitReached(keyData, costTotals?.total)
 
       const usageRecord = {
         timestamp: new Date().toISOString(),

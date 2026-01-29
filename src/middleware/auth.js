@@ -1224,6 +1224,14 @@ const authenticateApiKey = async (req, res, next) => {
           }), cost: $${totalCost.toFixed(2)}/$${totalCostLimit}`
         )
 
+        try {
+          await apiKeyService.updateApiKey(validation.keyData.id, { isActive: false })
+        } catch (error) {
+          logger.warn(
+            `Failed to disable API key after total cost limit: ${validation.keyData.id}, ${error.message}`
+          )
+        }
+
         return res.status(429).json({
           error: 'Total cost limit exceeded',
           message: `已达到总费用限制 ($${totalCostLimit})`,

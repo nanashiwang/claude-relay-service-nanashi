@@ -1050,7 +1050,20 @@ class RedisClient {
       this.client.expire(hourlyKey, 86400 * 7) // 7天
     ])
 
+    const parseCost = (value) => {
+      const num = Number(value)
+      return Number.isFinite(num) ? num : 0
+    }
+
+    const totals = {
+      daily: parseCost(results[0]),
+      monthly: parseCost(results[1]),
+      hourly: parseCost(results[2]),
+      total: parseCost(results[3])
+    }
+
     logger.debug(`💰 Cost incremented successfully, new daily total: $${results[0]}`)
+    return totals
   }
 
   // 💰 获取费用统计
@@ -1360,6 +1373,60 @@ class RedisClient {
       return stats
     } catch (error) {
       throw new Error(`Failed to reset usage stats: ${error.message}`)
+    }
+  }
+
+  async resetApiKeyUsageStats(keyId) {
+    const client = this.getClientSafe()
+    if (!keyId) {
+      return { deletedKeys: 0, resetApiKey: false }
+    }
+
+    const patterns = [
+      `usage:${keyId}`,
+      `usage:${keyId}:*`,
+      `usage:*:${keyId}`,
+      `usage:*:${keyId}:*`
+    ]
+
+    const keysToDelete = new Set()
+    const collectKeys = async (pattern) => {
+      let cursor = '0'
+      do {
+        const [newCursor, keys] = await client.scan(cursor, 'MATCH', pattern, 'COUNT', 200)
+        cursor = newCursor
+        for (const key of keys) {
+          keysToDelete.add(key)
+        }
+      } while (cursor !== '0')
+    }
+
+    try {
+      for (const pattern of patterns) {
+        if (pattern.includes('*')) {
+          await collectKeys(pattern)
+        } else {
+          keysToDelete.add(pattern)
+        }
+      }
+
+      const keyList = Array.from(keysToDelete)
+      const chunkSize = 500
+      for (let i = 0; i < keyList.length; i += chunkSize) {
+        await client.del(...keyList.slice(i, i + chunkSize))
+      }
+
+      let resetApiKey = false
+      const keyData = await client.hgetall(`apikey:${keyId}`)
+      if (keyData && Object.keys(keyData).length > 0) {
+        keyData.lastUsedAt = ''
+        await client.hset(`apikey:${keyId}`, keyData)
+        resetApiKey = true
+      }
+
+      return { deletedKeys: keyList.length, resetApiKey }
+    } catch (error) {
+      throw new Error(`Failed to reset API key usage stats: ${error.message}`)
     }
   }
 
