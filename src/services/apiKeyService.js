@@ -437,11 +437,13 @@ class ApiKeyService {
       // 注意：这里不处理激活逻辑，保持 API Key 的未激活状态
 
       // 检查是否过期（仅对已激活的 Key 检查）
-      if (
-        !allowExpired &&
+      const isExpired =
         keyData.isActivated === 'true' &&
         keyData.expiresAt &&
         new Date() > new Date(keyData.expiresAt)
+      if (
+        !allowExpired &&
+        isExpired
       ) {
         const keyName = keyData.name || 'Unknown'
         return { valid: false, error: `API Key "${keyName}" 已过期`, keyName }
@@ -502,6 +504,9 @@ class ApiKeyService {
           description: keyData.description,
           createdAt: keyData.createdAt,
           expiresAt: keyData.expiresAt,
+          isActive: keyData.isActive === 'true',
+          isDeleted: keyData.isDeleted === 'true',
+          isExpired: Boolean(isExpired),
           // 添加激活相关字段
           expirationMode: keyData.expirationMode || 'fixed',
           isActivated: keyData.isActivated === 'true',

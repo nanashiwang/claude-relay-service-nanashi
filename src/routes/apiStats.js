@@ -151,25 +151,10 @@ router.post('/api/user-stats', async (req, res) => {
         })
       }
 
-      // 检查是否激活
-      if (keyData.isActive !== 'true') {
-        const keyName = keyData.name || 'Unknown'
-        return res.status(403).json({
-          error: 'API key is disabled',
-          message: `API Key "${keyName}" 已被禁用`,
-          keyName
-        })
-      }
-
-      // 检查是否过期
-      if (keyData.expiresAt && new Date() > new Date(keyData.expiresAt)) {
-        const keyName = keyData.name || 'Unknown'
-        return res.status(403).json({
-          error: 'API key has expired',
-          message: `API Key "${keyName}" 已过期`,
-          keyName
-        })
-      }
+      const isExpired =
+        keyData.isActivated === 'true' &&
+        keyData.expiresAt &&
+        new Date() > new Date(keyData.expiresAt)
 
       keyId = apiId
 
@@ -200,6 +185,9 @@ router.post('/api/user-stats', async (req, res) => {
       // 格式化 keyData
       keyData = {
         ...keyData,
+        isActive: keyData.isActive === 'true',
+        isDeleted: keyData.isDeleted === 'true',
+        isExpired: Boolean(isExpired),
         tokenLimit: parseInt(keyData.tokenLimit) || 0,
         concurrencyLimit: parseInt(keyData.concurrencyLimit) || 0,
         rateLimitWindow: parseInt(keyData.rateLimitWindow) || 0,
@@ -231,7 +219,10 @@ router.post('/api/user-stats', async (req, res) => {
       }
 
       // 验证API Key（使用不触发激活的验证方法）
-      const validation = await apiKeyService.validateApiKeyForStats(apiKey)
+      const validation = await apiKeyService.validateApiKeyForStats(apiKey, {
+        allowDisabled: true,
+        allowExpired: true
+      })
 
       if (!validation.valid) {
         const clientIP = req.ip || req.connection?.remoteAddress || 'unknown'
