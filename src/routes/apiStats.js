@@ -35,7 +35,10 @@ router.post('/api/get-key-id', async (req, res) => {
     }
 
     // 验证API Key（使用不触发激活的验证方法）
-    const validation = await apiKeyService.validateApiKeyForStats(apiKey)
+    const validation = await apiKeyService.validateApiKeyForStats(apiKey, {
+      allowDisabled: true,
+      allowExpired: true
+    })
 
     if (!validation.valid) {
       const clientIP = req.ip || req.connection?.remoteAddress || 'unknown'
