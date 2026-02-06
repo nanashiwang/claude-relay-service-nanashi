@@ -711,6 +711,22 @@ class ApiKeyService {
   }
 
   // 📝 更新API Key
+  // 重置 API Key 的窗口限流计数（配置变更后立即生效）
+  async resetRateLimitCounters(keyId) {
+    try {
+      const client = redis.getClientSafe()
+      const windowStartKey = `rate_limit:window_start:${keyId}`
+      const requestCountKey = `rate_limit:requests:${keyId}`
+      const tokenCountKey = `rate_limit:tokens:${keyId}`
+      const costCountKey = `rate_limit:cost:${keyId}`
+
+      await client.del(windowStartKey, requestCountKey, tokenCountKey, costCountKey)
+      logger.info(`Reset rate-limit window counters for key: ${keyId}`)
+    } catch (error) {
+      logger.warn(`Failed to reset rate-limit counters for key ${keyId}:`, error.message)
+    }
+  }
+
   async updateApiKey(keyId, updates) {
     try {
       const keyData = await redis.getApiKey(keyId)
@@ -782,6 +798,16 @@ class ApiKeyService {
       // 传递hashedKey以确保映射表一致性
       // keyData.apiKey 存储的就是 hashedKey（见generateApiKey第123行）
       await redis.setApiKey(keyId, updatedData, keyData.apiKey)
+
+      const shouldResetRateLimitCounters =
+        Object.prototype.hasOwnProperty.call(updates, 'rateLimitWindow') ||
+        Object.prototype.hasOwnProperty.call(updates, 'rateLimitRequests') ||
+        Object.prototype.hasOwnProperty.call(updates, 'rateLimitCost') ||
+        Object.prototype.hasOwnProperty.call(updates, 'tokenLimit')
+
+      if (shouldResetRateLimitCounters) {
+        await this.resetRateLimitCounters(keyId)
+      }
 
       logger.success(`📝 Updated API key: ${keyId}, hashMap updated`)
 

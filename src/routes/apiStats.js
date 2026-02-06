@@ -5,7 +5,11 @@ const apiKeyService = require('../services/apiKeyService')
 const CostCalculator = require('../utils/costCalculator')
 const claudeAccountService = require('../services/claudeAccountService')
 const openaiAccountService = require('../services/openaiAccountService')
-const { createClaudeTestPayload } = require('../utils/testPayloadHelper')
+const {
+  createClaudeTestPayload,
+  createGeminiTestPayload,
+  createCodexTestPayload
+} = require('../utils/testPayloadHelper')
 
 const router = express.Router()
 
@@ -856,10 +860,23 @@ router.post('/api/batch-model-stats', async (req, res) => {
 // 🧪 API Key 端点测试接口 - 测试API Key是否能正常访问服务
 router.post('/api-key/test', async (req, res) => {
   const config = require('../../config/config')
-  const { sendStreamTestRequest } = require('../utils/testPayloadHelper')
+  const { sendStreamTestRequest, sendJsonTestRequest } = require('../utils/testPayloadHelper')
 
   try {
-    const { apiKey, model = 'claude-sonnet-4-5-20250929' } = req.body
+    const {
+      apiKey,
+      provider = 'claude',
+      model
+    } = req.body || {}
+
+    const normalizedProvider = String(provider || 'claude').toLowerCase()
+    const allowedProviders = new Set(['claude', 'gemini', 'codex'])
+    if (!allowedProviders.has(normalizedProvider)) {
+      return res.status(400).json({
+        error: 'Invalid provider',
+        message: `Provider must be one of: ${Array.from(allowedProviders).join(', ')}`
+      })
+    }
 
     if (!apiKey) {
       return res.status(400).json({
@@ -886,14 +903,45 @@ router.post('/api-key/test', async (req, res) => {
     logger.api(`🧪 API Key test started for: ${validation.keyData.name} (${validation.keyData.id})`)
 
     const port = config.server.port || 3000
-    const apiUrl = `http://127.0.0.1:${port}/api/v1/messages?beta=true`
 
-    await sendStreamTestRequest({
+    if (normalizedProvider === 'claude') {
+      const claudeModel = model || 'claude-sonnet-4-5-20250929'
+      const apiUrl = `http://127.0.0.1:${port}/api/v1/messages?beta=true`
+      await sendStreamTestRequest({
+        apiUrl,
+        authorization: apiKey,
+        responseStream: res,
+        payload: createClaudeTestPayload(claudeModel, { stream: true }),
+        timeout: 60000,
+        extraHeaders: { 'x-api-key': apiKey }
+      })
+      return
+    }
+
+    if (normalizedProvider === 'gemini') {
+      const geminiModel = model || 'gemini-2.5-pro'
+      const apiUrl = `http://127.0.0.1:${port}/gemini/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`
+      await sendJsonTestRequest({
+        apiUrl,
+        authorization: apiKey,
+        responseStream: res,
+        payload: createGeminiTestPayload(),
+        timeout: 60000,
+        provider: 'gemini',
+        extraHeaders: { 'x-api-key': apiKey }
+      })
+      return
+    }
+
+    const codexModel = model || 'gpt-5'
+    const apiUrl = `http://127.0.0.1:${port}/openai/v1/responses`
+    await sendJsonTestRequest({
       apiUrl,
       authorization: apiKey,
       responseStream: res,
-      payload: createClaudeTestPayload(model, { stream: true }),
+      payload: createCodexTestPayload(codexModel, { stream: false }),
       timeout: 60000,
+      provider: 'codex',
       extraHeaders: { 'x-api-key': apiKey }
     })
   } catch (error) {

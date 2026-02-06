@@ -66,6 +66,152 @@ function createClaudeTestPayload(model = 'claude-sonnet-4-5-20250929', options =
   return payload
 }
 
+function createGeminiTestPayload() {
+  return {
+    contents: [
+      {
+        role: 'user',
+        parts: [{ text: 'hi' }]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.2,
+      maxOutputTokens: 128
+    }
+  }
+}
+
+function createCodexTestPayload(model = 'gpt-5', options = {}) {
+  return {
+    model,
+    input: 'hi',
+    stream: options.stream === true
+  }
+}
+
+function extractErrorMessage(errorData, status) {
+  const fallback = `API Error: ${status}`
+
+  if (!errorData) {
+    return fallback
+  }
+
+  if (typeof errorData === 'string') {
+    const text = errorData.trim()
+    return text || fallback
+  }
+
+  if (typeof errorData === 'object') {
+    if (typeof errorData.message === 'string' && errorData.message.trim()) {
+      return errorData.message.trim()
+    }
+
+    if (typeof errorData.error === 'string' && errorData.error.trim()) {
+      return errorData.error.trim()
+    }
+
+    if (
+      errorData.error &&
+      typeof errorData.error.message === 'string' &&
+      errorData.error.message.trim()
+    ) {
+      return errorData.error.message.trim()
+    }
+  }
+
+  return fallback
+}
+
+function extractGeminiText(responseData) {
+  const parts = responseData?.candidates?.[0]?.content?.parts
+  if (!Array.isArray(parts)) {
+    return ''
+  }
+
+  const text = parts
+    .map((part) => (typeof part?.text === 'string' ? part.text : ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+
+  return text
+}
+
+function extractCodexText(responseData) {
+  if (typeof responseData?.output_text === 'string' && responseData.output_text.trim()) {
+    return responseData.output_text.trim()
+  }
+
+  if (Array.isArray(responseData?.output)) {
+    const chunks = []
+
+    for (const item of responseData.output) {
+      if (typeof item?.text === 'string' && item.text.trim()) {
+        chunks.push(item.text.trim())
+      }
+
+      if (Array.isArray(item?.content)) {
+        for (const block of item.content) {
+          if (typeof block?.text === 'string' && block.text.trim()) {
+            chunks.push(block.text.trim())
+          }
+        }
+      }
+    }
+
+    if (chunks.length > 0) {
+      return chunks.join('\n')
+    }
+  }
+
+  const choiceContent = responseData?.choices?.[0]?.message?.content
+  if (typeof choiceContent === 'string' && choiceContent.trim()) {
+    return choiceContent.trim()
+  }
+
+  if (Array.isArray(choiceContent)) {
+    const text = choiceContent
+      .map((block) => (typeof block?.text === 'string' ? block.text : ''))
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+
+    if (text) {
+      return text
+    }
+  }
+
+  return ''
+}
+
+function extractFallbackText(responseData) {
+  if (typeof responseData?.text === 'string' && responseData.text.trim()) {
+    return responseData.text.trim()
+  }
+
+  if (typeof responseData?.message === 'string' && responseData.message.trim()) {
+    return responseData.message.trim()
+  }
+
+  if (typeof responseData?.error === 'string' && responseData.error.trim()) {
+    return responseData.error.trim()
+  }
+
+  return ''
+}
+
+function extractProviderText(responseData, provider) {
+  if (provider === 'gemini') {
+    return extractGeminiText(responseData)
+  }
+
+  if (provider === 'codex') {
+    return extractCodexText(responseData)
+  }
+
+  return extractFallbackText(responseData)
+}
+
 /**
  * 发送流式测试请求并处理SSE响应
  * @param {object} options - 配置选项
@@ -234,9 +380,105 @@ async function sendStreamTestRequest(options) {
   }
 }
 
+async function sendJsonTestRequest(options) {
+  const axios = require('axios')
+  const logger = require('./logger')
+
+  const {
+    apiUrl,
+    authorization,
+    responseStream,
+    payload = {},
+    proxyAgent = null,
+    timeout = 30000,
+    extraHeaders = {},
+    provider = 'generic'
+  } = options
+
+  const sendSSE = (type, data = {}) => {
+    if (!responseStream.destroyed && !responseStream.writableEnded) {
+      try {
+        responseStream.write(`data: ${JSON.stringify({ type, ...data })}\n\n`)
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const endTest = (success, error = null) => {
+    if (!responseStream.destroyed && !responseStream.writableEnded) {
+      try {
+        responseStream.write(
+          `data: ${JSON.stringify({ type: 'test_complete', success, error: error || undefined })}\n\n`
+        )
+        responseStream.end()
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (!responseStream.headersSent) {
+    responseStream.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    })
+  }
+
+  sendSSE('test_start', { message: 'Test started' })
+
+  const requestConfig = {
+    method: 'POST',
+    url: apiUrl,
+    data: payload,
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': 'crs-api-key-test/1.0',
+      authorization,
+      ...extraHeaders
+    },
+    timeout,
+    responseType: 'json',
+    validateStatus: () => true
+  }
+
+  if (proxyAgent) {
+    requestConfig.httpAgent = proxyAgent
+    requestConfig.httpsAgent = proxyAgent
+    requestConfig.proxy = false
+  }
+
+  try {
+    const response = await axios(requestConfig)
+    logger.debug(`Test response status: ${response.status}`)
+
+    if (response.status < 200 || response.status >= 300) {
+      const errorMsg = extractErrorMessage(response.data, response.status)
+      endTest(false, errorMsg)
+      return
+    }
+
+    const text = extractProviderText(response.data, provider)
+    if (text) {
+      sendSSE('content', { text })
+    }
+
+    sendSSE('message_stop')
+    endTest(true)
+  } catch (error) {
+    logger.error('JSON test request failed:', error.message)
+    endTest(false, error.message)
+  }
+}
+
 module.exports = {
   randomHex,
   generateSessionString,
   createClaudeTestPayload,
-  sendStreamTestRequest
+  createGeminiTestPayload,
+  createCodexTestPayload,
+  sendStreamTestRequest,
+  sendJsonTestRequest
 }

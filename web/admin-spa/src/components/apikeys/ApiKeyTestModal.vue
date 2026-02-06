@@ -77,6 +77,38 @@
             </p>
           </div>
 
+          <!-- 测试参数 -->
+          <div class="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                测试平台
+              </label>
+              <select
+                v-model="testProvider"
+                class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                :disabled="testStatus === 'testing'"
+              >
+                <option v-for="option in providerOptions" :key="option.value" :value="option.value">
+                  {{ option.label }}
+                </option>
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
+                测试模型
+              </label>
+              <select
+                v-model="testModel"
+                class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-blue-500 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
+                :disabled="testStatus === 'testing'"
+              >
+                <option v-for="option in currentModelOptions" :key="option" :value="option">
+                  {{ option }}
+                </option>
+              </select>
+            </div>
+          </div>
+
           <!-- 测试信息 -->
           <div class="mb-4 space-y-2">
             <div class="flex items-center justify-between text-sm">
@@ -85,7 +117,7 @@
                 class="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-500/20 dark:text-blue-300"
               >
                 <i class="fas fa-link" />
-                /api/v1/messages
+                {{ testEndpoint }}
               </span>
             </div>
             <div class="flex items-center justify-between text-sm">
@@ -94,7 +126,7 @@
             </div>
             <div class="flex items-center justify-between text-sm">
               <span class="text-gray-500 dark:text-gray-400">模拟客户端</span>
-              <span class="font-medium text-gray-700 dark:text-gray-300">Claude Code</span>
+              <span class="font-medium text-gray-700 dark:text-gray-300">{{ simulatedClient }}</span>
             </div>
           </div>
 
@@ -222,6 +254,30 @@ const props = defineProps({
 
 const emit = defineEmits(['close'])
 
+const PROVIDER_CONFIG = {
+  claude: {
+    label: 'Claude',
+    endpoint: '/api/v1/messages',
+    client: 'Claude Code',
+    defaultModel: 'claude-sonnet-4-5-20250929',
+    models: ['claude-sonnet-4-5-20250929', 'claude-opus-4-1-20250805']
+  },
+  gemini: {
+    label: 'Gemini',
+    endpoint: '/gemini/v1beta/models/{model}:generateContent',
+    client: 'Gemini CLI',
+    defaultModel: 'gemini-2.5-pro',
+    models: ['gemini-2.5-pro', 'gemini-2.5-flash']
+  },
+  codex: {
+    label: 'Codex',
+    endpoint: '/openai/v1/responses',
+    client: 'Codex CLI',
+    defaultModel: 'gpt-5',
+    models: ['gpt-5', 'gpt-5-mini']
+  }
+}
+
 // 状态
 const testStatus = ref('idle') // idle, testing, success, error
 const responseText = ref('')
@@ -230,8 +286,9 @@ const testDuration = ref(0)
 const testStartTime = ref(null)
 const abortController = ref(null)
 
-// 测试模型
-const testModel = ref('claude-sonnet-4-5-20250929')
+// 测试平台和模型
+const testProvider = ref('claude')
+const testModel = ref(PROVIDER_CONFIG.claude.defaultModel)
 
 // 计算属性
 const displayName = computed(() => {
@@ -244,6 +301,30 @@ const maskedApiKey = computed(() => {
   if (key.length <= 10) return '****'
   return key.substring(0, 6) + '****' + key.substring(key.length - 4)
 })
+
+const currentProviderConfig = computed(() => {
+  return PROVIDER_CONFIG[testProvider.value] || PROVIDER_CONFIG.claude
+})
+
+const providerOptions = computed(() => {
+  return Object.entries(PROVIDER_CONFIG).map(([value, config]) => ({
+    value,
+    label: config.label
+  }))
+})
+
+const currentModelOptions = computed(() => {
+  return currentProviderConfig.value.models
+})
+
+const testEndpoint = computed(() => {
+  return currentProviderConfig.value.endpoint
+})
+
+const simulatedClient = computed(() => {
+  return currentProviderConfig.value.client
+})
+
 
 // 计算属性
 const statusTitle = computed(() => {
@@ -266,7 +347,7 @@ const statusDescription = computed(() => {
     case 'idle':
       return '点击下方按钮开始测试 API Key 连通性'
     case 'testing':
-      return '正在通过 /api 端点发送测试请求'
+      return `正在通过 ${testEndpoint.value} 发送测试请求`
     case 'success':
       return 'API Key 可以正常访问服务'
     case 'error':
@@ -381,6 +462,7 @@ async function startTest() {
       },
       body: JSON.stringify({
         apiKey: props.apiKeyValue,
+        provider: testProvider.value,
         model: testModel.value
       }),
       signal: abortController.value.signal
@@ -427,6 +509,17 @@ async function startTest() {
     testDuration.value = Date.now() - testStartTime.value
   }
 }
+
+watch(
+  testProvider,
+  (newProvider) => {
+    const providerConfig = PROVIDER_CONFIG[newProvider] || PROVIDER_CONFIG.claude
+    if (!providerConfig.models.includes(testModel.value)) {
+      testModel.value = providerConfig.defaultModel
+    }
+  },
+  { immediate: true }
+)
 
 function handleSSEEvent(data) {
   switch (data.type) {
@@ -483,6 +576,8 @@ watch(
       responseText.value = ''
       errorMessage.value = ''
       testDuration.value = 0
+      testProvider.value = 'claude'
+      testModel.value = PROVIDER_CONFIG.claude.defaultModel
     }
   }
 )
