@@ -273,8 +273,8 @@ const PROVIDER_CONFIG = {
     label: 'Codex',
     endpoint: '/openai/v1/responses',
     client: 'Codex CLI',
-    defaultModel: 'gpt-5',
-    models: ['gpt-5', 'gpt-5-mini']
+    defaultModel: 'gpt-5.2-codex',
+    models: ['gpt-5.2-codex', 'gpt-5', 'gpt-5-mini']
   }
 }
 

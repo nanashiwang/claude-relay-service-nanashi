@@ -933,7 +933,7 @@ router.post('/api-key/test', async (req, res) => {
       return
     }
 
-    const codexModel = model || 'gpt-5'
+    const codexModel = model || 'gpt-5.2-codex'
     const apiUrl = `http://127.0.0.1:${port}/openai/v1/responses`
     await sendJsonTestRequest({
       apiUrl,

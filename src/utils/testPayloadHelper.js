@@ -81,10 +81,26 @@ function createGeminiTestPayload() {
   }
 }
 
-function createCodexTestPayload(model = 'gpt-5', options = {}) {
+function createCodexTestPayload(model = 'gpt-5.2-codex', options = {}) {
   return {
     model,
-    input: 'hi',
+    input: [
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: options.prompt || 'hi'
+          }
+        ]
+      }
+    ],
+    parallel_tool_calls: false,
+    reasoning: {
+      effort: 'xhigh',
+      summary: 'auto'
+    },
     stream: options.stream === true
   }
 }
