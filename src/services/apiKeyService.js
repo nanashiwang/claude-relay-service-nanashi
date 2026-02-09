@@ -862,7 +862,6 @@ class ApiKeyService {
 
       const targetIsActive = targetKey.isActive === 'true'
       const sourceIsActive = sourceKey.isActive === 'true'
-      const shouldReplace = !targetIsActive
 
       if (!sourceIsActive) {
         throw new Error('新密钥必须为启用状态')
@@ -877,9 +876,9 @@ class ApiKeyService {
         return Number.isFinite(expiresAt.getTime()) && expiresAt < now
       }
 
-      if (!shouldReplace && isExpired(targetKey)) {
-        throw new Error('旧密钥已过期，无法融合')
-      }
+      const targetIsExpired = isExpired(targetKey)
+      const shouldReplace = !targetIsActive || targetIsExpired
+
       if (isExpired(sourceKey)) {
         throw new Error('新密钥已过期，无法融合')
       }
