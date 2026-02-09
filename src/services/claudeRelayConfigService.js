@@ -29,6 +29,7 @@ const DEFAULT_CONFIG = {
   // 排队健康检查配置
   concurrentRequestQueueHealthCheckEnabled: true, // 是否启用排队健康检查（默认开启）
   concurrentRequestQueueHealthThreshold: 0.8, // 健康检查阈值（P90 >= 超时 × 阈值时拒绝新请求）
+  stickySessionAutoRenewalEnabled: true, // Sticky session auto renewal toggle
   updatedAt: null,
   updatedBy: null
 }
@@ -115,7 +116,8 @@ class ClaudeRelayConfigService {
       logger.info(`✅ Claude relay config updated by ${updatedBy}:`, {
         claudeCodeOnlyEnabled: updatedConfig.claudeCodeOnlyEnabled,
         globalSessionBindingEnabled: updatedConfig.globalSessionBindingEnabled,
-        concurrentRequestQueueEnabled: updatedConfig.concurrentRequestQueueEnabled
+        concurrentRequestQueueEnabled: updatedConfig.concurrentRequestQueueEnabled,
+        stickySessionAutoRenewalEnabled: updatedConfig.stickySessionAutoRenewalEnabled
       })
 
       return updatedConfig

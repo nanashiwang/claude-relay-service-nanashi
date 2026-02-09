@@ -1,8 +1,10 @@
 const geminiAccountService = require('./geminiAccountService')
 const geminiApiAccountService = require('./geminiApiAccountService')
 const accountGroupService = require('./accountGroupService')
+const claudeRelayConfigService = require('./claudeRelayConfigService')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
+const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
 
 const OAUTH_PROVIDER_GEMINI_CLI = 'gemini-cli'
 const OAUTH_PROVIDER_ANTIGRAVITY = 'antigravity'
@@ -194,7 +196,8 @@ class UnifiedGeminiScheduler {
           sessionHash,
           selectedAccount.accountId,
           selectedAccount.accountType,
-          normalizedOauthProvider
+          normalizedOauthProvider,
+          apiKeyData?.id || null
         )
         logger.info(
           `🎯 Created new sticky session mapping: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) for session ${sessionHash}`
@@ -512,18 +515,44 @@ class UnifiedGeminiScheduler {
   }
 
   // 💾 设置会话映射
-  async _setSessionMapping(sessionHash, accountId, accountType, oauthProvider = null) {
-    const client = redis.getClientSafe()
-    const mappingData = JSON.stringify({ accountId, accountType })
-    // 依据配置设置TTL（小时）
+  async _resolveStickyPolicy() {
     const appConfig = require('../../config/config')
-    const ttlHours = appConfig.session?.stickyTtlHours || 1
-    const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
+    let autoRenewEnabledOverride
+
+    try {
+      const runtimeConfig = await claudeRelayConfigService.getConfig()
+      if (typeof runtimeConfig?.stickySessionAutoRenewalEnabled === 'boolean') {
+        autoRenewEnabledOverride = runtimeConfig.stickySessionAutoRenewalEnabled
+      }
+    } catch (error) {
+      logger.debug('Failed to load runtime sticky policy override for Gemini scheduler:', error)
+    }
+
+    return resolveStickySessionPolicy(appConfig.session, {
+      autoRenewEnabledOverride
+    })
+  }
+
+  async _setSessionMapping(
+    sessionHash,
+    accountId,
+    accountType,
+    oauthProvider = null,
+    apiKeyId = null
+  ) {
+    const client = redis.getClientSafe()
+    const mappingPayload = { accountId, accountType }
+    if (apiKeyId) {
+      mappingPayload.apiKeyId = apiKeyId
+    }
+    const mappingData = JSON.stringify(mappingPayload)
+    // 依据配置设置TTL（小时）
+    const policy = await this._resolveStickyPolicy()
     const key = this._getSessionMappingKey(sessionHash, oauthProvider)
     if (!key) {
       return
     }
-    await client.setex(key, ttlSeconds, mappingData)
+    await client.setex(key, policy.fullTTLSeconds, mappingData)
   }
 
   // 🗑️ 删除会话映射
@@ -557,24 +586,19 @@ class UnifiedGeminiScheduler {
         return true
       }
 
-      const appConfig = require('../../config/config')
-      const ttlHours = appConfig.session?.stickyTtlHours || 1
-      const renewalThresholdMinutes = appConfig.session?.renewalThresholdMinutes || 0
-      if (!renewalThresholdMinutes) {
+      const policy = await this._resolveStickyPolicy()
+      if (policy.renewalThresholdSeconds <= 0) {
         return true
       }
 
-      const fullTTL = Math.max(1, Math.floor(ttlHours * 60 * 60))
-      const threshold = Math.max(0, Math.floor(renewalThresholdMinutes * 60))
-
-      if (remainingTTL < threshold) {
-        await client.expire(key, fullTTL)
+      if (remainingTTL < policy.renewalThresholdSeconds) {
+        await client.expire(key, policy.fullTTLSeconds)
         logger.debug(
-          `🔄 Renewed unified Gemini session TTL: ${sessionHash} (was ${Math.round(remainingTTL / 60)}m, renewed to ${ttlHours}h)`
+          `Renewed unified Gemini session TTL: ${sessionHash} (was ${Math.round(remainingTTL / 60)}m, renewed to ${policy.ttlHours}h)`
         )
       } else {
         logger.debug(
-          `✅ Unified Gemini session TTL sufficient: ${sessionHash} (remaining ${Math.round(remainingTTL / 60)}m)`
+          `Unified Gemini session TTL sufficient: ${sessionHash} (remaining ${Math.round(remainingTTL / 60)}m)`
         )
       }
       return true
@@ -666,7 +690,7 @@ class UnifiedGeminiScheduler {
   }
 
   // 👥 从分组中选择账户（支持 Gemini OAuth 和 Gemini API 两种账户类型）
-  async selectAccountFromGroup(groupId, sessionHash = null, requestedModel = null) {
+  async selectAccountFromGroup(groupId, sessionHash = null, requestedModel = null, apiKeyData = null) {
     try {
       // 获取分组信息
       const group = await accountGroupService.getGroup(groupId)
@@ -797,7 +821,9 @@ class UnifiedGeminiScheduler {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          null,
+          apiKeyData?.id || null
         )
         logger.info(
           `🎯 Created new sticky session mapping in group: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) for session ${sessionHash}`

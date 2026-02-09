@@ -1,6 +1,7 @@
 const Redis = require('ioredis')
 const config = require('../../config/config')
 const logger = require('../utils/logger')
+const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
 
 // 时区辅助函数
 // 注意：这个函数的目的是获取某个时间点在目标时区的"本地"表示
@@ -1972,12 +1973,37 @@ class RedisClient {
   }
 
   // 🔗 会话sticky映射管理
+  async _getStickyAutoRenewEnabledOverride() {
+    try {
+      const configText = await this.client.get('claude_relay_config')
+      if (!configText) {
+        return undefined
+      }
+
+      const runtimeConfig = JSON.parse(configText)
+      if (typeof runtimeConfig?.stickySessionAutoRenewalEnabled === 'boolean') {
+        return runtimeConfig.stickySessionAutoRenewalEnabled
+      }
+    } catch (error) {
+      logger.debug('Failed to load sticky session auto renewal override from runtime config:', error)
+    }
+
+    return undefined
+  }
+
   async setSessionAccountMapping(sessionHash, accountId, ttl = null) {
     const appConfig = require('../../config/config')
-    // 从配置读取TTL（小时），转换为秒，默认1小时
-    const defaultTTL = ttl !== null ? ttl : (appConfig.session?.stickyTtlHours || 1) * 60 * 60
+    const autoRenewEnabledOverride = await this._getStickyAutoRenewEnabledOverride()
+    const policy = resolveStickySessionPolicy(appConfig.session, {
+      autoRenewEnabledOverride
+    })
+    const parsedTTL = Number(ttl)
+    const effectiveTTL =
+      ttl !== null && Number.isFinite(parsedTTL) && parsedTTL > 0
+        ? Math.floor(parsedTTL)
+        : policy.fullTTLSeconds
     const key = `sticky_session:${sessionHash}`
-    await this.client.set(key, accountId, 'EX', defaultTTL)
+    await this.client.set(key, accountId, 'EX', effectiveTTL)
   }
 
   async getSessionAccountMapping(sessionHash) {
@@ -1989,53 +2015,40 @@ class RedisClient {
   async extendSessionAccountMappingTTL(sessionHash) {
     const appConfig = require('../../config/config')
     const key = `sticky_session:${sessionHash}`
+    const autoRenewEnabledOverride = await this._getStickyAutoRenewEnabledOverride()
+    const policy = resolveStickySessionPolicy(appConfig.session, {
+      autoRenewEnabledOverride
+    })
 
-    // 📊 从配置获取参数
-    const ttlHours = appConfig.session?.stickyTtlHours || 1 // 小时，默认1小时
-    const thresholdMinutes = appConfig.session?.renewalThresholdMinutes || 0 // 分钟，默认0（不续期）
-
-    // 如果阈值为0，不执行续期
-    if (thresholdMinutes === 0) {
+    if (policy.renewalThresholdSeconds <= 0) {
       return true
     }
 
-    const fullTTL = ttlHours * 60 * 60 // 转换为秒
-    const renewalThreshold = thresholdMinutes * 60 // 转换为秒
-
     try {
-      // 获取当前剩余TTL（秒）
       const remainingTTL = await this.client.ttl(key)
 
-      // 键不存在或已过期
       if (remainingTTL === -2) {
         return false
       }
 
-      // 键存在但没有TTL（永不过期，不需要处理）
       if (remainingTTL === -1) {
         return true
       }
 
-      // 🎯 智能续期策略：仅在剩余时间少于阈值时才续期
-      if (remainingTTL < renewalThreshold) {
-        await this.client.expire(key, fullTTL)
+      if (remainingTTL < policy.renewalThresholdSeconds) {
+        await this.client.expire(key, policy.fullTTLSeconds)
         logger.debug(
-          `🔄 Renewed sticky session TTL: ${sessionHash} (was ${Math.round(
-            remainingTTL / 60
-          )}min, renewed to ${ttlHours}h)`
+          `Renewed sticky session TTL: ${sessionHash} (was ${Math.round(remainingTTL / 60)}min, renewed to ${policy.ttlHours}h)`
         )
         return true
       }
 
-      // 剩余时间充足，无需续期
       logger.debug(
-        `✅ Sticky session TTL sufficient: ${sessionHash} (remaining ${Math.round(
-          remainingTTL / 60
-        )}min)`
+        `Sticky session TTL sufficient: ${sessionHash} (remaining ${Math.round(remainingTTL / 60)}min)`
       )
       return true
     } catch (error) {
-      logger.error('❌ Failed to extend session TTL:', error)
+      logger.error('Failed to extend session TTL:', error)
       return false
     }
   }

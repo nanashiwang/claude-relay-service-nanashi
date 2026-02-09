@@ -5,13 +5,244 @@ const apiKeyService = require('../services/apiKeyService')
 const CostCalculator = require('../utils/costCalculator')
 const claudeAccountService = require('../services/claudeAccountService')
 const openaiAccountService = require('../services/openaiAccountService')
+const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const {
   createClaudeTestPayload,
   createGeminiTestPayload,
   createCodexTestPayload
 } = require('../utils/testPayloadHelper')
+const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
 
 const router = express.Router()
+
+const SESSION_MAPPING_SCAN_COUNT = 200
+const SESSION_MAPPING_SCAN_LIMIT = 1500
+const SESSION_MAPPING_RESULT_LIMIT = 20
+const GEMINI_OAUTH_PROVIDER_SET = new Set(['gemini-cli', 'antigravity'])
+const TEST_PROVIDER_SET = new Set(['claude', 'gemini', 'codex'])
+
+function normalizeTestProvider(provider) {
+  if (provider === null || provider === undefined) {
+    return null
+  }
+
+  const normalized = String(provider).trim().toLowerCase()
+  return TEST_PROVIDER_SET.has(normalized) ? normalized : null
+}
+
+function hasBoundAccountId(accountId) {
+  return typeof accountId === 'string' && accountId.trim().length > 0
+}
+
+function inferTestProviderFromApiKeyData(keyData) {
+  if (hasBoundAccountId(keyData?.openaiAccountId)) {
+    return 'codex'
+  }
+  if (hasBoundAccountId(keyData?.geminiAccountId)) {
+    return 'gemini'
+  }
+  return 'claude'
+}
+
+function normalizeStickyDiagnosticsProvider(provider) {
+  const normalized = String(provider || 'all').toLowerCase()
+  if (normalized === 'codex') {
+    return 'openai'
+  }
+  if (['all', 'claude', 'gemini', 'openai'].includes(normalized)) {
+    return normalized
+  }
+  return null
+}
+
+function resolveStickyDiagnosticsTargets(provider) {
+  const targets = [
+    {
+      provider: 'claude',
+      pattern: 'unified_claude_session_mapping:*',
+      prefix: 'unified_claude_session_mapping:'
+    },
+    {
+      provider: 'gemini',
+      pattern: 'unified_gemini_session_mapping:*',
+      prefix: 'unified_gemini_session_mapping:'
+    },
+    {
+      provider: 'openai',
+      pattern: 'unified_openai_session_mapping:*',
+      prefix: 'unified_openai_session_mapping:'
+    }
+  ]
+
+  if (!provider || provider === 'all') {
+    return targets
+  }
+
+  return targets.filter((target) => target.provider === provider)
+}
+
+function parseSessionIdentityFromKey(key, prefix, provider) {
+  const fallback = {
+    sessionHash: key,
+    sessionPreview: key,
+    oauthProvider: null
+  }
+
+  if (!key || typeof key !== 'string' || !key.startsWith(prefix)) {
+    return fallback
+  }
+
+  const rawSessionPart = key.substring(prefix.length)
+
+  if (provider === 'gemini') {
+    const segments = rawSessionPart.split(':')
+    if (segments.length >= 2 && GEMINI_OAUTH_PROVIDER_SET.has(segments[0])) {
+      const sessionHash = segments.slice(1).join(':')
+      return {
+        sessionHash,
+        sessionPreview: maskSessionHash(sessionHash),
+        oauthProvider: segments[0]
+      }
+    }
+  }
+
+  return {
+    sessionHash: rawSessionPart,
+    sessionPreview: maskSessionHash(rawSessionPart),
+    oauthProvider: null
+  }
+}
+
+function maskSessionHash(sessionHash) {
+  if (!sessionHash || typeof sessionHash !== 'string') {
+    return ''
+  }
+  if (sessionHash.length <= 12) {
+    return sessionHash
+  }
+  return `${sessionHash.slice(0, 8)}...${sessionHash.slice(-4)}`
+}
+
+function resolveRenewalMode(sessionConfig, policy) {
+  if (policy.autoRenewDisabled) {
+    return 'disabled'
+  }
+
+  const thresholdValue = Number(sessionConfig?.renewalThresholdMinutes)
+  if (Number.isFinite(thresholdValue) && thresholdValue > 0) {
+    return 'manual'
+  }
+
+  return 'auto'
+}
+
+async function collectStickySessionsByApiKey(client, target, apiKeyId) {
+  const sessions = []
+  let cursor = '0'
+  let scannedKeys = 0
+  let truncated = false
+
+  do {
+    const [nextCursor, keys] = await client.scan(
+      cursor,
+      'MATCH',
+      target.pattern,
+      'COUNT',
+      SESSION_MAPPING_SCAN_COUNT
+    )
+    cursor = nextCursor
+
+    if (!Array.isArray(keys) || keys.length === 0) {
+      continue
+    }
+
+    const remainingScanBudget = SESSION_MAPPING_SCAN_LIMIT - scannedKeys
+    if (remainingScanBudget <= 0) {
+      truncated = true
+      break
+    }
+
+    const candidateKeys = keys.slice(0, remainingScanBudget)
+    scannedKeys += candidateKeys.length
+
+    const pipeline = client.pipeline()
+    for (const key of candidateKeys) {
+      pipeline.get(key)
+      pipeline.ttl(key)
+    }
+    const details = await pipeline.exec()
+
+    for (let index = 0; index < candidateKeys.length; index++) {
+      if (sessions.length >= SESSION_MAPPING_RESULT_LIMIT) {
+        truncated = true
+        break
+      }
+
+      const key = candidateKeys[index]
+      const mappingResult = details[index * 2]
+      const ttlResult = details[index * 2 + 1]
+
+      if (!mappingResult || !ttlResult || mappingResult[0] || ttlResult[0]) {
+        continue
+      }
+
+      const mappingText = mappingResult[1]
+      const ttlRaw = Number(ttlResult[1])
+
+      if (!mappingText || ttlRaw === -2) {
+        continue
+      }
+
+      let mappingData
+      try {
+        mappingData = JSON.parse(mappingText)
+      } catch {
+        continue
+      }
+
+      if (!mappingData || mappingData.apiKeyId !== apiKeyId) {
+        continue
+      }
+
+      const sessionIdentity = parseSessionIdentityFromKey(key, target.prefix, target.provider)
+      const ttlSeconds = ttlRaw >= 0 ? ttlRaw : null
+
+      sessions.push({
+        provider: target.provider,
+        oauthProvider: sessionIdentity.oauthProvider,
+        sessionHash: sessionIdentity.sessionHash,
+        sessionPreview: sessionIdentity.sessionPreview,
+        accountId: mappingData.accountId || '',
+        accountType: mappingData.accountType || '',
+        ttlSeconds,
+        ttlMinutes: ttlSeconds === null ? null : Math.ceil(ttlSeconds / 60),
+        expiresAt: ttlSeconds === null ? null : new Date(Date.now() + ttlSeconds * 1000).toISOString()
+      })
+    }
+
+    if (sessions.length >= SESSION_MAPPING_RESULT_LIMIT) {
+      truncated = true
+      break
+    }
+
+    if (candidateKeys.length < keys.length) {
+      truncated = true
+      break
+    }
+  } while (cursor !== '0')
+
+  if (cursor !== '0') {
+    truncated = true
+  }
+
+  return {
+    provider: target.provider,
+    scannedKeys,
+    truncated,
+    sessions
+  }
+}
+
 
 // 🏠 重定向页面请求到新版 admin-spa
 router.get('/', (req, res) => {
@@ -858,23 +1089,132 @@ router.post('/api/batch-model-stats', async (req, res) => {
 })
 
 // 🧪 API Key 端点测试接口 - 测试API Key是否能正常访问服务
-router.post('/api-key/test', async (req, res) => {
+
+// API Key sticky session diagnostics
+router.post('/api-key/sticky-diagnostics', async (req, res) => {
   const config = require('../../config/config')
-  const { sendStreamTestRequest, sendJsonTestRequest } = require('../utils/testPayloadHelper')
 
   try {
-    const {
-      apiKey,
-      provider = 'claude',
-      model
-    } = req.body || {}
+    const { apiKey, provider = 'all' } = req.body || {}
 
-    const normalizedProvider = String(provider || 'claude').toLowerCase()
-    const allowedProviders = new Set(['claude', 'gemini', 'codex'])
-    if (!allowedProviders.has(normalizedProvider)) {
+    const normalizedProvider = normalizeStickyDiagnosticsProvider(provider)
+    if (!normalizedProvider) {
       return res.status(400).json({
         error: 'Invalid provider',
-        message: `Provider must be one of: ${Array.from(allowedProviders).join(', ')}`
+        message: 'Provider must be one of: all, claude, gemini, codex'
+      })
+    }
+
+    if (!apiKey) {
+      return res.status(400).json({
+        error: 'API Key is required',
+        message: 'Please provide your API Key'
+      })
+    }
+
+    if (typeof apiKey !== 'string' || apiKey.length < 10 || apiKey.length > 512) {
+      return res.status(400).json({
+        error: 'Invalid API key format',
+        message: 'API key format is invalid'
+      })
+    }
+
+    const validation = await apiKeyService.validateApiKeyForStats(apiKey, {
+      allowDisabled: true,
+      allowExpired: true
+    })
+
+    if (!validation.valid) {
+      return res.status(401).json({
+        error: 'Invalid API key',
+        message: validation.error
+      })
+    }
+
+    const sessionConfig = config.session || {}
+    let autoRenewEnabledOverride
+    try {
+      const relayConfig = await claudeRelayConfigService.getConfig()
+      if (typeof relayConfig?.stickySessionAutoRenewalEnabled === 'boolean') {
+        autoRenewEnabledOverride = relayConfig.stickySessionAutoRenewalEnabled
+      }
+    } catch (error) {
+      logger.debug('Failed to load sticky diagnostics runtime override:', error)
+    }
+
+    const policy = resolveStickySessionPolicy(sessionConfig, {
+      autoRenewEnabledOverride
+    })
+    const renewalMode = resolveRenewalMode(sessionConfig, policy)
+
+    const targets = resolveStickyDiagnosticsTargets(normalizedProvider)
+    const client = redis.getClientSafe()
+    const resultList = await Promise.all(
+      targets.map((target) => collectStickySessionsByApiKey(client, target, validation.keyData.id))
+    )
+
+    const sessions = resultList
+      .flatMap((item) => item.sessions)
+      .sort((a, b) => {
+        const aTTL = a.ttlSeconds === null ? -1 : a.ttlSeconds
+        const bTTL = b.ttlSeconds === null ? -1 : b.ttlSeconds
+        return bTTL - aTTL
+      })
+
+    const scannedKeys = resultList.reduce((sum, item) => sum + item.scannedKeys, 0)
+    const truncated = resultList.some((item) => item.truncated)
+
+    return res.json({
+      success: true,
+      data: {
+        provider: normalizedProvider,
+        apiKeyId: validation.keyData.id,
+        apiKeyName: validation.keyData.name || '',
+        policy: {
+          stickyTtlHours: policy.ttlHours,
+          fullTTLSeconds: policy.fullTTLSeconds,
+          renewalThresholdMinutes: policy.renewalThresholdMinutes,
+          renewalThresholdSeconds: policy.renewalThresholdSeconds,
+          autoRenewEnabled: !policy.autoRenewDisabled,
+          renewalMode
+        },
+        activeSessionCount: sessions.length,
+        sessions,
+        diagnostics: {
+          scannedKeys,
+          scanLimitPerProvider: SESSION_MAPPING_SCAN_LIMIT,
+          resultLimitPerProvider: SESSION_MAPPING_RESULT_LIMIT,
+          truncated
+        },
+        note:
+          'Only unified mappings that include apiKeyId can be attributed to this API key. Legacy sticky_session keys are not included.'
+      }
+    })
+  } catch (error) {
+    logger.error('Failed to fetch sticky diagnostics:', error)
+    return res.status(500).json({
+      error: 'Internal server error',
+      message: 'Failed to fetch sticky diagnostics'
+    })
+  }
+})
+
+router.post('/api-key/test', async (req, res) => {
+  const config = require('../../config/config')
+  const {
+    sendStreamTestRequest,
+    sendCodexStreamTestRequest,
+    sendJsonTestRequest
+  } = require('../utils/testPayloadHelper')
+
+  try {
+    const { apiKey, provider, model } = req.body || {}
+
+    const normalizedProvider = normalizeTestProvider(provider)
+    if (provider !== undefined && normalizedProvider === null) {
+      return res.status(400).json({
+        error: 'Invalid provider',
+        message: `Provider must be one of: ${Array.from(TEST_PROVIDER_SET).join(', ')}`
       })
     }
 
@@ -899,12 +1239,15 @@ router.post('/api-key/test', async (req, res) => {
         message: validation.error
       })
     }
+    const effectiveProvider = normalizedProvider || inferTestProviderFromApiKeyData(validation.keyData)
 
-    logger.api(`🧪 API Key test started for: ${validation.keyData.name} (${validation.keyData.id})`)
+    logger.api(
+      `API Key test started for: ${validation.keyData.name} (${validation.keyData.id}), provider: ${effectiveProvider}`
+    )
 
     const port = config.server.port || 3000
 
-    if (normalizedProvider === 'claude') {
+    if (effectiveProvider === 'claude') {
       const claudeModel = model || 'claude-sonnet-4-5-20250929'
       const apiUrl = `http://127.0.0.1:${port}/api/v1/messages?beta=true`
       await sendStreamTestRequest({
@@ -918,7 +1261,7 @@ router.post('/api-key/test', async (req, res) => {
       return
     }
 
-    if (normalizedProvider === 'gemini') {
+    if (effectiveProvider === 'gemini') {
       const geminiModel = model || 'gemini-2.5-pro'
       const apiUrl = `http://127.0.0.1:${port}/gemini/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`
       await sendJsonTestRequest({
@@ -935,14 +1278,18 @@ router.post('/api-key/test', async (req, res) => {
 
     const codexModel = model || 'gpt-5.2-codex'
     const apiUrl = `http://127.0.0.1:${port}/openai/v1/responses`
-    await sendJsonTestRequest({
+    await sendCodexStreamTestRequest({
       apiUrl,
-      authorization: apiKey,
+      authorization: `Bearer ${apiKey}`,
       responseStream: res,
-      payload: createCodexTestPayload(codexModel, { stream: false }),
+      payload: createCodexTestPayload(codexModel, {
+        stream: true,
+        instructions: '\u4f60\u662f\u4e00\u4e2aAI\u52a9\u624b'
+      }),
       timeout: 60000,
-      provider: 'codex',
-      extraHeaders: { 'x-api-key': apiKey }
+      extraHeaders: {
+        'User-Agent': 'codex_cli_rs/0.50.0 (PowerShell)'
+      }
     })
   } catch (error) {
     logger.error('❌ API Key test failed:', error)

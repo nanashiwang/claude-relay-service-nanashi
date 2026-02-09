@@ -179,6 +179,7 @@
     <!-- API Key 测试弹窗 -->
     <ApiKeyTestModal
       :api-key-name="statsData?.name || ''"
+      :api-key-profile="statsData"
       :api-key-value="apiKey"
       :show="showTestModal"
       @close="closeTestModal"

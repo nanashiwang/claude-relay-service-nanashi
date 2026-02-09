@@ -3,9 +3,11 @@ const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const bedrockAccountService = require('./bedrockAccountService')
 const ccrAccountService = require('./ccrAccountService')
 const accountGroupService = require('./accountGroupService')
+const claudeRelayConfigService = require('./claudeRelayConfigService')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { parseVendorPrefixedModel, isOpus45OrNewer } = require('../utils/modelHelper')
+const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
 
 /**
  * Check if account is Pro (not Max)
@@ -259,7 +261,8 @@ class UnifiedClaudeScheduler {
             groupId,
             sessionHash,
             effectiveModel,
-            vendor === 'ccr'
+            vendor === 'ccr',
+            apiKeyData
           )
         }
 
@@ -446,7 +449,8 @@ class UnifiedClaudeScheduler {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          apiKeyData?.id || null
         )
         logger.info(
           `🎯 Created new sticky session mapping: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) for session ${sessionHash}`
@@ -1178,14 +1182,38 @@ class UnifiedClaudeScheduler {
   }
 
   // 💾 设置会话映射
-  async _setSessionMapping(sessionHash, accountId, accountType) {
-    const client = redis.getClientSafe()
-    const mappingData = JSON.stringify({ accountId, accountType })
-    // 依据配置设置TTL（小时）
+  async _resolveStickyPolicy() {
     const appConfig = require('../../config/config')
-    const ttlHours = appConfig.session?.stickyTtlHours || 1
-    const ttlSeconds = Math.max(1, Math.floor(ttlHours * 60 * 60))
-    await client.setex(`${this.SESSION_MAPPING_PREFIX}${sessionHash}`, ttlSeconds, mappingData)
+    let autoRenewEnabledOverride
+
+    try {
+      const runtimeConfig = await claudeRelayConfigService.getConfig()
+      if (typeof runtimeConfig?.stickySessionAutoRenewalEnabled === 'boolean') {
+        autoRenewEnabledOverride = runtimeConfig.stickySessionAutoRenewalEnabled
+      }
+    } catch (error) {
+      logger.debug('Failed to load runtime sticky policy override for Claude scheduler:', error)
+    }
+
+    return resolveStickySessionPolicy(appConfig.session, {
+      autoRenewEnabledOverride
+    })
+  }
+
+  async _setSessionMapping(sessionHash, accountId, accountType, apiKeyId = null) {
+    const client = redis.getClientSafe()
+    const mappingPayload = { accountId, accountType }
+    if (apiKeyId) {
+      mappingPayload.apiKeyId = apiKeyId
+    }
+    const mappingData = JSON.stringify(mappingPayload)
+    // 依据配置设置TTL（小时）
+    const policy = await this._resolveStickyPolicy()
+    await client.setex(
+      `${this.SESSION_MAPPING_PREFIX}${sessionHash}`,
+      policy.fullTTLSeconds,
+      mappingData
+    )
   }
 
   // 🗑️ 删除会话映射
@@ -1231,26 +1259,20 @@ class UnifiedClaudeScheduler {
         return true
       }
 
-      const appConfig = require('../../config/config')
-      const ttlHours = appConfig.session?.stickyTtlHours || 1
-      const renewalThresholdMinutes = appConfig.session?.renewalThresholdMinutes || 0
+      const policy = await this._resolveStickyPolicy()
 
-      // 阈值为0则不续期
-      if (!renewalThresholdMinutes) {
+      if (policy.renewalThresholdSeconds <= 0) {
         return true
       }
 
-      const fullTTL = Math.max(1, Math.floor(ttlHours * 60 * 60))
-      const threshold = Math.max(0, Math.floor(renewalThresholdMinutes * 60))
-
-      if (remainingTTL < threshold) {
-        await client.expire(key, fullTTL)
+      if (remainingTTL < policy.renewalThresholdSeconds) {
+        await client.expire(key, policy.fullTTLSeconds)
         logger.debug(
-          `🔄 Renewed unified session TTL: ${sessionHash} (was ${Math.round(remainingTTL / 60)}m, renewed to ${ttlHours}h)`
+          `Renewed unified Claude session TTL: ${sessionHash} (was ${Math.round(remainingTTL / 60)}m, renewed to ${policy.ttlHours}h)`
         )
       } else {
         logger.debug(
-          `✅ Unified session TTL sufficient: ${sessionHash} (remaining ${Math.round(remainingTTL / 60)}m)`
+          `Unified Claude session TTL sufficient: ${sessionHash} (remaining ${Math.round(remainingTTL / 60)}m)`
         )
       }
       return true
@@ -1440,7 +1462,8 @@ class UnifiedClaudeScheduler {
     groupId,
     sessionHash = null,
     requestedModel = null,
-    allowCcr = false
+    allowCcr = false,
+    apiKeyData = null
   ) {
     try {
       // 获取分组信息
@@ -1604,7 +1627,8 @@ class UnifiedClaudeScheduler {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          apiKeyData?.id || null
         )
         logger.info(
           `🎯 Created new sticky session mapping in group: ${selectedAccount.name} (${selectedAccount.accountId}, ${selectedAccount.accountType}) for session ${sessionHash}`
@@ -1672,7 +1696,8 @@ class UnifiedClaudeScheduler {
         await this._setSessionMapping(
           sessionHash,
           selectedAccount.accountId,
-          selectedAccount.accountType
+          selectedAccount.accountType,
+          apiKeyData?.id || null
         )
         logger.info(
           `🎯 Created new sticky CCR session mapping: ${selectedAccount.name} (${selectedAccount.accountId}) for session ${sessionHash}`

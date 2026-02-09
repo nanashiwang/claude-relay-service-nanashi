@@ -92,6 +92,9 @@
                   {{ option.label }}
                 </option>
               </select>
+              <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+                Default: {{ inferredProviderLabel }} (inferred from bound accounts)
+              </p>
             </div>
             <div>
               <label class="mb-1 block text-xs font-medium text-gray-500 dark:text-gray-400">
@@ -128,6 +131,93 @@
               <span class="text-gray-500 dark:text-gray-400">模拟客户端</span>
               <span class="font-medium text-gray-700 dark:text-gray-300">{{ simulatedClient }}</span>
             </div>
+          </div>
+
+          <!-- Sticky Diagnostics -->
+          <div class="mb-4 rounded-xl border border-indigo-200/70 bg-indigo-50/70 p-3 dark:border-indigo-500/30 dark:bg-indigo-900/20">
+            <div class="mb-2 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <i class="fas fa-heartbeat text-sm text-indigo-500 dark:text-indigo-300" />
+                <span class="text-xs font-semibold text-indigo-700 dark:text-indigo-200">Sticky Diagnostics</span>
+              </div>
+              <button
+                class="rounded-md border border-indigo-200 bg-white px-2 py-1 text-xs text-indigo-600 transition hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-500/40 dark:bg-indigo-900/40 dark:text-indigo-200 dark:hover:bg-indigo-900/60"
+                :disabled="stickyDiagnosticsLoading"
+                @click="fetchStickyDiagnostics"
+              >
+                <i :class="['fas', stickyDiagnosticsLoading ? 'fa-spinner fa-spin' : 'fa-rotate-right']" />
+                <span class="ml-1">Refresh</span>
+              </button>
+            </div>
+
+            <div
+              v-if="stickyDiagnosticsLoading"
+              class="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-200"
+            >
+              <i class="fas fa-circle-notch fa-spin" />
+              <span>Loading diagnostics...</span>
+            </div>
+
+            <div
+              v-else-if="stickyDiagnosticsError"
+              class="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-600 dark:border-red-500/30 dark:bg-red-900/20 dark:text-red-300"
+            >
+              {{ stickyDiagnosticsError }}
+            </div>
+
+            <div v-else-if="stickyDiagnostics" class="space-y-2">
+              <div class="grid grid-cols-1 gap-1.5 text-xs text-gray-600 dark:text-gray-300 sm:grid-cols-2">
+                <div class="flex items-center justify-between rounded-md bg-white/70 px-2 py-1 dark:bg-gray-900/40">
+                  <span>Auto Renewal</span>
+                  <span class="font-medium text-gray-800 dark:text-gray-100">{{ stickyAutoRenewText }}</span>
+                </div>
+                <div class="flex items-center justify-between rounded-md bg-white/70 px-2 py-1 dark:bg-gray-900/40">
+                  <span>Full TTL</span>
+                  <span class="font-medium text-gray-800 dark:text-gray-100">{{ stickyTtlText }}</span>
+                </div>
+                <div class="flex items-center justify-between rounded-md bg-white/70 px-2 py-1 dark:bg-gray-900/40">
+                  <span>Renew Threshold</span>
+                  <span class="font-medium text-gray-800 dark:text-gray-100">
+                    {{ stickyThresholdText }} ({{ stickyRenewalModeText }})
+                  </span>
+                </div>
+                <div class="flex items-center justify-between rounded-md bg-white/70 px-2 py-1 dark:bg-gray-900/40">
+                  <span>Active Sessions</span>
+                  <span class="font-medium text-gray-800 dark:text-gray-100">
+                    {{ stickyDiagnostics.activeSessionCount }}
+                  </span>
+                </div>
+              </div>
+
+              <p v-if="stickyDiagnostics.note" class="text-[11px] text-gray-500 dark:text-gray-400">
+                {{ stickyDiagnostics.note }}
+              </p>
+
+              <div
+                v-if="stickySessionRows.length > 0"
+                class="max-h-32 space-y-1 overflow-y-auto rounded-md border border-indigo-100 bg-white/70 p-2 dark:border-indigo-500/20 dark:bg-gray-900/40"
+              >
+                <div
+                  v-for="session in stickySessionRows"
+                  :key="`${session.provider}:${session.sessionHash}:${session.accountId}`"
+                  class="grid grid-cols-[1fr_auto] gap-2 text-[11px] text-gray-600 dark:text-gray-300"
+                >
+                  <div class="truncate" :title="getSessionIdentity(session)">
+                    <span class="font-medium text-gray-800 dark:text-gray-100">
+                      {{ session.accountType }} / {{ session.accountId }}
+                    </span>
+                    <span class="ml-1 text-gray-500 dark:text-gray-400">
+                      {{ getSessionIdentity(session) }}
+                    </span>
+                  </div>
+                  <span class="font-medium text-indigo-600 dark:text-indigo-300">
+                    {{ formatDuration(session.ttlSeconds) }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div v-else class="text-xs text-gray-500 dark:text-gray-400">No diagnostics data</div>
           </div>
 
           <!-- 状态指示 -->
@@ -240,15 +330,17 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
-  // API Key 完整值（用于测试）
   apiKeyValue: {
     type: String,
     default: ''
   },
-  // API Key 名称（用于显示）
   apiKeyName: {
     type: String,
     default: ''
+  },
+  apiKeyProfile: {
+    type: Object,
+    default: null
   }
 })
 
@@ -278,21 +370,66 @@ const PROVIDER_CONFIG = {
   }
 }
 
-// 状态
-const testStatus = ref('idle') // idle, testing, success, error
+function hasBoundAccount(accountId) {
+  return typeof accountId === 'string' && accountId.trim().length > 0
+}
+
+function inferProviderFromApiKeyProfile(profile) {
+  if (!profile || typeof profile !== 'object') {
+    return 'claude'
+  }
+
+  const accounts = profile.accounts || {}
+  if (hasBoundAccount(accounts.openaiAccountId)) {
+    return 'codex'
+  }
+  if (hasBoundAccount(accounts.geminiAccountId)) {
+    return 'gemini'
+  }
+  if (hasBoundAccount(accounts.claudeAccountId)) {
+    return 'claude'
+  }
+
+  const restrictedModels = profile.restrictions?.restrictedModels
+  if (Array.isArray(restrictedModels)) {
+    const normalizedModels = restrictedModels.map((item) => String(item).toLowerCase())
+    if (normalizedModels.some((item) => item.includes('gpt') || item.includes('codex'))) {
+      return 'codex'
+    }
+    if (normalizedModels.some((item) => item.includes('gemini'))) {
+      return 'gemini'
+    }
+    if (normalizedModels.some((item) => item.includes('claude'))) {
+      return 'claude'
+    }
+  }
+
+  return 'claude'
+}
+
+const RENEWAL_MODE_LABELS = {
+  auto: 'Auto',
+  manual: 'Manual',
+  disabled: 'Disabled'
+}
+
+const testStatus = ref('idle')
 const responseText = ref('')
 const errorMessage = ref('')
 const testDuration = ref(0)
 const testStartTime = ref(null)
 const abortController = ref(null)
 
-// 测试平台和模型
+const stickyDiagnostics = ref(null)
+const stickyDiagnosticsLoading = ref(false)
+const stickyDiagnosticsError = ref('')
+const stickyDiagnosticsAbortController = ref(null)
+
 const testProvider = ref('claude')
 const testModel = ref(PROVIDER_CONFIG.claude.defaultModel)
 
-// 计算属性
 const displayName = computed(() => {
-  return props.apiKeyName || '当前 API Key'
+  return props.apiKeyName || 'Current API Key'
 })
 
 const maskedApiKey = computed(() => {
@@ -325,33 +462,61 @@ const simulatedClient = computed(() => {
   return currentProviderConfig.value.client
 })
 
+const stickyPolicy = computed(() => stickyDiagnostics.value?.policy || null)
 
-// 计算属性
+const stickySessionRows = computed(() => {
+  const sessions = stickyDiagnostics.value?.sessions || []
+  return sessions.slice(0, 8)
+})
+
+const stickyAutoRenewText = computed(() => {
+  if (!stickyPolicy.value) return '--'
+  return stickyPolicy.value.autoRenewEnabled ? 'Enabled' : 'Disabled'
+})
+
+const stickyRenewalModeText = computed(() => {
+  const mode = stickyPolicy.value?.renewalMode
+  return RENEWAL_MODE_LABELS[mode] || '--'
+})
+
+const stickyTtlText = computed(() => formatDuration(stickyPolicy.value?.fullTTLSeconds))
+
+const stickyThresholdText = computed(() => {
+  const seconds = stickyPolicy.value?.renewalThresholdSeconds
+  if (seconds === null || seconds === undefined) {
+    return '--'
+  }
+  if (seconds <= 0) {
+    return '0 min'
+  }
+  return `${Math.ceil(seconds / 60)} min`
+})
+
 const statusTitle = computed(() => {
   switch (testStatus.value) {
     case 'idle':
-      return '准备就绪'
+      return 'Ready'
     case 'testing':
-      return '正在测试...'
+      return 'Testing...'
     case 'success':
-      return '测试成功'
+      return 'Success'
     case 'error':
-      return '测试失败'
+      return 'Failed'
     default:
-      return '未知状态'
+      return 'Unknown'
   }
 })
 
 const statusDescription = computed(() => {
   switch (testStatus.value) {
     case 'idle':
-      return '点击下方按钮开始测试 API Key 连通性'
+      return 'Click the button below to start endpoint testing'
     case 'testing':
-      return `正在通过 ${testEndpoint.value} 发送测试请求`
+      return `Sending request to ${testEndpoint.value}`
     case 'success':
-      return 'API Key 可以正常访问服务'
+      return 'The API key can access this service'
     case 'error':
-      return errorMessage.value || '无法通过 API Key 访问服务'
+      return errorMessage.value || 'The API key failed to access this service'
     default:
       return ''
   }
@@ -432,29 +597,131 @@ const statusTextClass = computed(() => {
   }
 })
 
-// 方法
+const inferredProvider = computed(() => inferProviderFromApiKeyProfile(props.apiKeyProfile))
+const inferredProviderLabel = computed(() => PROVIDER_CONFIG[inferredProvider.value]?.label || 'Claude')
+
+function applyInferredProvider() {
+  const provider = inferredProvider.value
+  const providerConfig = PROVIDER_CONFIG[provider] || PROVIDER_CONFIG.claude
+  testProvider.value = provider
+  testModel.value = providerConfig.defaultModel
+}
+
+function formatDuration(seconds) {
+  const duration = Number(seconds)
+  if (!Number.isFinite(duration) || duration < 0) {
+    return '--'
+  }
+
+  if (duration < 60) {
+    return `${Math.floor(duration)}s`
+  }
+
+  const minutes = Math.floor(duration / 60)
+  if (minutes < 60) {
+    return `${minutes}m`
+  }
+
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (!remainingMinutes) {
+    return `${hours}h`
+  }
+
+  return `${hours}h ${remainingMinutes}m`
+}
+
+function getSessionIdentity(session) {
+  if (!session) {
+    return '--'
+  }
+  if (session.oauthProvider) {
+    return `${session.sessionPreview} (${session.oauthProvider})`
+  }
+  return session.sessionPreview || '--'
+}
+
+function resetStickyDiagnosticsState() {
+  stickyDiagnostics.value = null
+  stickyDiagnosticsError.value = ''
+  stickyDiagnosticsLoading.value = false
+}
+
+function abortStickyDiagnosticsRequest() {
+  if (stickyDiagnosticsAbortController.value) {
+    stickyDiagnosticsAbortController.value.abort()
+    stickyDiagnosticsAbortController.value = null
+  }
+}
+
+async function fetchStickyDiagnostics() {
+  if (!props.apiKeyValue) {
+    resetStickyDiagnosticsState()
+    return
+  }
+
+  abortStickyDiagnosticsRequest()
+  const controller = new AbortController()
+  stickyDiagnosticsAbortController.value = controller
+
+  stickyDiagnosticsLoading.value = true
+  stickyDiagnosticsError.value = ''
+
+  try {
+    const response = await fetch(`${API_PREFIX}/apiStats/api-key/sticky-diagnostics`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        apiKey: props.apiKeyValue,
+        provider: testProvider.value
+      }),
+      signal: controller.signal
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.message || errorData.error || `HTTP ${response.status}`)
+    }
+
+    const result = await response.json()
+    if (!result?.success) {
+      throw new Error(result?.message || 'Failed to fetch sticky diagnostics')
+    }
+
+    stickyDiagnostics.value = result.data || null
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      return
+    }
+    stickyDiagnostics.value = null
+    stickyDiagnosticsError.value = err.message || 'Failed to fetch sticky diagnostics'
+  } finally {
+    if (stickyDiagnosticsAbortController.value === controller) {
+      stickyDiagnosticsAbortController.value = null
+    }
+    stickyDiagnosticsLoading.value = false
+  }
+}
+
 async function startTest() {
   if (!props.apiKeyValue) return
 
-  // 重置状态
   testStatus.value = 'testing'
   responseText.value = ''
   errorMessage.value = ''
   testDuration.value = 0
   testStartTime.value = Date.now()
 
-  // 取消之前的请求
   if (abortController.value) {
     abortController.value.abort()
   }
   abortController.value = new AbortController()
 
-  // 使用公开的测试端点，不需要管理员认证
-  // apiStats 路由挂载在 /apiStats 下
   const endpoint = `${API_PREFIX}/apiStats/api-key/test`
 
   try {
-    // 使用fetch发送POST请求并处理SSE
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -473,7 +740,6 @@ async function startTest() {
       throw new Error(errorData.message || errorData.error || `HTTP ${response.status}`)
     }
 
-    // 处理SSE流
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let streamDone = false
@@ -494,18 +760,17 @@ async function startTest() {
             const data = JSON.parse(line.substring(6))
             handleSSEEvent(data)
           } catch {
-            // 忽略解析错误
+            // ignore parse errors
           }
         }
       }
     }
   } catch (err) {
     if (err.name === 'AbortError') {
-      // 请求被取消
       return
     }
     testStatus.value = 'error'
-    errorMessage.value = err.message || '连接失败'
+    errorMessage.value = err.message || 'Connection failed'
     testDuration.value = Date.now() - testStartTime.value
   }
 }
@@ -517,6 +782,10 @@ watch(
     if (!providerConfig.models.includes(testModel.value)) {
       testModel.value = providerConfig.defaultModel
     }
+
+    if (props.show && props.apiKeyValue) {
+      fetchStickyDiagnostics()
+    }
   },
   { immediate: true }
 )
@@ -524,13 +793,11 @@ watch(
 function handleSSEEvent(data) {
   switch (data.type) {
     case 'test_start':
-      // 测试开始
       break
     case 'content':
       responseText.value += data.text
       break
     case 'message_stop':
-      // 消息结束
       break
     case 'test_complete':
       testDuration.value = Date.now() - testStartTime.value
@@ -538,12 +805,13 @@ function handleSSEEvent(data) {
         testStatus.value = 'success'
       } else {
         testStatus.value = 'error'
-        errorMessage.value = data.error || '测试失败'
+        errorMessage.value = data.error || 'Test failed'
       }
+      fetchStickyDiagnostics()
       break
     case 'error':
       testStatus.value = 'error'
-      errorMessage.value = data.error || '未知错误'
+      errorMessage.value = data.error || 'Unknown error'
       testDuration.value = Date.now() - testStartTime.value
       break
   }
@@ -552,22 +820,22 @@ function handleSSEEvent(data) {
 function handleClose() {
   if (testStatus.value === 'testing') return
 
-  // 取消请求
   if (abortController.value) {
     abortController.value.abort()
     abortController.value = null
   }
 
-  // 重置状态
+  abortStickyDiagnosticsRequest()
+
   testStatus.value = 'idle'
   responseText.value = ''
   errorMessage.value = ''
   testDuration.value = 0
+  resetStickyDiagnosticsState()
 
   emit('close')
 }
 
-// 监听show变化，重置状态
 watch(
   () => props.show,
   (newVal) => {
@@ -576,16 +844,31 @@ watch(
       responseText.value = ''
       errorMessage.value = ''
       testDuration.value = 0
-      testProvider.value = 'claude'
-      testModel.value = PROVIDER_CONFIG.claude.defaultModel
+      applyInferredProvider()
+      fetchStickyDiagnostics()
+      return
     }
+
+    abortStickyDiagnosticsRequest()
   }
 )
 
-// 组件卸载时清理
+watch(
+  () => props.apiKeyProfile,
+  () => {
+    if (!props.show || testStatus.value === 'testing') {
+      return
+    }
+
+    applyInferredProvider()
+    fetchStickyDiagnostics()
+  }
+)
+
 onUnmounted(() => {
   if (abortController.value) {
     abortController.value.abort()
   }
+  abortStickyDiagnosticsRequest()
 })
 </script>

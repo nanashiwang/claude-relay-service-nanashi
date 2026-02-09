@@ -898,7 +898,53 @@
               </div>
             </div>
 
-            <!-- 并发请求排队 -->
+
+            <!-- Sticky Session Auto Renewal -->
+            <div
+              class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
+            >
+              <div class="flex items-center justify-between">
+                <div class="flex items-center">
+                  <div
+                    class="flex h-12 w-12 items-center justify-center rounded-lg bg-gradient-to-r from-indigo-500 to-violet-500 text-white shadow-lg"
+                  >
+                    <i class="fas fa-hourglass-half text-xl"></i>
+                  </div>
+                  <div class="ml-4">
+                    <h4 class="text-lg font-semibold text-gray-900 dark:text-white">
+                      Sticky Session Auto Renewal
+                    </h4>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      When disabled, active sessions are not renewed and may switch accounts after TTL expiry
+                    </p>
+                  </div>
+                </div>
+                <label class="relative inline-flex cursor-pointer items-center">
+                  <input
+                    v-model="claudeConfig.stickySessionAutoRenewalEnabled"
+                    class="peer sr-only"
+                    type="checkbox"
+                    @change="saveClaudeConfig"
+                  />
+                  <div
+                    class="peer h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-indigo-500 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 dark:border-gray-600 dark:bg-gray-700 dark:peer-focus:ring-indigo-800"
+                  ></div>
+                </label>
+              </div>
+
+              <div class="mt-4 rounded-lg bg-indigo-50 p-4 dark:bg-indigo-900/20">
+                <div class="flex">
+                  <i class="fas fa-info-circle mt-0.5 text-indigo-500"></i>
+                  <div class="ml-3">
+                    <p class="text-sm text-indigo-700 dark:text-indigo-300">
+                      <strong>Recommended:</strong> keep this enabled so active mappings renew before TTL expiry
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Concurrent Request Queue -->
             <div
               class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
             >
@@ -1680,6 +1726,7 @@ const claudeConfig = ref({
   userMessageQueueEnabled: false, // 与后端默认值保持一致
   userMessageQueueDelayMs: 200,
   userMessageQueueTimeoutMs: 5000, // 与后端默认值保持一致（优化后锁持有时间短无需长等待）
+  stickySessionAutoRenewalEnabled: true,
   concurrentRequestQueueEnabled: false,
   concurrentRequestQueueMaxSize: 3,
   concurrentRequestQueueMaxSizeMultiplier: 0,
@@ -1956,6 +2003,8 @@ const loadClaudeConfig = async () => {
         userMessageQueueEnabled: response.config?.userMessageQueueEnabled ?? false, // 与后端默认值保持一致
         userMessageQueueDelayMs: response.config?.userMessageQueueDelayMs ?? 200,
         userMessageQueueTimeoutMs: response.config?.userMessageQueueTimeoutMs ?? 5000, // 与后端默认值保持一致
+        stickySessionAutoRenewalEnabled:
+          response.config?.stickySessionAutoRenewalEnabled ?? true,
         concurrentRequestQueueEnabled: response.config?.concurrentRequestQueueEnabled ?? false,
         concurrentRequestQueueMaxSize: response.config?.concurrentRequestQueueMaxSize ?? 3,
         concurrentRequestQueueMaxSizeMultiplier:
@@ -1989,6 +2038,7 @@ const saveClaudeConfig = async () => {
       userMessageQueueEnabled: claudeConfig.value.userMessageQueueEnabled,
       userMessageQueueDelayMs: claudeConfig.value.userMessageQueueDelayMs,
       userMessageQueueTimeoutMs: claudeConfig.value.userMessageQueueTimeoutMs,
+      stickySessionAutoRenewalEnabled: claudeConfig.value.stickySessionAutoRenewalEnabled,
       concurrentRequestQueueEnabled: claudeConfig.value.concurrentRequestQueueEnabled,
       concurrentRequestQueueMaxSize: claudeConfig.value.concurrentRequestQueueMaxSize,
       concurrentRequestQueueMaxSizeMultiplier:

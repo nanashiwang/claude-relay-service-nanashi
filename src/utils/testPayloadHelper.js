@@ -82,7 +82,7 @@ function createGeminiTestPayload() {
 }
 
 function createCodexTestPayload(model = 'gpt-5.2-codex', options = {}) {
-  return {
+  const payload = {
     model,
     input: [
       {
@@ -91,7 +91,7 @@ function createCodexTestPayload(model = 'gpt-5.2-codex', options = {}) {
         content: [
           {
             type: 'input_text',
-            text: options.prompt || 'hi'
+            text: options.prompt || '\u4f60\u597d'
           }
         ]
       }
@@ -103,6 +103,12 @@ function createCodexTestPayload(model = 'gpt-5.2-codex', options = {}) {
     },
     stream: options.stream === true
   }
+
+  if (typeof options.instructions === 'string' && options.instructions.trim()) {
+    payload.instructions = options.instructions.trim()
+  }
+
+  return payload
 }
 
 function extractErrorMessage(errorData, status) {
@@ -396,6 +402,203 @@ async function sendStreamTestRequest(options) {
   }
 }
 
+
+function extractCodexStreamDelta(data) {
+  if (!data || typeof data !== 'object') {
+    return ''
+  }
+
+  if (data.type === 'response.output_text.delta' && typeof data.delta === 'string') {
+    return data.delta
+  }
+
+  if (data.type === 'content_block_delta' && typeof data.delta?.text === 'string') {
+    return data.delta.text
+  }
+
+  if (typeof data.text === 'string') {
+    return data.text
+  }
+
+  return ''
+}
+
+async function sendCodexStreamTestRequest(options) {
+  const axios = require('axios')
+  const logger = require('./logger')
+
+  const {
+    apiUrl,
+    authorization,
+    responseStream,
+    payload = createCodexTestPayload('gpt-5.2-codex', { stream: true }),
+    proxyAgent = null,
+    timeout = 30000,
+    extraHeaders = {}
+  } = options
+
+  const sendSSE = (type, data = {}) => {
+    if (!responseStream.destroyed && !responseStream.writableEnded) {
+      try {
+        responseStream.write(`data: ${JSON.stringify({ type, ...data })}\n\n`)
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  const endTest = (success, error = null) => {
+    if (!responseStream.destroyed && !responseStream.writableEnded) {
+      try {
+        responseStream.write(
+          `data: ${JSON.stringify({ type: 'test_complete', success, error: error || undefined })}\n\n`
+        )
+        responseStream.end()
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (!responseStream.headersSent) {
+    responseStream.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no'
+    })
+  }
+
+  sendSSE('test_start', { message: 'Test started' })
+
+  const requestConfig = {
+    method: 'POST',
+    url: apiUrl,
+    data: payload,
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+      'User-Agent': 'codex_cli_rs/0.50.0 (crs-api-key-test)',
+      authorization,
+      ...extraHeaders
+    },
+    timeout,
+    responseType: 'stream',
+    validateStatus: () => true
+  }
+
+  if (proxyAgent) {
+    requestConfig.httpAgent = proxyAgent
+    requestConfig.httpsAgent = proxyAgent
+    requestConfig.proxy = false
+  }
+
+  try {
+    const response = await axios(requestConfig)
+    logger.debug(`Codex stream test response status: ${response.status}`)
+
+    if (response.status < 200 || response.status >= 300) {
+      return await new Promise((resolve) => {
+        const chunks = []
+        response.data.on('data', (chunk) => chunks.push(chunk))
+        response.data.on('end', () => {
+          const raw = Buffer.concat(chunks).toString()
+          let parsed = raw
+          try {
+            parsed = JSON.parse(raw)
+          } catch {
+            // keep raw text
+          }
+          endTest(false, extractErrorMessage(parsed, response.status))
+          resolve()
+        })
+        response.data.on('error', (err) => {
+          endTest(false, err.message)
+          resolve()
+        })
+      })
+    }
+
+    return await new Promise((resolve) => {
+      let buffer = ''
+      let hasError = false
+      let hasMessageStop = false
+      let firstError = ''
+
+      response.data.on('data', (chunk) => {
+        buffer += chunk.toString()
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data:')) {
+            continue
+          }
+
+          const jsonStr = line.substring(5).trim()
+          if (!jsonStr) {
+            continue
+          }
+
+          if (jsonStr === '[DONE]') {
+            hasMessageStop = true
+            sendSSE('message_stop')
+            continue
+          }
+
+          try {
+            const data = JSON.parse(jsonStr)
+
+            if (data.type === 'error' || data.error) {
+              const errMsg = extractErrorMessage(data, response.status)
+              hasError = true
+              if (!firstError) {
+                firstError = errMsg
+              }
+              sendSSE('error', { error: errMsg })
+              continue
+            }
+
+            const delta = extractCodexStreamDelta(data)
+            if (delta) {
+              sendSSE('content', { text: delta })
+            }
+
+            if (data.type === 'response.completed' || data.type === 'message_stop') {
+              hasMessageStop = true
+              sendSSE('message_stop')
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      })
+
+      response.data.on('end', () => {
+        if (hasError) {
+          endTest(false, firstError || 'Codex stream test failed')
+          resolve()
+          return
+        }
+
+        if (!hasMessageStop) {
+          sendSSE('message_stop')
+        }
+        endTest(true)
+        resolve()
+      })
+
+      response.data.on('error', (err) => {
+        endTest(false, err.message)
+        resolve()
+      })
+    })
+  } catch (error) {
+    logger.error('Codex stream test request failed:', error.message)
+    endTest(false, error.message)
+  }
+}
+
 async function sendJsonTestRequest(options) {
   const axios = require('axios')
   const logger = require('./logger')
@@ -496,5 +699,6 @@ module.exports = {
   createGeminiTestPayload,
   createCodexTestPayload,
   sendStreamTestRequest,
+  sendCodexStreamTestRequest,
   sendJsonTestRequest
 }

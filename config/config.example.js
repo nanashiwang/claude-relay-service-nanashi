@@ -34,10 +34,12 @@ const config = {
 
   // 🔗 会话管理配置
   session: {
-    // 粘性会话TTL配置（小时），默认1小时
+    // Sticky session TTL in hours.
     stickyTtlHours: parseFloat(process.env.STICKY_SESSION_TTL_HOURS) || 1,
-    // 续期阈值（分钟），默认0分钟（不续期）
-    renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0
+    // Renewal threshold in minutes. 0 enables auto threshold (~TTL/3, min 5, max 60).
+    renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0,
+    // Explicitly disable auto renewal (default: false).
+    disableAutoRenewal: process.env.STICKY_SESSION_DISABLE_AUTO_RENEWAL === 'true'
   },
 
   // 🎯 Claude API配置

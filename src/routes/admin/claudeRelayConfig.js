@@ -47,7 +47,8 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       concurrentRequestQueueEnabled,
       concurrentRequestQueueMaxSize,
       concurrentRequestQueueMaxSizeMultiplier,
-      concurrentRequestQueueTimeoutMs
+      concurrentRequestQueueTimeoutMs,
+      stickySessionAutoRenewalEnabled
     } = req.body
 
     // 验证输入
@@ -162,6 +163,13 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       }
     }
 
+    if (
+      stickySessionAutoRenewalEnabled !== undefined &&
+      typeof stickySessionAutoRenewalEnabled !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'stickySessionAutoRenewalEnabled must be a boolean' })
+    }
+
     const updateData = {}
     if (claudeCodeOnlyEnabled !== undefined) {
       updateData.claudeCodeOnlyEnabled = claudeCodeOnlyEnabled
@@ -195,6 +203,9 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     }
     if (concurrentRequestQueueTimeoutMs !== undefined) {
       updateData.concurrentRequestQueueTimeoutMs = concurrentRequestQueueTimeoutMs
+    }
+    if (stickySessionAutoRenewalEnabled !== undefined) {
+      updateData.stickySessionAutoRenewalEnabled = stickySessionAutoRenewalEnabled
     }
 
     const updatedConfig = await claudeRelayConfigService.updateConfig(
