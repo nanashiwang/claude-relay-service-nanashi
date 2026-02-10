@@ -38,48 +38,69 @@ const ACCOUNT_CATEGORY_MAP = {
 }
 
 /**
- * 规范化权限数据，兼容旧格式（字符串）和新格式（数组）
- * @param {string|array} permissions - 权限数据
- * @returns {array} - 权限数组，空数组表示全部服务
+ * Normalize permission payloads from legacy and current formats.
+ * @param {string|array} permissions
+ * @returns {array}
  */
 function normalizePermissions(permissions) {
   if (!permissions) {
-    return [] // 空 = 全部服务
+    return []
   }
-  if (Array.isArray(permissions)) {
-    return permissions
-  }
-  // 尝试解析 JSON 字符串（新格式存储）
-  if (typeof permissions === 'string') {
-    if (permissions.startsWith('[')) {
-      try {
-        const parsed = JSON.parse(permissions)
-        if (Array.isArray(parsed)) {
-          return parsed
-        }
-      } catch (e) {
-        // 解析失败，继续处理为普通字符串
-      }
-    }
-    // 旧格式 'all' 转为空数组
-    if (permissions === 'all') {
+
+  const normalizeList = (value) => {
+    if (!Array.isArray(value)) {
       return []
     }
-    // 旧单个字符串转为数组
-    return [permissions]
+
+    return [
+      ...new Set(
+        value
+          .map((item) => (item === null || item === undefined ? '' : String(item).trim()))
+          .filter(Boolean)
+      )
+    ]
   }
+
+  if (Array.isArray(permissions)) {
+    return normalizeList(permissions)
+  }
+
+  if (typeof permissions === 'string') {
+    const rawPermissions = permissions.trim()
+    if (!rawPermissions || rawPermissions === 'all') {
+      return []
+    }
+
+    if (rawPermissions.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(rawPermissions)
+        if (Array.isArray(parsed)) {
+          return normalizeList(parsed)
+        }
+      } catch (e) {
+        // fall through and handle as plain text
+      }
+    }
+
+    if (rawPermissions.includes(',')) {
+      return normalizeList(rawPermissions.split(','))
+    }
+
+    return [rawPermissions]
+  }
+
   return []
 }
 
 /**
- * 检查是否有访问特定服务的权限
- * @param {string|array} permissions - 权限数据
- * @param {string} service - 服务名称（claude/gemini/openai/droid）
- * @returns {boolean} - 是否有权限
+ * Check whether permissions allow the target service.
+ * @param {string|array} permissions
+ * @param {string} service
+ * @returns {boolean}
  */
 function hasPermission(permissions, service) {
   const perms = normalizePermissions(permissions)
-  return perms.length === 0 || perms.includes(service) // 空数组 = 全部服务
+  return perms.length === 0 || perms.includes(service) // empty array means all services
 }
 
 function normalizeAccountTypeKey(type) {
@@ -774,7 +795,10 @@ class ApiKeyService {
 
       for (const [field, value] of Object.entries(updates)) {
         if (allowedUpdates.includes(field)) {
-          if (field === 'restrictedModels' || field === 'allowedClients' || field === 'tags') {
+          if (field === 'permissions') {
+            // permissions 必须以 JSON 数组持久化，避免 toString() 变成逗号拼接字符串
+            updatedData[field] = JSON.stringify(normalizePermissions(value))
+          } else if (field === 'restrictedModels' || field === 'allowedClients' || field === 'tags') {
             // 特殊处理数组字段
             updatedData[field] = JSON.stringify(value || [])
           } else if (
