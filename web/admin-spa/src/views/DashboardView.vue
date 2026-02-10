@@ -195,8 +195,64 @@
         </div>
       </div>
     </div>
+    <!-- Recent stream interruption stats -->
+    <div class="mb-4 sm:mb-6 md:mb-8">
+      <div class="card p-4 sm:p-6">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100">
+              Recent Stream Interruptions (Last
+              {{ dashboardData.streamInterruptionStats.windowMinutes || 60 }} min)
+            </h3>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              Total:
+              {{ formatNumber(dashboardData.streamInterruptionStats.totalInterruptions || 0) }}
+            </p>
+          </div>
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            Updated: {{ formatLastUpdate(dashboardData.streamInterruptionStats.updatedAt) }}
+          </p>
+        </div>
 
-    <!-- 账户余额/配额汇总 -->
+        <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div
+            class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            <p class="text-xs text-gray-500 dark:text-gray-400">upstream_stream_error</p>
+            <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {{
+                formatNumber(
+                  dashboardData.streamInterruptionStats.reasons?.upstream_stream_error || 0
+                )
+              }}
+            </p>
+          </div>
+          <div
+            class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            <p class="text-xs text-gray-500 dark:text-gray-400">timeout</p>
+            <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {{ formatNumber(dashboardData.streamInterruptionStats.reasons?.timeout || 0) }}
+            </p>
+          </div>
+          <div
+            class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 dark:border-gray-700 dark:bg-gray-800/60"
+          >
+            <p class="text-xs text-gray-500 dark:text-gray-400">client_abort</p>
+            <p class="mt-1 text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {{ formatNumber(dashboardData.streamInterruptionStats.reasons?.client_abort || 0) }}
+            </p>
+          </div>
+        </div>
+
+        <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+          Provider breakdown:
+          {{ formatStreamProviders(dashboardData.streamInterruptionStats.providers) }}
+        </p>
+      </div>
+    </div>
+
+    <!-- Balance summary -->
     <div class="mb-4 grid grid-cols-1 gap-3 sm:mb-6 sm:grid-cols-2 sm:gap-4 md:mb-8 md:gap-6">
       <div class="stat-card">
         <div class="flex items-center justify-between">
@@ -953,6 +1009,19 @@ function formatNumber(num) {
     return (num / 1000).toFixed(2) + 'K'
   }
   return num.toString()
+}
+
+function formatStreamProviders(providers) {
+  if (!providers || typeof providers !== 'object') {
+    return 'none'
+  }
+
+  const providerText = Object.entries(providers)
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .map(([provider, count]) => `${provider}: ${formatNumber(Number(count) || 0)}`)
+
+  return providerText.length > 0 ? providerText.join(' | ') : 'none'
 }
 
 function formatCostValue(cost) {

@@ -5,8 +5,17 @@ const { filterForOpenAI } = require('../utils/headerFilter')
 const openaiResponsesAccountService = require('./openaiResponsesAccountService')
 const apiKeyService = require('./apiKeyService')
 const unifiedOpenAIScheduler = require('./unifiedOpenAIScheduler')
+const claudeRelayConfigService = require('./claudeRelayConfigService')
+const redis = require('../models/redis')
 const config = require('../../config/config')
 const crypto = require('crypto')
+const {
+  STREAM_INTERRUPTION_REASONS,
+  resolveStreamInterruptionReasonFromError,
+  recordStreamInterruption
+} = require('../utils/streamInterruptionHelper')
+
+const DEFAULT_OPENAI_RESPONSES_STREAM_HEARTBEAT_INTERVAL_MS = 15000
 
 // 抽取缓存写入 token，兼容多种字段命名
 function extractCacheCreationTokens(usageData) {
@@ -32,6 +41,55 @@ function extractCacheCreationTokens(usageData) {
   }
 
   return 0
+}
+
+
+function isWritableSSEStream(res) {
+  return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
+}
+
+function sendOpenAIResponsesStreamErrorEvent(
+  res,
+  error,
+  reason = STREAM_INTERRUPTION_REASONS.UPSTREAM_STREAM_ERROR
+) {
+  if (!isWritableSSEStream(res)) {
+    return false
+  }
+
+  const payload = {
+    type: 'error',
+    error: {
+      message: error?.message || 'Upstream stream error',
+      type: 'stream_error',
+      code: reason,
+      retryable: true,
+      timestamp: new Date().toISOString()
+    }
+  }
+
+  try {
+    res.write(`event: relay.error\ndata: ${JSON.stringify(payload)}\n\n`)
+    res.write('data: [DONE]\n\n')
+    return true
+  } catch (writeError) {
+    logger.error('Failed to write OpenAI-Responses SSE error event:', writeError)
+    return false
+  }
+}
+
+async function getOpenAIResponsesStreamHeartbeatIntervalMs() {
+  try {
+    const runtimeConfig = await claudeRelayConfigService.getConfig()
+    const interval = Number(runtimeConfig?.openaiStreamHeartbeatIntervalMs)
+    if (Number.isInteger(interval) && interval >= 5000 && interval <= 60000) {
+      return interval
+    }
+  } catch (error) {
+    logger.debug('Failed to load OpenAI-Responses heartbeat interval from runtime config:', error)
+  }
+
+  return DEFAULT_OPENAI_RESPONSES_STREAM_HEARTBEAT_INTERVAL_MS
 }
 
 class OpenAIResponsesRelayService {
@@ -414,12 +472,46 @@ class OpenAIResponsesRelayService {
     res.setHeader('Connection', 'keep-alive')
     res.setHeader('X-Accel-Buffering', 'no')
 
+    const heartbeatIntervalMs = await getOpenAIResponsesStreamHeartbeatIntervalMs()
+
     let usageData = null
     let actualModel = null
     let buffer = ''
     let rateLimitDetected = false
     let rateLimitResetsInSeconds = null
     let streamEnded = false
+    let heartbeatTimer = null
+    let lastDataAt = Date.now()
+
+    const clearHeartbeat = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+    }
+
+    const sendHeartbeat = () => {
+      if (streamEnded || !isWritableSSEStream(res)) {
+        clearHeartbeat()
+        return
+      }
+
+      if (Date.now() - lastDataAt < heartbeatIntervalMs) {
+        return
+      }
+
+      try {
+        res.write(': keep-alive\n\n')
+      } catch (heartbeatError) {
+        logger.warn('Failed to send OpenAI-Responses SSE heartbeat:', heartbeatError.message)
+        clearHeartbeat()
+      }
+    }
+
+    heartbeatTimer = setInterval(sendHeartbeat, heartbeatIntervalMs)
+    if (typeof heartbeatTimer.unref === 'function') {
+      heartbeatTimer.unref()
+    }
 
     // 解析 SSE 事件以捕获 usage 数据和 model
     const parseSSEForUsage = (data) => {
@@ -481,6 +573,7 @@ class OpenAIResponsesRelayService {
     // 监听数据流
     response.data.on('data', (chunk) => {
       try {
+        lastDataAt = Date.now()
         const chunkStr = chunk.toString()
 
         // 转发数据给客户端
@@ -508,7 +601,11 @@ class OpenAIResponsesRelayService {
     })
 
     response.data.on('end', async () => {
+      if (streamEnded) {
+        return
+      }
       streamEnded = true
+      clearHeartbeat()
 
       // 处理剩余的 buffer
       if (buffer.trim()) {
@@ -605,23 +702,39 @@ class OpenAIResponsesRelayService {
     })
 
     response.data.on('error', (error) => {
+      if (streamEnded) {
+        return
+      }
       streamEnded = true
+      clearHeartbeat()
       logger.error('Stream error:', error)
 
-      // 清理监听器
+      const interruptionReason = resolveStreamInterruptionReasonFromError(
+        error,
+        STREAM_INTERRUPTION_REASONS.UPSTREAM_STREAM_ERROR
+      )
+      recordStreamInterruption(redis, interruptionReason, 'openai-responses')
+
+      // Clean up listeners
       req.removeListener('close', handleClientDisconnect)
       res.removeListener('close', handleClientDisconnect)
 
       if (!res.headersSent) {
-        res.status(502).json({ error: { message: 'Upstream stream error' } })
-      } else if (!res.destroyed) {
+        res.status(502).json({ error: { message: error?.message || 'Upstream stream error' } })
+      } else if (isWritableSSEStream(res)) {
+        sendOpenAIResponsesStreamErrorEvent(res, error, interruptionReason)
         res.end()
       }
     })
 
-    // 处理客户端断开连接
+    // Handle client disconnection
     const cleanup = () => {
+      if (streamEnded) {
+        return
+      }
       streamEnded = true
+      clearHeartbeat()
+      recordStreamInterruption(redis, STREAM_INTERRUPTION_REASONS.CLIENT_ABORT, 'openai-responses')
       try {
         response.data?.unpipe?.(res)
         response.data?.destroy?.()

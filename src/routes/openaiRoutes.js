@@ -9,9 +9,16 @@ const openaiAccountService = require('../services/openaiAccountService')
 const openaiResponsesAccountService = require('../services/openaiResponsesAccountService')
 const openaiResponsesRelayService = require('../services/openaiResponsesRelayService')
 const apiKeyService = require('../services/apiKeyService')
+const claudeRelayConfigService = require('../services/claudeRelayConfigService')
+const redis = require('../models/redis')
 const crypto = require('crypto')
 const ProxyHelper = require('../utils/proxyHelper')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
+const {
+  STREAM_INTERRUPTION_REASONS,
+  resolveStreamInterruptionReasonFromError,
+  recordStreamInterruption
+} = require('../utils/streamInterruptionHelper')
 
 // 创建代理 Agent（使用统一的代理工具）
 function createProxyAgent(proxy) {
@@ -93,6 +100,79 @@ async function applyRateLimitTracking(req, usageSummary, model, context = '') {
 }
 
 // 使用统一调度器选择 OpenAI 账户
+const OPENAI_AUTH_RETRY_MAX_COUNT = 3
+const OPENAI_AUTH_RETRYABLE_STATUS = new Set([401, 402, 403])
+const DEFAULT_OPENAI_STREAM_HEARTBEAT_INTERVAL_MS = 15000
+
+function getOpenAIAuthRetryState(req) {
+  if (!req._openaiAuthRetryState || typeof req._openaiAuthRetryState !== 'object') {
+    req._openaiAuthRetryState = { count: 0 }
+  }
+  return req._openaiAuthRetryState
+}
+
+function tryConsumeOpenAIAuthRetry(req, status, accountId, accountType) {
+  if (!OPENAI_AUTH_RETRYABLE_STATUS.has(status) || !accountId) {
+    return false
+  }
+
+  const retryState = getOpenAIAuthRetryState(req)
+  if (retryState.count >= OPENAI_AUTH_RETRY_MAX_COUNT) {
+    return false
+  }
+
+  retryState.count += 1
+  logger.warn(
+    `OpenAI auth retry ${retryState.count}/${OPENAI_AUTH_RETRY_MAX_COUNT} after ${status} from account ${accountType}:${accountId}`
+  )
+  return true
+}
+
+async function getOpenAIStreamHeartbeatIntervalMs() {
+  try {
+    const runtimeConfig = await claudeRelayConfigService.getConfig()
+    const interval = Number(runtimeConfig?.openaiStreamHeartbeatIntervalMs)
+    if (Number.isInteger(interval) && interval >= 5000 && interval <= 60000) {
+      return interval
+    }
+  } catch (error) {
+    logger.debug('Failed to load OpenAI stream heartbeat interval from runtime config:', error)
+  }
+
+  return DEFAULT_OPENAI_STREAM_HEARTBEAT_INTERVAL_MS
+}
+
+function isWritableSSEStream(res) {
+  return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
+}
+
+function sendOpenAIStreamErrorEvent(res, error, source = 'upstream_stream_error') {
+  if (!isWritableSSEStream(res)) {
+    return false
+  }
+
+  const message = error?.message || 'Upstream stream error'
+  const payload = {
+    type: 'error',
+    error: {
+      message,
+      type: 'stream_error',
+      code: source,
+      retryable: true,
+      timestamp: new Date().toISOString()
+    }
+  }
+
+  try {
+    res.write(`event: relay.error\ndata: ${JSON.stringify(payload)}\n\n`)
+    res.write('data: [DONE]\n\n')
+    return true
+  } catch (writeError) {
+    logger.error('Failed to write OpenAI SSE error event:', writeError)
+    return false
+  }
+}
+
 async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel = null) {
   try {
     // 生成会话哈希（如果有会话ID）
@@ -113,6 +193,16 @@ async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel =
       throw error
     }
 
+    const attachAccountContext = (error) => {
+      if (result?.accountId && !error.accountId) {
+        error.accountId = result.accountId
+      }
+      if (result?.accountType && !error.accountType) {
+        error.accountType = result.accountType
+      }
+      return error
+    }
+
     // 根据账户类型获取账户详情
     let account,
       accessToken,
@@ -124,7 +214,7 @@ async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel =
       if (!account || !account.apiKey) {
         const error = new Error(`OpenAI-Responses account ${result.accountId} has no valid apiKey`)
         error.statusCode = 403 // Forbidden - 账户配置错误
-        throw error
+        throw attachAccountContext(error)
       }
 
       // OpenAI-Responses 账户不需要 accessToken，直接返回账户信息
@@ -146,7 +236,7 @@ async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel =
       if (!account || !account.accessToken) {
         const error = new Error(`OpenAI account ${result.accountId} has no valid accessToken`)
         error.statusCode = 403 // Forbidden - 账户配置错误
-        throw error
+        throw attachAccountContext(error)
       }
 
       // 检查 token 是否过期并自动刷新（双重保护）
@@ -162,14 +252,14 @@ async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel =
             logger.error(`Failed to refresh token for ${account.name}:`, refreshError)
             const error = new Error(`Token expired and refresh failed: ${refreshError.message}`)
             error.statusCode = 403 // Forbidden - 认证失败
-            throw error
+            throw attachAccountContext(error)
           }
         } else {
           const error = new Error(
             `Token expired and no refresh token available for account ${account.name}`
           )
           error.statusCode = 403 // Forbidden - 认证失败
-          throw error
+          throw attachAccountContext(error)
         }
       }
 
@@ -178,7 +268,7 @@ async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel =
       if (!accessToken) {
         const error = new Error('Failed to decrypt OpenAI accessToken')
         error.statusCode = 403 // Forbidden - 配置/权限错误
-        throw error
+        throw attachAccountContext(error)
       }
 
       // 解析代理配置
@@ -290,6 +380,10 @@ const handleResponses = async (req, res) => {
     }
 
     // 使用调度器选择账户
+    let shouldRetryWithAnotherAccount = false
+    do {
+      shouldRetryWithAnotherAccount = false
+
     ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
       apiKeyData,
       sessionId,
@@ -454,11 +548,16 @@ const handleResponses = async (req, res) => {
       }
 
       return
-    } else if (upstream.status === 401 || upstream.status === 402) {
+    } else if (upstream.status === 401 || upstream.status === 402 || upstream.status === 403) {
       const unauthorizedStatus = upstream.status
-      const statusDescription = unauthorizedStatus === 401 ? 'Unauthorized' : 'Payment required'
+      const statusDescription =
+        unauthorizedStatus === 401
+          ? 'Unauthorized'
+          : unauthorizedStatus === 402
+            ? 'Payment required'
+            : 'Forbidden'
       logger.warn(
-        `🔐 ${statusDescription} error detected for OpenAI account ${accountId} (Codex API)`
+        `Auth ${statusDescription} error detected for OpenAI account ${accountId} (Codex API)`
       )
 
       let errorData = null
@@ -479,18 +578,33 @@ const handleResponses = async (req, res) => {
           } catch (parseError) {
             logger.error(`Failed to parse ${unauthorizedStatus} error response:`, parseError)
             logger.debug(`Raw ${unauthorizedStatus} response:`, fullResponse)
-            errorData = { error: { message: fullResponse || 'Unauthorized' } }
+            errorData = {
+              error: {
+                message:
+                  fullResponse ||
+                  (unauthorizedStatus === 403
+                    ? 'Forbidden'
+                    : unauthorizedStatus === 402
+                      ? 'Payment required'
+                      : 'Unauthorized')
+              }
+            }
           }
         } else {
           errorData = upstream.data
         }
       } catch (parseError) {
-        logger.error(`⚠️ Failed to handle ${unauthorizedStatus} error response:`, parseError)
+        logger.error(`Failed to handle ${unauthorizedStatus} error response:`, parseError)
       }
 
-      const statusLabel = unauthorizedStatus === 401 ? '401错误' : '402错误'
-      const extraHint = unauthorizedStatus === 402 ? '，可能欠费' : ''
-      let reason = `OpenAI账号认证失败（${statusLabel}${extraHint}）`
+      const statusLabel =
+        unauthorizedStatus === 401
+          ? '401'
+          : unauthorizedStatus === 402
+            ? '402'
+            : '403'
+      const extraHint = unauthorizedStatus === 402 ? ' (payment required)' : ''
+      let reason = `OpenAI authentication failed (${statusLabel}${extraHint})`
       if (errorData) {
         const messageCandidate =
           errorData.error &&
@@ -501,33 +615,54 @@ const handleResponses = async (req, res) => {
               ? errorData.message.trim()
               : null
         if (messageCandidate) {
-          reason = `OpenAI账号认证失败（${statusLabel}${extraHint}）：${messageCandidate}`
+          reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${messageCandidate}`
         }
       }
 
       try {
         await unifiedOpenAIScheduler.markAccountUnauthorized(
           accountId,
-          'openai',
+          accountType || 'openai',
           sessionHash,
           reason
         )
       } catch (markError) {
         logger.error(
-          `❌ Failed to mark OpenAI account unauthorized after ${unauthorizedStatus}:`,
+          `Failed to mark OpenAI account unauthorized after ${unauthorizedStatus}:`,
           markError
         )
+      }
+
+      if (tryConsumeOpenAIAuthRetry(req, unauthorizedStatus, accountId, accountType || 'openai')) {
+        shouldRetryWithAnotherAccount = true
+        continue
       }
 
       let errorResponse = errorData
       if (!errorResponse || typeof errorResponse !== 'object' || Buffer.isBuffer(errorResponse)) {
         const fallbackMessage =
-          typeof errorData === 'string' && errorData.trim() ? errorData.trim() : 'Unauthorized'
+          typeof errorData === 'string' && errorData.trim()
+            ? errorData.trim()
+            : unauthorizedStatus === 403
+              ? 'Forbidden'
+              : unauthorizedStatus === 402
+                ? 'Payment required'
+                : 'Unauthorized'
         errorResponse = {
           error: {
             message: fallbackMessage,
-            type: 'unauthorized',
-            code: 'unauthorized'
+            type:
+              unauthorizedStatus === 403
+                ? 'forbidden'
+                : unauthorizedStatus === 402
+                  ? 'payment_required'
+                  : 'unauthorized',
+            code:
+              unauthorizedStatus === 403
+                ? 'forbidden'
+                : unauthorizedStatus === 402
+                  ? 'payment_required'
+                  : 'unauthorized'
           }
         }
       }
@@ -544,6 +679,8 @@ const handleResponses = async (req, res) => {
         await unifiedOpenAIScheduler.removeAccountRateLimit(accountId, 'openai')
       }
     }
+
+    } while (shouldRetryWithAnotherAccount)
 
     res.status(upstream.status)
 
@@ -644,6 +781,41 @@ const handleResponses = async (req, res) => {
     }
 
     // 解析 SSE 事件以捕获 usage 数据和 model
+    const heartbeatIntervalMs = await getOpenAIStreamHeartbeatIntervalMs()
+    let heartbeatTimer = null
+    let lastDataAt = Date.now()
+    let streamFinalized = false
+
+    const stopHeartbeat = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+    }
+
+    const sendHeartbeat = () => {
+      if (!isWritableSSEStream(res)) {
+        stopHeartbeat()
+        return
+      }
+
+      if (Date.now() - lastDataAt < heartbeatIntervalMs) {
+        return
+      }
+
+      try {
+        res.write(': keep-alive\n\n')
+      } catch (heartbeatError) {
+        logger.warn('Failed to send OpenAI SSE heartbeat:', heartbeatError.message)
+        stopHeartbeat()
+      }
+    }
+
+    heartbeatTimer = setInterval(sendHeartbeat, heartbeatIntervalMs)
+    if (typeof heartbeatTimer.unref === 'function') {
+      heartbeatTimer.unref()
+    }
+
     const parseSSEForUsage = (data) => {
       const lines = data.split('\n')
 
@@ -692,6 +864,7 @@ const handleResponses = async (req, res) => {
 
     upstream.data.on('data', (chunk) => {
       try {
+        lastDataAt = Date.now()
         const chunkStr = chunk.toString()
 
         // 转发数据给客户端
@@ -719,6 +892,11 @@ const handleResponses = async (req, res) => {
     })
 
     upstream.data.on('end', async () => {
+      if (streamFinalized) {
+        return
+      }
+      streamFinalized = true
+      stopHeartbeat()
       // 处理剩余的 buffer
       if (buffer.trim()) {
         parseSSEForUsage(buffer)
@@ -787,20 +965,47 @@ const handleResponses = async (req, res) => {
         }
       }
 
-      res.end()
+      if (isWritableSSEStream(res)) {
+        res.end()
+      }
     })
 
     upstream.data.on('error', (err) => {
+      if (streamFinalized) {
+        return
+      }
+      streamFinalized = true
+
       logger.error('Upstream stream error:', err)
+      stopHeartbeat()
+
+      const interruptionReason = resolveStreamInterruptionReasonFromError(
+        err,
+        STREAM_INTERRUPTION_REASONS.UPSTREAM_STREAM_ERROR
+      )
+      recordStreamInterruption(redis, interruptionReason, 'openai')
+
       if (!res.headersSent) {
-        res.status(502).json({ error: { message: 'Upstream stream error' } })
-      } else {
+        res.status(502).json({ error: { message: err?.message || 'Upstream stream error' } })
+        return
+      }
+
+      sendOpenAIStreamErrorEvent(res, err, interruptionReason)
+      if (isWritableSSEStream(res)) {
         res.end()
       }
     })
 
     // 客户端断开时清理上游流
     const cleanup = () => {
+      if (streamFinalized) {
+        return
+      }
+      streamFinalized = true
+
+      stopHeartbeat()
+      recordStreamInterruption(redis, STREAM_INTERRUPTION_REASONS.CLIENT_ABORT, 'openai')
+
       try {
         upstream.data?.unpipe?.(res)
         upstream.data?.destroy?.()
@@ -815,36 +1020,44 @@ const handleResponses = async (req, res) => {
     // 优先使用主动设置的 statusCode，然后是上游响应的状态码，最后默认 500
     const status = error.statusCode || error.response?.status || 500
 
-    if ((status === 401 || status === 402) && accountId) {
-      const statusLabel = status === 401 ? '401错误' : '402错误'
-      const extraHint = status === 402 ? '，可能欠费' : ''
-      let reason = `OpenAI账号认证失败（${statusLabel}${extraHint}）`
+    const failedAccountId = accountId || error.accountId || null
+    const failedAccountType = accountType || error.accountType || 'openai'
+
+    if ((status === 401 || status === 402 || status === 403) && failedAccountId) {
+      const statusLabel =
+        status === 401 ? '401' : status === 402 ? '402' : '403'
+      const extraHint = status === 402 ? ' (payment required)' : ''
+      let reason = `OpenAI authentication failed (${statusLabel}${extraHint})`
       const errorData = error.response?.data
       if (errorData) {
         if (typeof errorData === 'string' && errorData.trim()) {
-          reason = `OpenAI账号认证失败（${statusLabel}${extraHint}）：${errorData.trim()}`
+          reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${errorData.trim()}`
         } else if (
           errorData.error &&
           typeof errorData.error.message === 'string' &&
           errorData.error.message.trim()
         ) {
-          reason = `OpenAI账号认证失败（${statusLabel}${extraHint}）：${errorData.error.message.trim()}`
+          reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${errorData.error.message.trim()}`
         } else if (typeof errorData.message === 'string' && errorData.message.trim()) {
-          reason = `OpenAI账号认证失败（${statusLabel}${extraHint}）：${errorData.message.trim()}`
+          reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${errorData.message.trim()}`
         }
       } else if (error.message) {
-        reason = `OpenAI账号认证失败（${statusLabel}${extraHint}）：${error.message}`
+        reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${error.message}`
       }
 
       try {
         await unifiedOpenAIScheduler.markAccountUnauthorized(
-          accountId,
-          accountType || 'openai',
+          failedAccountId,
+          failedAccountType,
           sessionHash,
           reason
         )
       } catch (markError) {
-        logger.error('❌ Failed to mark OpenAI account unauthorized in catch handler:', markError)
+        logger.error('Failed to mark OpenAI account unauthorized in catch handler:', markError)
+      }
+
+      if (!res.headersSent && tryConsumeOpenAIAuthRetry(req, status, failedAccountId, failedAccountType)) {
+        return handleResponses(req, res)
       }
     }
 

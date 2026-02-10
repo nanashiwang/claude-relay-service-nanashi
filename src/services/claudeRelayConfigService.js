@@ -30,6 +30,7 @@ const DEFAULT_CONFIG = {
   concurrentRequestQueueHealthCheckEnabled: true, // 是否启用排队健康检查（默认开启）
   concurrentRequestQueueHealthThreshold: 0.8, // 健康检查阈值（P90 >= 超时 × 阈值时拒绝新请求）
   stickySessionAutoRenewalEnabled: true, // Sticky session auto renewal toggle
+  openaiStreamHeartbeatIntervalMs: 15000, // OpenAI/OpenAI-Responses SSE heartbeat interval (ms)
   updatedAt: null,
   updatedBy: null
 }
@@ -117,7 +118,8 @@ class ClaudeRelayConfigService {
         claudeCodeOnlyEnabled: updatedConfig.claudeCodeOnlyEnabled,
         globalSessionBindingEnabled: updatedConfig.globalSessionBindingEnabled,
         concurrentRequestQueueEnabled: updatedConfig.concurrentRequestQueueEnabled,
-        stickySessionAutoRenewalEnabled: updatedConfig.stickySessionAutoRenewalEnabled
+        stickySessionAutoRenewalEnabled: updatedConfig.stickySessionAutoRenewalEnabled,
+        openaiStreamHeartbeatIntervalMs: updatedConfig.openaiStreamHeartbeatIntervalMs
       })
 
       return updatedConfig

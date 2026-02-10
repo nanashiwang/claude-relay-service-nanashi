@@ -942,6 +942,26 @@
                   </div>
                 </div>
               </div>
+
+              <div class="mt-6">
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <i class="fas fa-heartbeat mr-2 text-gray-400"></i>
+                  OpenAI Stream Heartbeat Interval (ms)
+                </label>
+                <input
+                  v-model.number="claudeConfig.openaiStreamHeartbeatIntervalMs"
+                  class="mt-1 block w-full max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
+                  max="60000"
+                  min="5000"
+                  placeholder="15000"
+                  step="1000"
+                  type="number"
+                  @change="saveClaudeConfig"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Controls OpenAI / OpenAI-Responses SSE keep-alive ping interval. Range: 5000-60000, default 15000.
+                </p>
+              </div>
             </div>
 
             <!-- Concurrent Request Queue -->
@@ -1731,6 +1751,7 @@ const claudeConfig = ref({
   concurrentRequestQueueMaxSize: 3,
   concurrentRequestQueueMaxSizeMultiplier: 0,
   concurrentRequestQueueTimeoutMs: 10000,
+  openaiStreamHeartbeatIntervalMs: 15000,
   updatedAt: null,
   updatedBy: null
 })
@@ -2010,6 +2031,7 @@ const loadClaudeConfig = async () => {
         concurrentRequestQueueMaxSizeMultiplier:
           response.config?.concurrentRequestQueueMaxSizeMultiplier ?? 0,
         concurrentRequestQueueTimeoutMs: response.config?.concurrentRequestQueueTimeoutMs ?? 10000,
+        openaiStreamHeartbeatIntervalMs: response.config?.openaiStreamHeartbeatIntervalMs ?? 15000,
         updatedAt: response.config?.updatedAt || null,
         updatedBy: response.config?.updatedBy || null
       }
@@ -2043,7 +2065,8 @@ const saveClaudeConfig = async () => {
       concurrentRequestQueueMaxSize: claudeConfig.value.concurrentRequestQueueMaxSize,
       concurrentRequestQueueMaxSizeMultiplier:
         claudeConfig.value.concurrentRequestQueueMaxSizeMultiplier,
-      concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs
+      concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs,
+      openaiStreamHeartbeatIntervalMs: claudeConfig.value.openaiStreamHeartbeatIntervalMs
     }
 
     const response = await apiClient.put('/admin/claude-relay-config', payload, {

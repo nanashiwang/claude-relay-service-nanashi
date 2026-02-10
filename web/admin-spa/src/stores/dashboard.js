@@ -41,6 +41,17 @@ export const useDashboardStore = defineStore('dashboard', () => {
     realtimeTPM: 0,
     metricsWindow: 5,
     isHistoricalMetrics: false,
+    streamInterruptionStats: {
+      windowMinutes: 60,
+      totalInterruptions: 0,
+      reasons: {
+        upstream_stream_error: 0,
+        timeout: 0,
+        client_abort: 0
+      },
+      providers: {},
+      updatedAt: null
+    },
     systemStatus: '正常',
     uptime: 0,
     systemTimezone: 8 // 默认 UTC+8
@@ -232,6 +243,8 @@ export const useDashboardStore = defineStore('dashboard', () => {
         const systemAverages = dashboardResponse.data.systemAverages || {}
         const realtimeMetrics = dashboardResponse.data.realtimeMetrics || {}
         const systemHealth = dashboardResponse.data.systemHealth || {}
+        const streamInterruptionStats = dashboardResponse.data.streamInterruptionStats || {}
+        const streamInterruptionReasons = streamInterruptionStats.reasons || {}
 
         dashboardData.value = {
           totalApiKeys: overview.totalApiKeys || 0,
@@ -271,6 +284,17 @@ export const useDashboardStore = defineStore('dashboard', () => {
           realtimeTPM: realtimeMetrics.tpm || 0,
           metricsWindow: realtimeMetrics.windowMinutes || 5,
           isHistoricalMetrics: realtimeMetrics.isHistorical || false,
+          streamInterruptionStats: {
+            windowMinutes: streamInterruptionStats.windowMinutes || 60,
+            totalInterruptions: streamInterruptionStats.totalInterruptions || 0,
+            reasons: {
+              upstream_stream_error: streamInterruptionReasons.upstream_stream_error || 0,
+              timeout: streamInterruptionReasons.timeout || 0,
+              client_abort: streamInterruptionReasons.client_abort || 0
+            },
+            providers: streamInterruptionStats.providers || {},
+            updatedAt: streamInterruptionStats.updatedAt || null
+          },
           systemStatus: systemHealth.redisConnected ? '正常' : '异常',
           uptime: systemHealth.uptime || 0,
           systemTimezone: dashboardResponse.data.systemTimezone || 8

@@ -48,7 +48,8 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       concurrentRequestQueueMaxSize,
       concurrentRequestQueueMaxSizeMultiplier,
       concurrentRequestQueueTimeoutMs,
-      stickySessionAutoRenewalEnabled
+      stickySessionAutoRenewalEnabled,
+      openaiStreamHeartbeatIntervalMs
     } = req.body
 
     // 验证输入
@@ -170,6 +171,20 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       return res.status(400).json({ error: 'stickySessionAutoRenewalEnabled must be a boolean' })
     }
 
+    if (openaiStreamHeartbeatIntervalMs !== undefined) {
+      if (
+        typeof openaiStreamHeartbeatIntervalMs !== 'number' ||
+        !Number.isInteger(openaiStreamHeartbeatIntervalMs) ||
+        openaiStreamHeartbeatIntervalMs < 5000 ||
+        openaiStreamHeartbeatIntervalMs > 60000
+      ) {
+        return res.status(400).json({
+          error:
+            'openaiStreamHeartbeatIntervalMs must be an integer between 5000 and 60000 (5 seconds to 60 seconds)'
+        })
+      }
+    }
+
     const updateData = {}
     if (claudeCodeOnlyEnabled !== undefined) {
       updateData.claudeCodeOnlyEnabled = claudeCodeOnlyEnabled
@@ -206,6 +221,9 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     }
     if (stickySessionAutoRenewalEnabled !== undefined) {
       updateData.stickySessionAutoRenewalEnabled = stickySessionAutoRenewalEnabled
+    }
+    if (openaiStreamHeartbeatIntervalMs !== undefined) {
+      updateData.openaiStreamHeartbeatIntervalMs = openaiStreamHeartbeatIntervalMs
     }
 
     const updatedConfig = await claudeRelayConfigService.updateConfig(

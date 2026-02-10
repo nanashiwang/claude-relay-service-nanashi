@@ -3715,4 +3715,116 @@ redisClient.getAccountLastTestTime = async function (accountId, platform) {
   }
 }
 
+
+// ============== Stream interruption stats ==============
+
+const STREAM_INTERRUPTION_MINUTE_KEY_PREFIX = 'stream_interruption:minute:'
+const STREAM_INTERRUPTION_REASON_FIELDS = [
+  'upstream_stream_error',
+  'timeout',
+  'client_abort'
+]
+
+redisClient.recordStreamInterruption = async function (reason, provider = 'unknown') {
+  try {
+    const client = this.getClientSafe()
+    const minuteTimestamp = Math.floor(Date.now() / 60000)
+    const minuteKey = `${STREAM_INTERRUPTION_MINUTE_KEY_PREFIX}${minuteTimestamp}`
+
+    const safeReason =
+      typeof reason === 'string' && reason.trim() ? reason.trim().toLowerCase() : 'upstream_stream_error'
+    const safeProvider =
+      typeof provider === 'string' && provider.trim() ? provider.trim().toLowerCase() : 'unknown'
+
+    const pipeline = client.pipeline()
+    pipeline.hincrby(minuteKey, 'total', 1)
+    pipeline.hincrby(minuteKey, `reason:${safeReason}`, 1)
+    pipeline.hincrby(minuteKey, `provider:${safeProvider}`, 1)
+    pipeline.expire(minuteKey, 86400 * 3)
+    await pipeline.exec()
+  } catch (error) {
+    logger.error('Failed to record stream interruption stats:', error)
+  }
+}
+
+redisClient.getRecentStreamInterruptionStats = async function (windowMinutes = 60) {
+  const normalizedWindow =
+    Number.isFinite(windowMinutes) && windowMinutes > 0
+      ? Math.min(Math.floor(windowMinutes), 24 * 60)
+      : 60
+
+  const emptyReasons = STREAM_INTERRUPTION_REASON_FIELDS.reduce((acc, reason) => {
+    acc[reason] = 0
+    return acc
+  }, {})
+
+  const baseResult = {
+    windowMinutes: normalizedWindow,
+    totalInterruptions: 0,
+    reasons: { ...emptyReasons },
+    providers: {},
+    updatedAt: new Date().toISOString()
+  }
+
+  try {
+    const client = this.getClientSafe()
+    const currentMinute = Math.floor(Date.now() / 60000)
+
+    const pipeline = client.pipeline()
+    const minuteKeys = []
+
+    for (let i = 0; i < normalizedWindow; i++) {
+      const key = `${STREAM_INTERRUPTION_MINUTE_KEY_PREFIX}${currentMinute - i}`
+      minuteKeys.push(key)
+      pipeline.hgetall(key)
+    }
+
+    const results = await pipeline.exec()
+
+    let totalInterruptions = 0
+    const reasons = { ...emptyReasons }
+    const providers = {}
+
+    results.forEach(([error, data], index) => {
+      if (error) {
+        logger.debug(`Failed to get stream interruption stats for ${minuteKeys[index]}:`, error)
+        return
+      }
+      if (!data || Object.keys(data).length === 0) {
+        return
+      }
+
+      totalInterruptions += parseInt(data.total || 0, 10) || 0
+
+      for (const [field, value] of Object.entries(data)) {
+        const parsedValue = parseInt(value || 0, 10) || 0
+        if (parsedValue <= 0) {
+          continue
+        }
+
+        if (field.startsWith('reason:')) {
+          const reason = field.slice('reason:'.length)
+          if (Object.prototype.hasOwnProperty.call(reasons, reason)) {
+            reasons[reason] += parsedValue
+          }
+        } else if (field.startsWith('provider:')) {
+          const provider = field.slice('provider:'.length)
+          providers[provider] = (providers[provider] || 0) + parsedValue
+        }
+      }
+    })
+
+    return {
+      windowMinutes: normalizedWindow,
+      totalInterruptions,
+      reasons,
+      providers,
+      updatedAt: new Date().toISOString()
+    }
+  } catch (error) {
+    logger.error('Failed to get recent stream interruption stats:', error)
+    return baseResult
+  }
+}
+
 module.exports = redisClient

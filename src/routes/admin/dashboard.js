@@ -33,7 +33,8 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
       droidAccounts,
       todayStats,
       systemAverages,
-      realtimeMetrics
+      realtimeMetrics,
+      streamInterruptionStats
     ] = await Promise.all([
       redis.getSystemStats(),
       apiKeyService.getAllApiKeys(),
@@ -47,11 +48,26 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
       droidAccountService.getAllAccounts(),
       redis.getTodayStats(),
       redis.getSystemAverages(),
-      redis.getRealtimeSystemMetrics()
+      redis.getRealtimeSystemMetrics(),
+      redis.getRecentStreamInterruptionStats(60).catch((error) => {
+        logger.warn('Failed to load stream interruption stats for dashboard:', error)
+        return null
+      })
     ])
 
     // 处理Bedrock账户数据
     const bedrockAccounts = bedrockAccountsResult.success ? bedrockAccountsResult.data : []
+    const safeStreamInterruptionStats = streamInterruptionStats || {
+      windowMinutes: 60,
+      totalInterruptions: 0,
+      reasons: {
+        upstream_stream_error: 0,
+        timeout: 0,
+        client_abort: 0
+      },
+      providers: {},
+      updatedAt: new Date().toISOString()
+    }
     const normalizeBoolean = (value) => value === true || value === 'true'
     const isRateLimitedFlag = (status) => {
       if (!status) {
@@ -457,6 +473,7 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
         windowMinutes: realtimeMetrics.windowMinutes,
         isHistorical: realtimeMetrics.windowMinutes === 0 // 标识是否使用了历史数据
       },
+      streamInterruptionStats: safeStreamInterruptionStats,
       systemHealth: {
         redisConnected: redis.isConnected,
         claudeAccountsHealthy: normalClaudeAccounts + normalClaudeConsoleAccounts > 0,
