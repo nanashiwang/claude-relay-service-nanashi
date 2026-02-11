@@ -348,6 +348,47 @@ function isSubscriptionExpired(account) {
   return expiryDate <= new Date()
 }
 
+function shouldDisableAccountAfterRefreshError(error) {
+  if (!error) {
+    return false
+  }
+
+  const status = Number(error.status || error.statusCode || error.response?.status)
+  if (status === 401) {
+    return true
+  }
+
+  const errorCodes = [
+    error.code,
+    error.error,
+    error.details?.error,
+    error.response?.data?.error
+  ]
+    .filter((value) => typeof value === 'string' && value.trim())
+    .map((value) => value.trim().toLowerCase())
+
+  if (errorCodes.includes('invalid_grant') || errorCodes.includes('invalid_refresh_token')) {
+    return true
+  }
+
+  const message = [
+    error.message,
+    error.details?.error_description,
+    error.details?.message,
+    error.response?.data?.error_description,
+    error.response?.data?.message
+  ]
+    .filter((value) => typeof value === 'string' && value.trim())
+    .join(' ')
+    .toLowerCase()
+
+  return (
+    message.includes('invalid_grant') ||
+    message.includes('refresh token') ||
+    message.includes('token expired and refresh failed')
+  )
+}
+
 // 刷新账户的 access token（带分布式锁）
 async function refreshAccountToken(accountId) {
   let lockAcquired = false
@@ -485,23 +526,38 @@ async function refreshAccountToken(accountId) {
   } catch (error) {
     logRefreshError(accountId, account?.name || accountName, 'openai', error.message)
 
-    // 发送 Webhook 通知（如果启用）
-    try {
-      const webhookNotifier = require('../utils/webhookNotifier')
-      await webhookNotifier.sendAccountAnomalyNotification({
-        accountId,
-        accountName: account?.name || accountName,
-        platform: 'openai',
-        status: 'error',
-        errorCode: 'OPENAI_TOKEN_REFRESH_FAILED',
-        reason: `Token refresh failed: ${error.message}`,
-        timestamp: new Date().toISOString()
-      })
-      logger.info(
-        `📢 Webhook notification sent for OpenAI account ${account?.name || accountName} refresh failure`
-      )
-    } catch (webhookError) {
-      logger.error('Failed to send webhook notification:', webhookError)
+    const shouldDisableAccount = shouldDisableAccountAfterRefreshError(error)
+    if (shouldDisableAccount) {
+      try {
+        await markAccountUnauthorized(accountId, `Token refresh failed: ${error.message}`)
+        logger.warn(
+          `🚫 Auto-marked OpenAI account ${account?.name || accountName} as unauthorized after refresh failure`
+        )
+      } catch (markError) {
+        logger.error(
+          `Failed to mark OpenAI account ${accountId} as unauthorized after refresh failure:`,
+          markError
+        )
+      }
+    } else {
+      // 发送 Webhook 通知（如果启用）
+      try {
+        const webhookNotifier = require('../utils/webhookNotifier')
+        await webhookNotifier.sendAccountAnomalyNotification({
+          accountId,
+          accountName: account?.name || accountName,
+          platform: 'openai',
+          status: 'error',
+          errorCode: 'OPENAI_TOKEN_REFRESH_FAILED',
+          reason: `Token refresh failed: ${error.message}`,
+          timestamp: new Date().toISOString()
+        })
+        logger.info(
+          `📢 Webhook notification sent for OpenAI account ${account?.name || accountName} refresh failure`
+        )
+      } catch (webhookError) {
+        logger.error('Failed to send webhook notification:', webhookError)
+      }
     }
 
     throw error
@@ -753,6 +809,15 @@ async function getAllAccounts() {
   for (const key of keys) {
     const accountData = await client.hgetall(key)
     if (accountData && Object.keys(accountData).length > 0) {
+      // 兼容历史脏数据：统一以 Redis key 中的 id 为准，避免删除/编辑命中错误主键。
+      const accountIdFromKey = key.replace(OPENAI_ACCOUNT_KEY_PREFIX, '')
+      if (accountData.id && accountData.id !== accountIdFromKey) {
+        logger.warn(
+          `OpenAI account id mismatch detected, key id: ${accountIdFromKey}, field id: ${accountData.id}`
+        )
+      }
+      accountData.id = accountIdFromKey
+
       const codexUsage = buildCodexUsageSnapshot(accountData)
 
       // 解密敏感数据（但不返回给前端）
@@ -894,7 +959,14 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
 
     if (mappedAccountId) {
       const account = await getAccount(mappedAccountId)
-      if (account && account.isActive === 'true' && !isTokenExpired(account)) {
+      if (
+        account &&
+        account.isActive === 'true' &&
+        account.status !== 'error' &&
+        account.status !== 'unauthorized' &&
+        account.schedulable !== 'false' &&
+        !isTokenExpired(account)
+      ) {
         logger.debug(`Using sticky session account: ${mappedAccountId}`)
         return account
       }
@@ -907,7 +979,13 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
   // 检查是否绑定了 OpenAI 账户
   if (apiKeyData.openaiAccountId) {
     const account = await getAccount(apiKeyData.openaiAccountId)
-    if (account && account.isActive === 'true') {
+    if (
+      account &&
+      account.isActive === 'true' &&
+      account.status !== 'error' &&
+      account.status !== 'unauthorized' &&
+      account.schedulable !== 'false'
+    ) {
       // 检查 token 是否过期
       const isExpired = isTokenExpired(account)
 
@@ -941,6 +1019,9 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
     if (
       account &&
       account.isActive === 'true' &&
+      account.status !== 'error' &&
+      account.status !== 'unauthorized' &&
+      account.schedulable !== 'false' &&
       !isRateLimited(account) &&
       !isSubscriptionExpired(account)
     ) {
@@ -1054,6 +1135,11 @@ async function markAccountUnauthorized(accountId, reason = 'OpenAI账号认证�
   const account = await getAccount(accountId)
   if (!account) {
     throw new Error('Account not found')
+  }
+
+  if (account.status === 'unauthorized' && account.schedulable === 'false') {
+    logger.info(`OpenAI account ${account.name || accountId} is already unauthorized, skipping`)
+    return
   }
 
   const now = new Date().toISOString()

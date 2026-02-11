@@ -488,9 +488,9 @@
                       <div class="flex items-center gap-2">
                         <div
                           class="truncate text-sm font-semibold text-gray-900 dark:text-gray-100"
-                          :title="account.name"
+                          :title="account.name || account.email || account.accountName || account.id"
                         >
-                          {{ account.name }}
+                          {{ account.name || account.email || account.accountName || account.id }}
                         </div>
                         <span
                           v-if="account.accountType === 'dedicated'"
@@ -1408,7 +1408,7 @@
               </div>
               <div>
                 <h4 class="text-sm font-semibold text-gray-900">
-                  {{ account.name || account.email }}
+                  {{ account.name || account.email || account.accountName || account.id }}
                 </h4>
                 <div class="mt-0.5 flex items-center gap-2">
                   <span class="text-xs text-gray-500 dark:text-gray-400">{{
@@ -3730,8 +3730,9 @@ const performAccountDeletion = async (account) => {
 const deleteAccount = async (account) => {
   const boundKeys = getBoundApiKeysForAccount(account)
   const boundKeysCount = boundKeys.length
+  const displayName = account.name || account.email || account.accountName || account.id
 
-  let confirmMessage = `确定要删除账户 "${account.name}" 吗？`
+  let confirmMessage = `确定要删除账户 "${displayName}" 吗？`
   if (boundKeysCount > 0) {
     confirmMessage += `\n\n⚠️ 注意：此账号有 ${boundKeysCount} 个 API Key 绑定。`
     confirmMessage += `\n删除后，这些 API Key 将自动切换为共享池模式。`

@@ -11,6 +11,18 @@ class UnifiedOpenAIScheduler {
     this.SESSION_MAPPING_PREFIX = 'unified_openai_session_mapping:'
   }
 
+  _isAccountActive(isActive) {
+    return isActive === true || isActive === 'true'
+  }
+
+  _isUnavailableStatus(status) {
+    return status === 'error' || status === 'unauthorized' || status === 'blocked'
+  }
+
+  _canParticipateInScheduling(account) {
+    return !!account && this._isAccountActive(account.isActive) && !this._isUnavailableStatus(account.status)
+  }
+
   // 🔢 按优先级和最后使用时间排序账户（与 Claude/Gemini 调度保持一致）
   _sortAccountsByPriority(accounts) {
     return accounts.sort((a, b) => {
@@ -178,11 +190,7 @@ class UnifiedOpenAIScheduler {
           accountType = 'openai'
         }
 
-        const isActiveBoundAccount =
-          boundAccount &&
-          (boundAccount.isActive === true || boundAccount.isActive === 'true') &&
-          boundAccount.status !== 'error' &&
-          boundAccount.status !== 'unauthorized'
+        const isActiveBoundAccount = this._canParticipateInScheduling(boundAccount)
 
         if (isActiveBoundAccount) {
           if (accountType === 'openai') {
@@ -276,7 +284,7 @@ class UnifiedOpenAIScheduler {
           let errorMsg
           if (!boundAccount) {
             errorMsg = `Dedicated account ${apiKeyData.openaiAccountId} not found`
-          } else if (!(boundAccount.isActive === true || boundAccount.isActive === 'true')) {
+          } else if (!this._isAccountActive(boundAccount.isActive)) {
             errorMsg = `Dedicated account ${boundAccount.name} is not active`
           } else if (boundAccount.status === 'unauthorized') {
             errorMsg = `Dedicated account ${boundAccount.name} is unauthorized`
@@ -384,8 +392,7 @@ class UnifiedOpenAIScheduler {
     const openaiAccounts = await openaiAccountService.getAllAccounts()
     for (let account of openaiAccounts) {
       if (
-        account.isActive &&
-        account.status !== 'error' &&
+        this._canParticipateInScheduling(account) &&
         (account.accountType === 'shared' || !account.accountType) // 兼容旧数据
       ) {
         const accountId = account.id || account.accountId
@@ -452,8 +459,7 @@ class UnifiedOpenAIScheduler {
     const openaiResponsesAccounts = await openaiResponsesAccountService.getAllAccounts()
     for (const account of openaiResponsesAccounts) {
       if (
-        (account.isActive === true || account.isActive === 'true') &&
-        account.status !== 'error' &&
+        this._canParticipateInScheduling(account) &&
         account.status !== 'rateLimited' &&
         (account.accountType === 'shared' || !account.accountType)
       ) {
@@ -512,12 +518,7 @@ class UnifiedOpenAIScheduler {
     try {
       if (accountType === 'openai') {
         const account = await openaiAccountService.getAccount(accountId)
-        if (
-          !account ||
-          !account.isActive ||
-          account.status === 'error' ||
-          account.status === 'unauthorized'
-        ) {
+        if (!this._canParticipateInScheduling(account)) {
           return false
         }
         const readiness = await this._ensureAccountReadyForScheduling(account, accountId, {
@@ -538,12 +539,7 @@ class UnifiedOpenAIScheduler {
         return true
       } else if (accountType === 'openai-responses') {
         const account = await openaiResponsesAccountService.getAccount(accountId)
-        if (
-          !account ||
-          (account.isActive !== true && account.isActive !== 'true') ||
-          account.status === 'error' ||
-          account.status === 'unauthorized'
-        ) {
+        if (!this._canParticipateInScheduling(account)) {
           return false
         }
         // 检查是否可调度
@@ -866,11 +862,7 @@ class UnifiedOpenAIScheduler {
           accountType = 'openai-responses'
         }
 
-        if (
-          account &&
-          (account.isActive === true || account.isActive === 'true') &&
-          account.status !== 'error'
-        ) {
+        if (this._canParticipateInScheduling(account)) {
           const readiness = await this._ensureAccountReadyForScheduling(account, account.id, {
             sanitized: false
           })
