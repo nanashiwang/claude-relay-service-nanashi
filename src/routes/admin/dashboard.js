@@ -20,23 +20,23 @@ const router = express.Router()
 // 获取系统概览
 router.get('/dashboard', authenticateAdmin, async (req, res) => {
   try {
-    const [
-      ,
-      apiKeys,
-      claudeAccounts,
-      claudeConsoleAccounts,
-      geminiAccounts,
-      bedrockAccountsResult,
-      openaiAccounts,
-      ccrAccounts,
-      openaiResponsesAccounts,
-      droidAccounts,
-      todayStats,
-      systemAverages,
-      realtimeMetrics,
-      streamInterruptionStats
-    ] = await Promise.all([
-      redis.getSystemStats(),
+    const sourceNames = [
+      'apiKeys',
+      'claudeAccounts',
+      'claudeConsoleAccounts',
+      'geminiAccounts',
+      'bedrockAccountsResult',
+      'openaiAccounts',
+      'ccrAccounts',
+      'openaiResponsesAccounts',
+      'droidAccounts',
+      'todayStats',
+      'systemAverages',
+      'realtimeMetrics',
+      'streamInterruptionStats'
+    ]
+
+    const sourceSettled = await Promise.allSettled([
       apiKeyService.getAllApiKeys(),
       claudeAccountService.getAllAccounts(),
       claudeConsoleAccountService.getAllAccounts(),
@@ -49,14 +49,62 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
       redis.getTodayStats(),
       redis.getSystemAverages(),
       redis.getRealtimeSystemMetrics(),
-      redis.getRecentStreamInterruptionStats(60).catch((error) => {
-        logger.warn('Failed to load stream interruption stats for dashboard:', error)
-        return null
-      })
+      redis.getRecentStreamInterruptionStats(60)
     ])
 
-    // 处理Bedrock账户数据
-    const bedrockAccounts = bedrockAccountsResult.success ? bedrockAccountsResult.data : []
+    const readSource = (index, fallback) => {
+      const result = sourceSettled[index]
+      if (result.status === 'fulfilled') {
+        return result.value
+      }
+      logger.warn(`Dashboard source failed: ${sourceNames[index]}`, result.reason)
+      return fallback
+    }
+
+    const apiKeysRaw = readSource(0, [])
+    const claudeAccountsRaw = readSource(1, [])
+    const claudeConsoleAccountsRaw = readSource(2, [])
+    const geminiAccountsRaw = readSource(3, [])
+    const bedrockAccountsResult = readSource(4, { success: false, data: [] })
+    const openaiAccountsRaw = readSource(5, [])
+    const ccrAccountsRaw = readSource(6, [])
+    const openaiResponsesAccountsRaw = readSource(7, [])
+    const droidAccountsRaw = readSource(8, [])
+    const todayStats = readSource(9, {
+      apiKeysCreatedToday: 0,
+      requestsToday: 0,
+      tokensToday: 0,
+      inputTokensToday: 0,
+      outputTokensToday: 0,
+      cacheCreateTokensToday: 0,
+      cacheReadTokensToday: 0
+    })
+    const systemAverages = readSource(10, { systemRPM: 0, systemTPM: 0 })
+    const realtimeMetrics = readSource(11, {
+      realtimeRPM: 0,
+      realtimeTPM: 0,
+      windowMinutes: 5
+    })
+    const streamInterruptionStats = readSource(12, null)
+
+    const apiKeys = Array.isArray(apiKeysRaw) ? apiKeysRaw : []
+    const claudeAccounts = Array.isArray(claudeAccountsRaw) ? claudeAccountsRaw : []
+    const claudeConsoleAccounts = Array.isArray(claudeConsoleAccountsRaw)
+      ? claudeConsoleAccountsRaw
+      : []
+    const geminiAccounts = Array.isArray(geminiAccountsRaw) ? geminiAccountsRaw : []
+    const openaiAccounts = Array.isArray(openaiAccountsRaw) ? openaiAccountsRaw : []
+    const ccrAccounts = Array.isArray(ccrAccountsRaw) ? ccrAccountsRaw : []
+    const openaiResponsesAccounts = Array.isArray(openaiResponsesAccountsRaw)
+      ? openaiResponsesAccountsRaw
+      : []
+    const droidAccounts = Array.isArray(droidAccountsRaw) ? droidAccountsRaw : []
+
+    // Process Bedrock accounts data
+    const bedrockAccounts =
+      bedrockAccountsResult && bedrockAccountsResult.success && Array.isArray(bedrockAccountsResult.data)
+        ? bedrockAccountsResult.data
+        : []
     const safeStreamInterruptionStats = streamInterruptionStats || {
       windowMinutes: 60,
       totalInterruptions: 0,
