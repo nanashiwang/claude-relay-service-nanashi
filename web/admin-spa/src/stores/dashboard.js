@@ -231,19 +231,27 @@ export const useDashboardStore = defineStore('dashboard', () => {
         costsParams = periodMapping[timeRange] || costsParams
       }
 
-      const [dashboardResponse, todayCostsResponse, totalCostsResponse] = await Promise.all([
+      const [dashboardResult, todayCostsResult, totalCostsResult] = await Promise.allSettled([
         apiClient.get('/admin/dashboard'),
         apiClient.get(`/admin/usage-costs?period=${costsParams.today}`),
         apiClient.get(`/admin/usage-costs?period=${costsParams.all}`)
       ])
 
-      if (dashboardResponse.success) {
-        const overview = dashboardResponse.data.overview || {}
-        const recentActivity = dashboardResponse.data.recentActivity || {}
-        const systemAverages = dashboardResponse.data.systemAverages || {}
-        const realtimeMetrics = dashboardResponse.data.realtimeMetrics || {}
-        const systemHealth = dashboardResponse.data.systemHealth || {}
-        const streamInterruptionStats = dashboardResponse.data.streamInterruptionStats || {}
+      const dashboardResponse =
+        dashboardResult.status === 'fulfilled' ? dashboardResult.value : null
+
+      if (dashboardResult.status === 'rejected') {
+        console.error('加载仪表盘数据失败:', dashboardResult.reason)
+      }
+
+      if (dashboardResponse && dashboardResponse.success) {
+        const responseData = dashboardResponse.data || {}
+        const overview = responseData.overview || {}
+        const recentActivity = responseData.recentActivity || {}
+        const systemAverages = responseData.systemAverages || {}
+        const realtimeMetrics = responseData.realtimeMetrics || {}
+        const systemHealth = responseData.systemHealth || {}
+        const streamInterruptionStats = responseData.streamInterruptionStats || {}
         const streamInterruptionReasons = streamInterruptionStats.reasons || {}
 
         dashboardData.value = {
@@ -297,21 +305,40 @@ export const useDashboardStore = defineStore('dashboard', () => {
           },
           systemStatus: systemHealth.redisConnected ? '正常' : '异常',
           uptime: systemHealth.uptime || 0,
-          systemTimezone: dashboardResponse.data.systemTimezone || 8
+          systemTimezone: responseData.systemTimezone || 8
         }
       }
 
       // 更新费用数据
-      if (todayCostsResponse.success && totalCostsResponse.success) {
+      if (todayCostsResult.status === 'rejected') {
+        console.error('加载当期成本失败:', todayCostsResult.reason)
+      }
+      if (totalCostsResult.status === 'rejected') {
+        console.error('加载总成本失败:', totalCostsResult.reason)
+      }
+
+      const todayCostsResponse =
+        todayCostsResult.status === 'fulfilled' ? todayCostsResult.value : null
+      const totalCostsResponse =
+        totalCostsResult.status === 'fulfilled' ? totalCostsResult.value : null
+
+      if (todayCostsResponse?.success || totalCostsResponse?.success) {
+        const currentTodayCosts = costsData.value.todayCosts || {
+          totalCost: 0,
+          formatted: { totalCost: '$0.000000' }
+        }
+        const currentTotalCosts = costsData.value.totalCosts || {
+          totalCost: 0,
+          formatted: { totalCost: '$0.000000' }
+        }
+
         costsData.value = {
-          todayCosts: todayCostsResponse.data.totalCosts || {
-            totalCost: 0,
-            formatted: { totalCost: '$0.000000' }
-          },
-          totalCosts: totalCostsResponse.data.totalCosts || {
-            totalCost: 0,
-            formatted: { totalCost: '$0.000000' }
-          }
+          todayCosts:
+            (todayCostsResponse?.success && todayCostsResponse.data?.totalCosts) ||
+            currentTodayCosts,
+          totalCosts:
+            (totalCostsResponse?.success && totalCostsResponse.data?.totalCosts) ||
+            currentTotalCosts
         }
       }
     } catch (error) {

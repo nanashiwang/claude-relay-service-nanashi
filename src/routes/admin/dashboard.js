@@ -61,6 +61,18 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
       return fallback
     }
 
+    const toArray = (value) => {
+      if (Array.isArray(value)) {
+        return value
+      }
+      if (value && Array.isArray(value.data)) {
+        return value.data
+      }
+      return []
+    }
+    const toObject = (value, fallback) =>
+      value && typeof value === 'object' && !Array.isArray(value) ? value : fallback
+
     const apiKeysRaw = readSource(0, [])
     const claudeAccountsRaw = readSource(1, [])
     const claudeConsoleAccountsRaw = readSource(2, [])
@@ -70,7 +82,7 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
     const ccrAccountsRaw = readSource(6, [])
     const openaiResponsesAccountsRaw = readSource(7, [])
     const droidAccountsRaw = readSource(8, [])
-    const todayStats = readSource(9, {
+    const todayStatsFallback = {
       apiKeysCreatedToday: 0,
       requestsToday: 0,
       tokensToday: 0,
@@ -78,33 +90,32 @@ router.get('/dashboard', authenticateAdmin, async (req, res) => {
       outputTokensToday: 0,
       cacheCreateTokensToday: 0,
       cacheReadTokensToday: 0
-    })
-    const systemAverages = readSource(10, { systemRPM: 0, systemTPM: 0 })
-    const realtimeMetrics = readSource(11, {
+    }
+    const systemAveragesFallback = { systemRPM: 0, systemTPM: 0 }
+    const realtimeMetricsFallback = {
       realtimeRPM: 0,
       realtimeTPM: 0,
       windowMinutes: 5
-    })
+    }
     const streamInterruptionStats = readSource(12, null)
 
-    const apiKeys = Array.isArray(apiKeysRaw) ? apiKeysRaw : []
-    const claudeAccounts = Array.isArray(claudeAccountsRaw) ? claudeAccountsRaw : []
-    const claudeConsoleAccounts = Array.isArray(claudeConsoleAccountsRaw)
-      ? claudeConsoleAccountsRaw
-      : []
-    const geminiAccounts = Array.isArray(geminiAccountsRaw) ? geminiAccountsRaw : []
-    const openaiAccounts = Array.isArray(openaiAccountsRaw) ? openaiAccountsRaw : []
-    const ccrAccounts = Array.isArray(ccrAccountsRaw) ? ccrAccountsRaw : []
-    const openaiResponsesAccounts = Array.isArray(openaiResponsesAccountsRaw)
-      ? openaiResponsesAccountsRaw
-      : []
-    const droidAccounts = Array.isArray(droidAccountsRaw) ? droidAccountsRaw : []
+    const apiKeys = toArray(apiKeysRaw)
+    const claudeAccounts = toArray(claudeAccountsRaw)
+    const claudeConsoleAccounts = toArray(claudeConsoleAccountsRaw)
+    const geminiAccounts = toArray(geminiAccountsRaw)
+    const openaiAccounts = toArray(openaiAccountsRaw)
+    const ccrAccounts = toArray(ccrAccountsRaw)
+    const openaiResponsesAccounts = toArray(openaiResponsesAccountsRaw)
+    const droidAccounts = toArray(droidAccountsRaw)
+    const todayStats = toObject(readSource(9, todayStatsFallback), todayStatsFallback)
+    const systemAverages = toObject(readSource(10, systemAveragesFallback), systemAveragesFallback)
+    const realtimeMetrics = toObject(
+      readSource(11, realtimeMetricsFallback),
+      realtimeMetricsFallback
+    )
 
     // Process Bedrock accounts data
-    const bedrockAccounts =
-      bedrockAccountsResult && bedrockAccountsResult.success && Array.isArray(bedrockAccountsResult.data)
-        ? bedrockAccountsResult.data
-        : []
+    const bedrockAccounts = toArray(bedrockAccountsResult)
     const safeStreamInterruptionStats = streamInterruptionStats || {
       windowMinutes: 60,
       totalInterruptions: 0,
