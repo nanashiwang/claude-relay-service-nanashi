@@ -672,6 +672,193 @@
           </div>
         </div>
       </template>
+      <template v-else-if="activeTutorialClient === 'openclaw'">
+        <div class="mb-6 sm:mb-10">
+          <h4
+            class="mb-3 flex items-center text-lg font-semibold text-gray-800 dark:text-gray-300 sm:mb-4 sm:text-xl"
+          >
+            <span
+              class="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-green-500 text-xs font-bold text-white sm:mr-3 sm:h-8 sm:w-8 sm:text-sm"
+              >2</span
+            >
+            安装 OpenClaw
+          </h4>
+          <div
+            class="rounded-xl border border-green-100 bg-gradient-to-r from-green-50 to-emerald-50 p-4 dark:border-green-500/40 dark:from-green-950/30 dark:to-emerald-950/30 sm:p-6"
+          >
+            <div
+              class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-950/30 dark:text-amber-200 sm:text-sm"
+            >
+              OpenClaw 涉及第三方接入，请先确认你了解安全风险后再使用。
+            </div>
+            <h6 class="mb-2 text-sm font-medium text-gray-800 dark:text-gray-200 sm:text-base">
+              先确认 Node.js 环境
+            </h6>
+            <div
+              class="mb-4 overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div class="whitespace-nowrap text-gray-300">node --version</div>
+              <div class="whitespace-nowrap text-gray-300">npm --version</div>
+            </div>
+            <h6 class="mb-2 text-sm font-medium text-gray-800 dark:text-gray-200 sm:text-base">
+              安装并初始化
+            </h6>
+            <div
+              class="overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div class="whitespace-nowrap text-gray-300">npm i -g openclaw</div>
+              <div class="whitespace-nowrap text-gray-300">openclaw onboard</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-6 sm:mb-10">
+          <h4
+            class="mb-3 flex items-center text-lg font-semibold text-gray-800 dark:text-gray-300 sm:mb-4 sm:text-xl"
+          >
+            <span
+              class="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-sky-500 text-xs font-bold text-white sm:mr-3 sm:h-8 sm:w-8 sm:text-sm"
+              >3</span
+            >
+            设置 OPI_AUTH_TOKEN
+          </h4>
+          <div
+            class="rounded-xl border border-sky-100 bg-gradient-to-r from-sky-50 to-cyan-50 p-4 dark:border-sky-500/40 dark:from-sky-950/30 dark:to-cyan-950/30 sm:p-6"
+          >
+            <template v-if="activeTutorialSystem === 'windows'">
+              <p class="mb-3 text-sm text-gray-700 dark:text-gray-300 sm:text-base">
+                Windows（永久设置）：
+              </p>
+              <div
+                class="overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+              >
+                <div class="whitespace-nowrap text-gray-300">setx OPI_AUTH_TOKEN "你的key"</div>
+              </div>
+              <p class="mt-2 text-xs text-gray-600 dark:text-gray-400 sm:text-sm">
+                设置后请重新打开终端窗口。
+              </p>
+            </template>
+            <template v-else>
+              <p class="mb-3 text-sm text-gray-700 dark:text-gray-300 sm:text-base">
+                macOS / Linux（永久设置）：
+              </p>
+              <div
+                class="overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+              >
+                <div class="whitespace-nowrap text-gray-300">
+                  echo 'export OPI_AUTH_TOKEN="你的key"' >> ~/.zshrc
+                </div>
+                <div class="whitespace-nowrap text-gray-300">source ~/.zshrc</div>
+                <div class="mt-2 whitespace-nowrap text-gray-300">
+                  echo 'export OPI_AUTH_TOKEN="你的key"' >> ~/.bashrc
+                </div>
+                <div class="whitespace-nowrap text-gray-300">source ~/.bashrc</div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <div class="mb-6 sm:mb-10">
+          <h4
+            class="mb-3 flex items-center text-lg font-semibold text-gray-800 dark:text-gray-300 sm:mb-4 sm:text-xl"
+          >
+            <span
+              class="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-indigo-500 text-xs font-bold text-white sm:mr-3 sm:h-8 sm:w-8 sm:text-sm"
+              >4</span
+            >
+            配置 OpenAI Responses Provider
+          </h4>
+          <div
+            class="rounded-xl border border-indigo-100 bg-gradient-to-r from-indigo-50 to-blue-50 p-4 dark:border-indigo-500/40 dark:from-indigo-950/30 dark:to-blue-950/30 sm:p-6"
+          >
+            <p class="mb-3 text-sm text-gray-700 dark:text-gray-300 sm:text-base">
+              编辑配置文件：
+              <code class="rounded bg-gray-100 px-1 dark:bg-gray-800">{{ openclawConfigPath }}</code>
+            </p>
+            <div
+              class="overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div
+                v-for="(line, index) in openclawProviderJsonLines"
+                :key="'openclaw-provider-' + index"
+                class="whitespace-pre text-gray-300"
+              >
+                {{ line }}
+              </div>
+            </div>
+            <p class="mt-2 text-xs text-gray-600 dark:text-gray-400 sm:text-sm">
+              建议按“合并新增字段”方式修改，不要整份覆盖你原有配置。
+            </p>
+          </div>
+        </div>
+
+        <div class="mb-6 sm:mb-10">
+          <h4
+            class="mb-3 flex items-center text-lg font-semibold text-gray-800 dark:text-gray-300 sm:mb-4 sm:text-xl"
+          >
+            <span
+              class="mr-2 flex h-6 w-6 items-center justify-center rounded-full bg-orange-500 text-xs font-bold text-white sm:mr-3 sm:h-8 sm:w-8 sm:text-sm"
+              >5</span
+            >
+            启动与排障
+          </h4>
+          <div
+            class="rounded-xl border border-orange-100 bg-gradient-to-r from-orange-50 to-yellow-50 p-4 dark:border-orange-500/40 dark:from-orange-950/30 dark:to-yellow-950/30 sm:p-6"
+          >
+            <h6 class="mb-2 text-sm font-medium text-gray-800 dark:text-gray-200 sm:text-base">
+              服务模式
+            </h6>
+            <div
+              class="mb-4 overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div class="whitespace-nowrap text-gray-300">openclaw gateway stop</div>
+              <div class="whitespace-nowrap text-gray-300">openclaw gateway start</div>
+              <div class="whitespace-nowrap text-gray-300">openclaw gateway restart</div>
+            </div>
+            <h6 class="mb-2 text-sm font-medium text-gray-800 dark:text-gray-200 sm:text-base">
+              若提示服务未安装（Scheduled Task not installed）
+            </h6>
+            <div
+              class="mb-4 overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div class="whitespace-nowrap text-gray-300">openclaw gateway install</div>
+              <div class="whitespace-nowrap text-gray-300">openclaw gateway start</div>
+            </div>
+            <h6 class="mb-2 text-sm font-medium text-gray-800 dark:text-gray-200 sm:text-base">
+              前台模式（不安装服务）
+            </h6>
+            <div
+              class="mb-4 overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div class="whitespace-nowrap text-gray-300">openclaw gateway</div>
+              <div class="whitespace-nowrap text-gray-300"># 或 openclaw gateway run</div>
+            </div>
+            <h6 class="mb-2 text-sm font-medium text-gray-800 dark:text-gray-200 sm:text-base">
+              常用检查命令
+            </h6>
+            <div
+              class="overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div class="whitespace-nowrap text-gray-300">openclaw status</div>
+              <div class="whitespace-nowrap text-gray-300">openclaw logs --follow</div>
+              <div class="whitespace-nowrap text-gray-300">openclaw dashboard --no-open</div>
+              <div class="whitespace-nowrap text-gray-300">openclaw tui</div>
+            </div>
+            <h6 class="mb-2 mt-4 text-sm font-medium text-gray-800 dark:text-gray-200 sm:text-base">
+              可选：一键合并脚本
+            </h6>
+            <div
+              class="overflow-x-auto rounded bg-gray-900 p-2 font-mono text-xs text-green-400 sm:p-3 sm:text-sm"
+            >
+              <div class="whitespace-nowrap text-gray-300">OpenClaw配置.ps1</div>
+              <div class="whitespace-nowrap text-gray-300">OpenClaw配置.sh</div>
+            </div>
+            <p class="mt-3 text-xs text-gray-600 dark:text-gray-400 sm:text-sm">
+              Windows 下若执行 gateway 命令报权限不足，请用管理员身份打开 PowerShell。
+            </p>
+          </div>
+        </div>
+      </template>
       <template v-else>
         <div class="mb-6 sm:mb-10">
           <h4
@@ -752,6 +939,7 @@ const tutorialClients = [
   { key: 'claude', name: 'Claude', icon: 'fas fa-robot' },
   { key: 'codex', name: 'Codex', icon: 'fas fa-code' },
   { key: 'gemini', name: 'Gemini', icon: 'fas fa-gem' },
+  { key: 'openclaw', name: 'OpenClaw', icon: 'fas fa-paw' },
   { key: 'droid', name: 'Droid', icon: 'fas fa-terminal' }
 ]
 
@@ -812,6 +1000,7 @@ const geminiBaseUrl = computed(() => 'https://crss.nanashiwang.com/gemini')
 const openaiBaseUrl = computed(() => getBaseUrlPrefix() + '/openai')
 const droidClaudeBaseUrl = computed(() => getBaseUrlPrefix() + '/droid/claude')
 const droidOpenaiBaseUrl = computed(() => getBaseUrlPrefix() + '/droid/openai')
+const openclawOpenaiBaseUrl = computed(() => getBaseUrlPrefix() + '/openai/v1')
 
 const codexConfigDir = computed(() => {
   return activeTutorialSystem.value === 'windows' ? 'C:\\Users\\你的用户名\\.codex\\' : '~/.codex/'
@@ -938,6 +1127,47 @@ const droidCliConfigLines = computed(() => [
   '      "max_tokens": 16384',
   '    }',
   '  ]',
+  '}'
+])
+
+const openclawConfigPath = computed(() => {
+  return activeTutorialSystem.value === 'windows'
+    ? 'C:\\Users\\你的用户名\\.openclaw\\openclaw.json'
+    : '~/.openclaw/openclaw.json'
+})
+
+const openclawProviderJsonLines = computed(() => [
+  '{',
+  '  "models": {',
+  '    "providers": {',
+  '      "crs": {',
+  `        "baseUrl": "${openclawOpenaiBaseUrl.value}",`,
+  '        "api": "openai-responses",',
+  '        "auth": "api-key",',
+  '        "authHeader": true,',
+  '        "headers": { "User-Agent": "openclaw-terminal-test" },',
+  '        "apiKey": "${OPI_AUTH_TOKEN}",',
+  '        "models": [',
+  '          {',
+  '            "id": "gpt-5.2-codex",',
+  '            "name": "GPT-5.2-Codex",',
+  '            "api": "openai-responses",',
+  '            "reasoning": true,',
+  '            "input": ["text", "image"],',
+  '            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },',
+  '            "contextWindow": 200000,',
+  '            "maxTokens": 32000',
+  '          }',
+  '        ]',
+  '      }',
+  '    }',
+  '  },',
+  '  "agents": {',
+  '    "defaults": {',
+  '      "model": { "primary": "crs/gpt-5.2-codex" },',
+  '      "thinkingDefault": "xhigh"',
+  '    }',
+  '  }',
   '}'
 ])
 </script>

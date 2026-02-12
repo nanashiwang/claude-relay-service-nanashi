@@ -18,6 +18,7 @@ const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { parseSSELine } = require('../utils/sseParser')
 const axios = require('axios')
 const ProxyHelper = require('../utils/proxyHelper')
+const GEMINI_RATE_LIMIT_RETRY_MAX_ATTEMPTS = 3
 
 // ============================================================================
 // 工具函数
@@ -226,8 +227,8 @@ async function readStreamToString(stream) {
  * 规范化上游 Axios 错误信息
  */
 async function normalizeAxiosStreamError(error) {
-  const status = error.response?.status
-  const statusText = error.response?.statusText
+  const status = error.response?.status || error.status
+  const statusText = error.response?.statusText || error.statusText
   const responseData = error.response?.data
   let rawBody = null
   let parsedBody = null
@@ -274,6 +275,46 @@ async function normalizeAxiosStreamError(error) {
     parsedBody,
     rawBody
   }
+}
+
+function getErrorStatus(error) {
+  return error?.response?.status || error?.status || null
+}
+
+async function shouldRetryAfterGemini429({
+  error,
+  accountId,
+  accountType,
+  sessionHash,
+  attempt,
+  context
+}) {
+  const status = getErrorStatus(error)
+  if (status !== 429 || !accountId) {
+    return false
+  }
+
+  try {
+    await unifiedGeminiScheduler.markAccountRateLimited(
+      accountId,
+      accountType || 'gemini',
+      sessionHash
+    )
+    logger.warn(
+      `⚠️ Gemini account ${accountId} hit 429 (${context}), marked limited (${attempt}/${GEMINI_RATE_LIMIT_RETRY_MAX_ATTEMPTS})`
+    )
+  } catch (limitError) {
+    logger.warn(`Failed to mark Gemini account as rate limited (${context}):`, limitError)
+  }
+
+  if (attempt >= GEMINI_RATE_LIMIT_RETRY_MAX_ATTEMPTS) {
+    return false
+  }
+
+  logger.warn(
+    `🔁 Retry Gemini ${context} with another account (${attempt + 1}/${GEMINI_RATE_LIMIT_RETRY_MAX_ATTEMPTS})`
+  )
+  return true
 }
 
 /**
@@ -1981,162 +2022,191 @@ async function handleStandardGenerateContent(req, res) {
     }
 
     // 使用统一调度选择账号
-    const schedulerResult = await unifiedGeminiScheduler.selectAccountForApiKey(
-      req.apiKey,
-      sessionHash,
-      model,
-      { allowApiAccounts: true }
-    )
-    ;({ accountId } = schedulerResult)
-    const { accountType } = schedulerResult
-
-    isApiAccount = accountType === 'gemini-api'
-    const actualAccountId = accountId
-
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1'
-
-    if (isApiAccount) {
-      account = await geminiApiAccountService.getAccount(actualAccountId)
-      if (!account) {
-        return res.status(404).json({
-          error: {
-            message: 'Gemini API account not found',
-            type: 'account_not_found'
-          }
-        })
-      }
-
-      // API Key 账户：清理 functionResponse 中标准 Gemini API 不支持的字段（如 id）
-      actualRequestData.contents = sanitizeFunctionResponsesForApiKey(actualRequestData.contents)
-
-      logger.info(`Standard Gemini API generateContent request (${version}) - API Key Account`, {
-        model,
-        accountId: actualAccountId,
-        apiKeyId: req.apiKey?.id || 'unknown'
-      })
-    } else {
-      account = await geminiAccountService.getAccount(actualAccountId)
-
-      logger.info(`Standard Gemini API generateContent request (${version}) - OAuth Account`, {
-        model,
-        projectId: account.projectId,
-        apiKeyId: req.apiKey?.id || 'unknown'
-      })
-    }
-
-    // 解析账户的代理配置
-    const proxyConfig = parseProxyConfig(account)
 
     let response
 
-    if (isApiAccount) {
-      // Gemini API 账户：直接使用 API Key 请求
-      const apiUrl = buildGeminiApiUrl(account.baseUrl, model, 'generateContent', account.apiKey)
-
-      const axiosConfig = {
-        method: 'POST',
-        url: apiUrl,
-        data: actualRequestData,
-        headers: {
-          'Content-Type': 'application/json'
-        }
+    for (let attempt = 1; attempt <= GEMINI_RATE_LIMIT_RETRY_MAX_ATTEMPTS; attempt++) {
+      let schedulerResult
+      try {
+        schedulerResult = await unifiedGeminiScheduler.selectAccountForApiKey(
+          req.apiKey,
+          sessionHash,
+          model,
+          { allowApiAccounts: true }
+        )
+      } catch (selectionError) {
+        selectionError.status = selectionError.status || 503
+        throw selectionError
       }
 
-      if (proxyConfig) {
-        axiosConfig.httpsAgent = ProxyHelper.createProxyAgent(proxyConfig)
-        axiosConfig.httpAgent = ProxyHelper.createProxyAgent(proxyConfig)
-      }
+      ;({ accountId } = schedulerResult)
+      const accountType = schedulerResult.accountType
+      isApiAccount = accountType === 'gemini-api'
+      const actualAccountId = accountId
 
       try {
-        const apiResponse = await axios(axiosConfig)
-        response = { response: apiResponse.data }
-      } catch (error) {
-        logger.error('Gemini API request failed:', {
-          status: error.response?.status,
-          statusText: error.response?.statusText,
-          data: error.response?.data
-        })
-        throw error
-      }
-    } else {
-      // OAuth 账户
-      const { accessToken, refreshToken } = account
-      const oauthProvider = account.oauthProvider || 'gemini-cli'
-      const client = await geminiAccountService.getOauthClient(
-        accessToken,
-        refreshToken,
-        proxyConfig,
-        oauthProvider
-      )
-
-      let effectiveProjectId = account.projectId || account.tempProjectId || null
-
-      if (oauthProvider === 'antigravity') {
-        if (!effectiveProjectId) {
-          // Antigravity 账号允许没有 projectId：生成一个稳定的临时 projectId 并缓存
-          effectiveProjectId = `ag-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
-          await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
-        }
-      } else if (!effectiveProjectId) {
-        try {
-          logger.info('📋 No projectId available, attempting to fetch from loadCodeAssist...')
-          const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
-
-          if (loadResponse.cloudaicompanionProject) {
-            effectiveProjectId = loadResponse.cloudaicompanionProject
-            await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
-            logger.info(`📋 Fetched and cached temporary projectId: ${effectiveProjectId}`)
+        if (isApiAccount) {
+          account = await geminiApiAccountService.getAccount(actualAccountId)
+          if (!account) {
+            const notFoundError = new Error('Gemini API account not found')
+            notFoundError.status = 404
+            notFoundError.error = {
+              message: notFoundError.message,
+              type: 'account_not_found'
+            }
+            throw notFoundError
           }
-        } catch (loadError) {
-          logger.warn('Failed to fetch projectId from loadCodeAssist:', loadError.message)
-        }
-      }
 
-      if (!effectiveProjectId) {
-        return res.status(403).json({
-          error: {
-            message:
-              'This account requires a project ID to be configured. Please configure a project ID in the account settings.',
-            type: 'configuration_required'
+          actualRequestData.contents = sanitizeFunctionResponsesForApiKey(actualRequestData.contents)
+
+          logger.info(`Standard Gemini API generateContent request (${version}) - API Key Account`, {
+            model,
+            accountId: actualAccountId,
+            apiKeyId: req.apiKey?.id || 'unknown'
+          })
+        } else {
+          account = await geminiAccountService.getAccount(actualAccountId)
+          if (!account) {
+            const notFoundError = new Error('Gemini OAuth account not found')
+            notFoundError.status = 404
+            notFoundError.error = {
+              message: notFoundError.message,
+              type: 'account_not_found'
+            }
+            throw notFoundError
           }
+
+          logger.info(`Standard Gemini API generateContent request (${version}) - OAuth Account`, {
+            model,
+            projectId: account.projectId,
+            apiKeyId: req.apiKey?.id || 'unknown'
+          })
+        }
+
+        const proxyConfig = parseProxyConfig(account)
+
+        if (isApiAccount) {
+          const apiUrl = buildGeminiApiUrl(account.baseUrl, model, 'generateContent', account.apiKey)
+
+          const axiosConfig = {
+            method: 'POST',
+            url: apiUrl,
+            data: actualRequestData,
+            headers: {
+              'Content-Type': 'application/json'
+            }
+          }
+
+          if (proxyConfig) {
+            axiosConfig.httpsAgent = ProxyHelper.createProxyAgent(proxyConfig)
+            axiosConfig.httpAgent = ProxyHelper.createProxyAgent(proxyConfig)
+          }
+
+          const apiResponse = await axios(axiosConfig)
+          response = { response: apiResponse.data }
+        } else {
+          const { accessToken, refreshToken } = account
+          const oauthProvider = account.oauthProvider || 'gemini-cli'
+          const client = await geminiAccountService.getOauthClient(
+            accessToken,
+            refreshToken,
+            proxyConfig,
+            oauthProvider
+          )
+
+          let effectiveProjectId = account.projectId || account.tempProjectId || null
+
+          if (oauthProvider === 'antigravity') {
+            if (!effectiveProjectId) {
+              effectiveProjectId = `ag-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
+              await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
+            }
+          } else if (!effectiveProjectId) {
+            try {
+              logger.info('No projectId available, attempting to fetch from loadCodeAssist...')
+              const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
+
+              if (loadResponse.cloudaicompanionProject) {
+                effectiveProjectId = loadResponse.cloudaicompanionProject
+                await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
+                logger.info(`Fetched and cached temporary projectId: ${effectiveProjectId}`)
+              }
+            } catch (loadError) {
+              logger.warn('Failed to fetch projectId from loadCodeAssist:', loadError.message)
+            }
+          }
+
+          if (!effectiveProjectId) {
+            const configError = new Error(
+              'This account requires a project ID to be configured. Please configure a project ID in the account settings.'
+            )
+            configError.status = 403
+            configError.error = {
+              message: configError.message,
+              type: 'configuration_required'
+            }
+            throw configError
+          }
+
+          logger.info('Standard API project ID resolution', {
+            accountProjectId: account.projectId,
+            tempProjectId: account.tempProjectId,
+            effectiveProjectId,
+            decision: account.projectId
+              ? 'account_config'
+              : account.tempProjectId
+                ? 'temp_project_id'
+                : 'load_code_assist'
+          })
+
+          const userPromptId = `${crypto.randomUUID()}########0`
+
+          if (oauthProvider === 'antigravity') {
+            response = await geminiAccountService.generateContentAntigravity(
+              client,
+              { model, request: actualRequestData },
+              userPromptId,
+              effectiveProjectId,
+              req.apiKey?.id,
+              proxyConfig
+            )
+          } else {
+            response = await geminiAccountService.generateContent(
+              client,
+              { model, request: actualRequestData },
+              userPromptId,
+              effectiveProjectId,
+              req.apiKey?.id,
+              proxyConfig
+            )
+          }
+        }
+
+        break
+      } catch (requestError) {
+        const shouldRetry = await shouldRetryAfterGemini429({
+          error: requestError,
+          accountId: actualAccountId,
+          accountType,
+          sessionHash,
+          attempt,
+          context: 'standard-generateContent'
         })
-      }
-
-      logger.info('📋 Standard API 项目ID处理逻辑', {
-        accountProjectId: account.projectId,
-        tempProjectId: account.tempProjectId,
-        effectiveProjectId,
-        decision: account.projectId
-          ? '使用账户配置'
-          : account.tempProjectId
-            ? '使用临时项目ID'
-            : '从loadCodeAssist获取'
-      })
-
-      const userPromptId = `${crypto.randomUUID()}########0`
-
-      if (oauthProvider === 'antigravity') {
-        response = await geminiAccountService.generateContentAntigravity(
-          client,
-          { model, request: actualRequestData },
-          userPromptId,
-          effectiveProjectId,
-          req.apiKey?.id,
-          proxyConfig
-        )
-      } else {
-        response = await geminiAccountService.generateContent(
-          client,
-          { model, request: actualRequestData },
-          userPromptId,
-          effectiveProjectId,
-          req.apiKey?.id,
-          proxyConfig
-        )
+        if (shouldRetry) {
+          continue
+        }
+        throw requestError
       }
     }
 
-    // 记录使用统计
+    if (!response) {
+      const noResponseError = new Error('No response from Gemini upstream')
+      noResponseError.status = 502
+      throw noResponseError
+    }
+
+    // Record usage statistics
     if (response?.response?.usageMetadata) {
       try {
         const usage = response.response.usageMetadata
@@ -2167,11 +2237,13 @@ async function handleStandardGenerateContent(req, res) {
       stack: error.stack
     })
 
-    res.status(500).json({
-      error: {
-        message: error.message || 'Internal server error',
-        type: 'api_error'
-      }
+    const statusCode = getErrorStatus(error) || 500
+    return res.status(statusCode).json({
+      error:
+        error.error || {
+          message: error.message || 'Internal server error',
+          type: 'api_error'
+        }
     })
   }
 }
@@ -2253,59 +2325,10 @@ async function handleStandardStreamGenerateContent(req, res) {
     }
 
     // 使用统一调度选择账号
-    const schedulerResult = await unifiedGeminiScheduler.selectAccountForApiKey(
-      req.apiKey,
-      sessionHash,
-      model,
-      { allowApiAccounts: true }
-    )
-    ;({ accountId } = schedulerResult)
-    const { accountType } = schedulerResult
-
-    isApiAccount = accountType === 'gemini-api'
-    const actualAccountId = accountId
-
     const version = req.path.includes('v1beta') ? 'v1beta' : 'v1'
 
-    if (isApiAccount) {
-      account = await geminiApiAccountService.getAccount(actualAccountId)
-      if (!account) {
-        return res.status(404).json({
-          error: {
-            message: 'Gemini API account not found',
-            type: 'account_not_found'
-          }
-        })
-      }
-
-      // API Key 账户：清理 functionResponse 中标准 Gemini API 不支持的字段（如 id）
-      actualRequestData.contents = sanitizeFunctionResponsesForApiKey(actualRequestData.contents)
-
-      logger.info(
-        `Standard Gemini API streamGenerateContent request (${version}) - API Key Account`,
-        {
-          model,
-          accountId: actualAccountId,
-          apiKeyId: req.apiKey?.id || 'unknown'
-        }
-      )
-    } else {
-      account = await geminiAccountService.getAccount(actualAccountId)
-
-      logger.info(
-        `Standard Gemini API streamGenerateContent request (${version}) - OAuth Account`,
-        {
-          model,
-          projectId: account.projectId,
-          apiKeyId: req.apiKey?.id || 'unknown'
-        }
-      )
-    }
-
-    // 创建中止控制器
     abortController = new AbortController()
 
-    // 处理客户端断开连接
     req.on('close', () => {
       if (abortController && !abortController.signal.aborted) {
         logger.info('Client disconnected, aborting stream request')
@@ -2313,133 +2336,210 @@ async function handleStandardStreamGenerateContent(req, res) {
       }
     })
 
-    // 解析账户的代理配置
-    const proxyConfig = parseProxyConfig(account)
-
     let streamResponse
 
-    if (isApiAccount) {
-      // Gemini API 账户：直接使用 API Key 请求流式接口
-      const apiUrl = buildGeminiApiUrl(
-        account.baseUrl,
-        model,
-        'streamGenerateContent',
-        account.apiKey,
-        {
-          stream: true
-        }
-      )
-
-      const axiosConfig = {
-        method: 'POST',
-        url: apiUrl,
-        data: actualRequestData,
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': account.apiKey,
-          'x-goog-api-key': account.apiKey
-        },
-        responseType: 'stream',
-        signal: abortController.signal
+    for (let attempt = 1; attempt <= GEMINI_RATE_LIMIT_RETRY_MAX_ATTEMPTS; attempt++) {
+      let schedulerResult
+      try {
+        schedulerResult = await unifiedGeminiScheduler.selectAccountForApiKey(
+          req.apiKey,
+          sessionHash,
+          model,
+          { allowApiAccounts: true }
+        )
+      } catch (selectionError) {
+        selectionError.status = selectionError.status || 503
+        throw selectionError
       }
 
-      if (proxyConfig) {
-        axiosConfig.httpsAgent = ProxyHelper.createProxyAgent(proxyConfig)
-        axiosConfig.httpAgent = ProxyHelper.createProxyAgent(proxyConfig)
-      }
+      ;({ accountId } = schedulerResult)
+      const accountType = schedulerResult.accountType
+      isApiAccount = accountType === 'gemini-api'
+      const actualAccountId = accountId
 
       try {
-        const apiResponse = await axios(axiosConfig)
-        streamResponse = apiResponse.data
-      } catch (error) {
-        logger.error('Gemini API stream request failed:', {
-          status: error.response?.status,
-          statusText: error.response?.statusText,
-          data: error.response?.data
-        })
-        throw error
-      }
-    } else {
-      // OAuth 账户
-      const { accessToken, refreshToken } = account
-      const client = await geminiAccountService.getOauthClient(
-        accessToken,
-        refreshToken,
-        proxyConfig,
-        account.oauthProvider
-      )
-
-      let effectiveProjectId = account.projectId || account.tempProjectId || null
-
-      const oauthProvider = account.oauthProvider || 'gemini-cli'
-
-      if (oauthProvider === 'antigravity') {
-        if (!effectiveProjectId) {
-          effectiveProjectId = `ag-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
-          await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
-        }
-      } else if (!effectiveProjectId) {
-        try {
-          logger.info('📋 No projectId available, attempting to fetch from loadCodeAssist...')
-          const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
-
-          if (loadResponse.cloudaicompanionProject) {
-            effectiveProjectId = loadResponse.cloudaicompanionProject
-            await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
-            logger.info(`📋 Fetched and cached temporary projectId: ${effectiveProjectId}`)
+        if (isApiAccount) {
+          account = await geminiApiAccountService.getAccount(actualAccountId)
+          if (!account) {
+            const notFoundError = new Error('Gemini API account not found')
+            notFoundError.status = 404
+            notFoundError.error = {
+              message: notFoundError.message,
+              type: 'account_not_found'
+            }
+            throw notFoundError
           }
-        } catch (loadError) {
-          logger.warn('Failed to fetch projectId from loadCodeAssist:', loadError.message)
-        }
-      }
 
-      if (!effectiveProjectId) {
-        return res.status(403).json({
-          error: {
-            message:
-              'This account requires a project ID to be configured. Please configure a project ID in the account settings.',
-            type: 'configuration_required'
+          actualRequestData.contents = sanitizeFunctionResponsesForApiKey(actualRequestData.contents)
+
+          logger.info(
+            `Standard Gemini API streamGenerateContent request (${version}) - API Key Account`,
+            {
+              model,
+              accountId: actualAccountId,
+              apiKeyId: req.apiKey?.id || 'unknown'
+            }
+          )
+        } else {
+          account = await geminiAccountService.getAccount(actualAccountId)
+          if (!account) {
+            const notFoundError = new Error('Gemini OAuth account not found')
+            notFoundError.status = 404
+            notFoundError.error = {
+              message: notFoundError.message,
+              type: 'account_not_found'
+            }
+            throw notFoundError
           }
+
+          logger.info(
+            `Standard Gemini API streamGenerateContent request (${version}) - OAuth Account`,
+            {
+              model,
+              projectId: account.projectId,
+              apiKeyId: req.apiKey?.id || 'unknown'
+            }
+          )
+        }
+
+        const proxyConfig = parseProxyConfig(account)
+
+        if (isApiAccount) {
+          const apiUrl = buildGeminiApiUrl(
+            account.baseUrl,
+            model,
+            'streamGenerateContent',
+            account.apiKey,
+            {
+              stream: true
+            }
+          )
+
+          const axiosConfig = {
+            method: 'POST',
+            url: apiUrl,
+            data: actualRequestData,
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': account.apiKey,
+              'x-goog-api-key': account.apiKey
+            },
+            responseType: 'stream',
+            signal: abortController.signal
+          }
+
+          if (proxyConfig) {
+            axiosConfig.httpsAgent = ProxyHelper.createProxyAgent(proxyConfig)
+            axiosConfig.httpAgent = ProxyHelper.createProxyAgent(proxyConfig)
+          }
+
+          const apiResponse = await axios(axiosConfig)
+          streamResponse = apiResponse.data
+        } else {
+          const { accessToken, refreshToken } = account
+          const client = await geminiAccountService.getOauthClient(
+            accessToken,
+            refreshToken,
+            proxyConfig,
+            account.oauthProvider
+          )
+
+          let effectiveProjectId = account.projectId || account.tempProjectId || null
+
+          const oauthProvider = account.oauthProvider || 'gemini-cli'
+
+          if (oauthProvider === 'antigravity') {
+            if (!effectiveProjectId) {
+              effectiveProjectId = `ag-${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`
+              await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
+            }
+          } else if (!effectiveProjectId) {
+            try {
+              logger.info('No projectId available, attempting to fetch from loadCodeAssist...')
+              const loadResponse = await geminiAccountService.loadCodeAssist(client, null, proxyConfig)
+
+              if (loadResponse.cloudaicompanionProject) {
+                effectiveProjectId = loadResponse.cloudaicompanionProject
+                await geminiAccountService.updateTempProjectId(actualAccountId, effectiveProjectId)
+                logger.info(`Fetched and cached temporary projectId: ${effectiveProjectId}`)
+              }
+            } catch (loadError) {
+              logger.warn('Failed to fetch projectId from loadCodeAssist:', loadError.message)
+            }
+          }
+
+          if (!effectiveProjectId) {
+            const configError = new Error(
+              'This account requires a project ID to be configured. Please configure a project ID in the account settings.'
+            )
+            configError.status = 403
+            configError.error = {
+              message: configError.message,
+              type: 'configuration_required'
+            }
+            throw configError
+          }
+
+          logger.info('Standard API stream project ID resolution', {
+            accountProjectId: account.projectId,
+            tempProjectId: account.tempProjectId,
+            effectiveProjectId,
+            decision: account.projectId
+              ? 'account_config'
+              : account.tempProjectId
+                ? 'temp_project_id'
+                : 'load_code_assist'
+          })
+
+          const userPromptId = `${crypto.randomUUID()}########0`
+
+          if (oauthProvider === 'antigravity') {
+            streamResponse = await geminiAccountService.generateContentStreamAntigravity(
+              client,
+              { model, request: actualRequestData },
+              userPromptId,
+              effectiveProjectId,
+              req.apiKey?.id,
+              abortController.signal,
+              proxyConfig
+            )
+          } else {
+            streamResponse = await geminiAccountService.generateContentStream(
+              client,
+              { model, request: actualRequestData },
+              userPromptId,
+              effectiveProjectId,
+              req.apiKey?.id,
+              abortController.signal,
+              proxyConfig
+            )
+          }
+        }
+
+        break
+      } catch (requestError) {
+        const shouldRetry = await shouldRetryAfterGemini429({
+          error: requestError,
+          accountId: actualAccountId,
+          accountType,
+          sessionHash,
+          attempt,
+          context: 'standard-streamGenerateContent'
         })
-      }
-
-      logger.info('📋 Standard API 流式项目ID处理逻辑', {
-        accountProjectId: account.projectId,
-        tempProjectId: account.tempProjectId,
-        effectiveProjectId,
-        decision: account.projectId
-          ? '使用账户配置'
-          : account.tempProjectId
-            ? '使用临时项目ID'
-            : '从loadCodeAssist获取'
-      })
-
-      const userPromptId = `${crypto.randomUUID()}########0`
-
-      if (oauthProvider === 'antigravity') {
-        streamResponse = await geminiAccountService.generateContentStreamAntigravity(
-          client,
-          { model, request: actualRequestData },
-          userPromptId,
-          effectiveProjectId,
-          req.apiKey?.id,
-          abortController.signal,
-          proxyConfig
-        )
-      } else {
-        streamResponse = await geminiAccountService.generateContentStream(
-          client,
-          { model, request: actualRequestData },
-          userPromptId,
-          effectiveProjectId,
-          req.apiKey?.id,
-          abortController.signal,
-          proxyConfig
-        )
+        if (shouldRetry) {
+          continue
+        }
+        throw requestError
       }
     }
 
-    // 设置 SSE 响应头
+    if (!streamResponse) {
+      const noResponseError = new Error('No stream response from Gemini upstream')
+      noResponseError.status = 502
+      throw noResponseError
+    }
+
+    // Set SSE response headers
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
     res.setHeader('Connection', 'keep-alive')
