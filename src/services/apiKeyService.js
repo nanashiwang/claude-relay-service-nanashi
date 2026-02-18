@@ -1618,6 +1618,27 @@ class ApiKeyService {
             costInfo = { totalCost: 0, ephemeral5mCost: 0, ephemeral1hCost: 0 }
           }
         }
+        // 如果 pricingService 无定价且 token 有量，回退到 CostCalculator
+        if (
+          totalTokens > 0 &&
+          costInfo &&
+          typeof costInfo.totalCost === 'number' &&
+          costInfo.totalCost === 0 &&
+          costInfo.hasPricing === false
+        ) {
+          const CostCalculator = require('../utils/costCalculator')
+          const fallbackCost = CostCalculator.calculateCost(usageObject, model)
+          if (fallbackCost && fallbackCost.costs && fallbackCost.costs.total > 0) {
+            logger.warn(
+              `⚠️ No pricing found for ${model}, using fallback pricing: $${fallbackCost.costs.total}`
+            )
+            costInfo = {
+              totalCost: fallbackCost.costs.total,
+              ephemeral5mCost: 0,
+              ephemeral1hCost: 0
+            }
+          }
+        }
       } catch (pricingError) {
         logger.error(`❌ Failed to calculate cost for model ${model}:`, pricingError)
         logger.error(`   Usage object:`, JSON.stringify(usageObject))

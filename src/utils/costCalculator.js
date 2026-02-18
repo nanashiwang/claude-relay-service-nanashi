@@ -1,7 +1,21 @@
 const pricingService = require('../services/pricingService')
 
+// GPT-5.2 兜底定价 (USD per 1M tokens)
+const GPT_52_PRICING = {
+  input: 1.75,
+  output: 14.0,
+  cacheWrite: 1.75,
+  cacheRead: 0.175
+}
+
 // Claude模型价格配置 (USD per 1M tokens) - 备用定价
 const MODEL_PRICING = {
+  // GPT-5.2 / GPT-5.3 兜底（按 GPT-5.2 计价）
+  'gpt-5.2': GPT_52_PRICING,
+  'gpt-5.2-codex': GPT_52_PRICING,
+  'gpt-5.3': GPT_52_PRICING,
+  'gpt-5.3-codex': GPT_52_PRICING,
+
   // Claude 3.5 Sonnet
   'claude-3-5-sonnet-20241022': {
     input: 3.0,
