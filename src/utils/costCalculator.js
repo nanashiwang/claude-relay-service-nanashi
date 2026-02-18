@@ -86,6 +86,28 @@ const MODEL_PRICING = {
 }
 
 class CostCalculator {
+  static _getStaticFallbackPricing(model = 'unknown') {
+    if (MODEL_PRICING[model]) {
+      return MODEL_PRICING[model]
+    }
+
+    const normalizedModel = String(model || '').toLowerCase()
+    if (normalizedModel.includes('gpt-5.3-codex')) {
+      return GPT_52_PRICING
+    }
+    if (normalizedModel.includes('gpt-5.3')) {
+      return GPT_52_PRICING
+    }
+    if (normalizedModel.includes('gpt-5.2-codex')) {
+      return GPT_52_PRICING
+    }
+    if (normalizedModel.includes('gpt-5.2')) {
+      return GPT_52_PRICING
+    }
+
+    return MODEL_PRICING['unknown']
+  }
+
   /**
    * 计算单次请求的费用
    * @param {Object} usage - 使用量数据
@@ -181,16 +203,25 @@ class CostCalculator {
         cacheWritePrice = inputPrice
       }
 
-      pricing = {
-        input: inputPrice,
-        output: outputPrice,
-        cacheWrite: cacheWritePrice,
-        cacheRead: cacheReadPrice
+      const hasValidDynamicPricing = [inputPrice, outputPrice, cacheWritePrice, cacheReadPrice].some(
+        (price) => Number.isFinite(price) && price > 0
+      )
+
+      if (hasValidDynamicPricing) {
+        pricing = {
+          input: inputPrice,
+          output: outputPrice,
+          cacheWrite: cacheWritePrice,
+          cacheRead: cacheReadPrice
+        }
+        usingDynamicPricing = true
+      } else {
+        // 动态价格命中但单价字段无效时，回退到静态兜底，避免出现 $0.000000
+        pricing = this._getStaticFallbackPricing(model)
       }
-      usingDynamicPricing = true
     } else {
       // 回退到静态价格
-      pricing = MODEL_PRICING[model] || MODEL_PRICING['unknown']
+      pricing = this._getStaticFallbackPricing(model)
     }
 
     // 计算各类型token的费用 (USD)
@@ -270,7 +301,7 @@ class CostCalculator {
         return gpt5Pricing
       }
     }
-    return MODEL_PRICING[model] || MODEL_PRICING['unknown']
+    return this._getStaticFallbackPricing(model)
   }
 
   /**
