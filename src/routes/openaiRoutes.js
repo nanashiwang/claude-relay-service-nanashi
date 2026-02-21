@@ -74,6 +74,33 @@ function extractCodexUsageHeaders(headers) {
   return hasData ? snapshot : null
 }
 
+function extractCacheCreationTokens(usageData) {
+  if (!usageData || typeof usageData !== 'object') {
+    return 0
+  }
+
+  const details = usageData.input_tokens_details || usageData.prompt_tokens_details || {}
+  const candidates = [
+    details.cache_creation_input_tokens,
+    details.cache_creation_tokens,
+    usageData.cache_creation_input_tokens,
+    usageData.cache_creation_tokens
+  ]
+
+  for (const value of candidates) {
+    if (value === undefined || value === null || value === '') {
+      continue
+    }
+
+    const parsed = Number(value)
+    if (!Number.isNaN(parsed)) {
+      return parsed
+    }
+  }
+
+  return 0
+}
+
 async function applyRateLimitTracking(req, usageSummary, model, context = '') {
   if (!req.rateLimitInfo) {
     return
@@ -737,7 +764,11 @@ const handleResponses = async (req, res) => {
         if (usageData) {
           const totalInputTokens = usageData.input_tokens || usageData.prompt_tokens || 0
           const outputTokens = usageData.output_tokens || usageData.completion_tokens || 0
-          const cacheReadTokens = usageData.input_tokens_details?.cached_tokens || 0
+          const cacheReadTokens =
+            usageData.input_tokens_details?.cached_tokens ||
+            usageData.prompt_tokens_details?.cached_tokens ||
+            0
+          const cacheCreateTokens = extractCacheCreationTokens(usageData)
           // 计算实际输入token（总输入减去缓存部分）
           const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
 
@@ -745,14 +776,14 @@ const handleResponses = async (req, res) => {
             apiKeyData.id,
             actualInputTokens, // 传递实际输入（不含缓存）
             outputTokens,
-            0, // OpenAI没有cache_creation_tokens
+            cacheCreateTokens,
             cacheReadTokens,
             actualModel,
             accountId
           )
 
           logger.info(
-            `📊 Recorded OpenAI non-stream usage - Input: ${totalInputTokens}(actual:${actualInputTokens}+cached:${cacheReadTokens}), Output: ${outputTokens}, Total: ${usageData.total_tokens || totalInputTokens + outputTokens}, Model: ${actualModel}`
+            `📊 Recorded OpenAI non-stream usage - Input: ${totalInputTokens}(actual:${actualInputTokens}+cached:${cacheReadTokens}), CacheCreate: ${cacheCreateTokens}, Output: ${outputTokens}, Total: ${usageData.total_tokens || totalInputTokens + outputTokens + cacheCreateTokens}, Model: ${actualModel}`
           )
 
           await applyRateLimitTracking(
@@ -760,7 +791,7 @@ const handleResponses = async (req, res) => {
             {
               inputTokens: actualInputTokens,
               outputTokens,
-              cacheCreateTokens: 0,
+              cacheCreateTokens,
               cacheReadTokens
             },
             actualModel,
@@ -905,9 +936,13 @@ const handleResponses = async (req, res) => {
       // 记录使用统计
       if (!usageReported && usageData) {
         try {
-          const totalInputTokens = usageData.input_tokens || 0
-          const outputTokens = usageData.output_tokens || 0
-          const cacheReadTokens = usageData.input_tokens_details?.cached_tokens || 0
+          const totalInputTokens = usageData.input_tokens || usageData.prompt_tokens || 0
+          const outputTokens = usageData.output_tokens || usageData.completion_tokens || 0
+          const cacheReadTokens =
+            usageData.input_tokens_details?.cached_tokens ||
+            usageData.prompt_tokens_details?.cached_tokens ||
+            0
+          const cacheCreateTokens = extractCacheCreationTokens(usageData)
           // 计算实际输入token（总输入减去缓存部分）
           const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
 
@@ -918,14 +953,14 @@ const handleResponses = async (req, res) => {
             apiKeyData.id,
             actualInputTokens, // 传递实际输入（不含缓存）
             outputTokens,
-            0, // OpenAI没有cache_creation_tokens
+            cacheCreateTokens,
             cacheReadTokens,
             modelToRecord,
             accountId
           )
 
           logger.info(
-            `📊 Recorded OpenAI usage - Input: ${totalInputTokens}(actual:${actualInputTokens}+cached:${cacheReadTokens}), Output: ${outputTokens}, Total: ${usageData.total_tokens || totalInputTokens + outputTokens}, Model: ${modelToRecord} (actual: ${actualModel}, requested: ${requestedModel})`
+            `📊 Recorded OpenAI usage - Input: ${totalInputTokens}(actual:${actualInputTokens}+cached:${cacheReadTokens}), CacheCreate: ${cacheCreateTokens}, Output: ${outputTokens}, Total: ${usageData.total_tokens || totalInputTokens + outputTokens + cacheCreateTokens}, Model: ${modelToRecord} (actual: ${actualModel}, requested: ${requestedModel})`
           )
           usageReported = true
 
@@ -934,7 +969,7 @@ const handleResponses = async (req, res) => {
             {
               inputTokens: actualInputTokens,
               outputTokens,
-              cacheCreateTokens: 0,
+              cacheCreateTokens,
               cacheReadTokens
             },
             modelToRecord,
