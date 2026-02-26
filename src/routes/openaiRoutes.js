@@ -745,6 +745,148 @@ function extractCodexDeltaFromEventData(eventData) {
   return ''
 }
 
+function parseJsonSafely(payload) {
+  if (!payload || typeof payload !== 'string') {
+    return null
+  }
+  try {
+    return JSON.parse(payload)
+  } catch (_) {
+    return null
+  }
+}
+
+async function readStreamBodyToString(stream, timeoutMs = 15000) {
+  if (!stream || typeof stream.on !== 'function') {
+    return ''
+  }
+
+  return await new Promise((resolve) => {
+    const chunks = []
+    let settled = false
+
+    const finish = () => {
+      if (settled) {
+        return
+      }
+      settled = true
+      resolve(Buffer.concat(chunks).toString())
+    }
+
+    stream.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+    stream.on('end', finish)
+    stream.on('error', finish)
+    setTimeout(finish, timeoutMs)
+  })
+}
+
+function parseErrorPayloadFromRaw(rawText, fallbackMessage = 'Upstream request failed') {
+  const normalized = typeof rawText === 'string' ? rawText.trim() : ''
+  if (!normalized) {
+    return {
+      error: {
+        message: fallbackMessage
+      }
+    }
+  }
+
+  const directJson = parseJsonSafely(normalized)
+  if (directJson && typeof directJson === 'object') {
+    return directJson
+  }
+
+  const lines = normalized.split(/\r?\n/)
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) {
+      continue
+    }
+    const payload = line.slice(6).trim()
+    if (!payload || payload === '[DONE]') {
+      continue
+    }
+    const parsed = parseJsonSafely(payload)
+    if (parsed && typeof parsed === 'object') {
+      return parsed
+    }
+  }
+
+  return {
+    error: {
+      message: normalized
+    }
+  }
+}
+
+async function collectResponsesStreamResult(stream) {
+  let buffer = ''
+  let text = ''
+  let completedResponse = null
+  let usageData = null
+  let model = null
+
+  const processEventBlock = (eventBlock) => {
+    const lines = eventBlock.split('\n')
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) {
+        continue
+      }
+
+      const payload = line.slice(6).trim()
+      if (!payload || payload === '[DONE]') {
+        continue
+      }
+
+      const eventData = parseJsonSafely(payload)
+      if (!eventData || typeof eventData !== 'object') {
+        continue
+      }
+
+      const delta = extractCodexDeltaFromEventData(eventData)
+      if (delta) {
+        text += delta
+      }
+
+      if (eventData.type === 'response.completed' && eventData.response) {
+        completedResponse = eventData.response
+        if (eventData.response.model) {
+          model = eventData.response.model
+        }
+        if (eventData.response.usage) {
+          usageData = eventData.response.usage
+        }
+      }
+    }
+  }
+
+  await new Promise((resolve, reject) => {
+    stream.on('data', (chunk) => {
+      buffer += chunk.toString()
+      if (!buffer.includes('\n\n')) {
+        return
+      }
+
+      const events = buffer.split('\n\n')
+      buffer = events.pop() || ''
+      for (const evt of events) {
+        if (evt.trim()) {
+          processEventBlock(evt)
+        }
+      }
+    })
+
+    stream.on('end', () => {
+      if (buffer.trim()) {
+        processEventBlock(buffer)
+      }
+      resolve()
+    })
+
+    stream.on('error', reject)
+  })
+
+  return { completedResponse, text, usageData, model }
+}
+
 async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel = null) {
   try {
     // 生成会话哈希（如果有会话ID）
@@ -927,7 +1069,10 @@ const handleResponses = async (req, res) => {
       }
     }
 
-    const isStream = isChatCompletionsCompat ? req.body?.stream === true : req.body?.stream !== false
+    const clientWantsStream = isChatCompletionsCompat
+      ? originalRequestBody?.stream === true
+      : req.body?.stream !== false
+    const upstreamUseStream = isChatCompletionsCompat ? true : clientWantsStream
 
     // 判断是否为 Codex CLI 的请求（基于 User-Agent）
     const userAgent = req.headers['user-agent'] || ''
@@ -978,6 +1123,10 @@ const handleResponses = async (req, res) => {
         accountType === 'openai-responses'
           ? { ...(originalRequestBody || {}) }
           : convertChatCompletionsRequestToResponses(originalRequestBody || {})
+
+      if (accountType !== 'openai-responses') {
+        req.body.stream = true
+      }
     }
 
     // 如果是 OpenAI-Responses 账户，使用专门的中继服务处理
@@ -1007,7 +1156,7 @@ const handleResponses = async (req, res) => {
     headers['authorization'] = `Bearer ${accessToken}`
     headers['chatgpt-account-id'] = account.accountId || account.chatgptUserId || accountId
     headers['host'] = 'chatgpt.com'
-    headers['accept'] = isStream ? 'text/event-stream' : 'application/json'
+    headers['accept'] = upstreamUseStream ? 'text/event-stream' : 'application/json'
     headers['content-type'] = 'application/json'
     if (!isCompactRoute) {
       req.body['store'] = false
@@ -1040,7 +1189,7 @@ const handleResponses = async (req, res) => {
       : 'https://chatgpt.com/backend-api/codex/responses'
 
     // 根据 stream 参数决定请求类型
-    if (isStream) {
+    if (upstreamUseStream) {
       // 流式请求
       upstream = await axios.post(codexEndpoint, req.body, {
         ...axiosConfig,
@@ -1070,7 +1219,7 @@ const handleResponses = async (req, res) => {
 
       try {
         // 对于429错误，无论是否是流式请求，响应都会是完整的JSON错误对象
-        if (isStream && upstream.data) {
+        if (upstreamUseStream && upstream.data) {
           // 流式响应需要先收集数据
           const chunks = []
           await new Promise((resolve, reject) => {
@@ -1125,7 +1274,7 @@ const handleResponses = async (req, res) => {
         }
       }
 
-      if (isStream) {
+      if (upstreamUseStream) {
         // 流式响应也需要设置正确的状态码
         res.status(429)
         res.setHeader('Content-Type', 'text/event-stream')
@@ -1153,7 +1302,7 @@ const handleResponses = async (req, res) => {
       let errorData = null
 
       try {
-        if (isStream && upstream.data && typeof upstream.data.on === 'function') {
+        if (upstreamUseStream && upstream.data && typeof upstream.data.on === 'function') {
           const chunks = []
           await new Promise((resolve, reject) => {
             upstream.data.on('data', (chunk) => chunks.push(chunk))
@@ -1272,9 +1421,40 @@ const handleResponses = async (req, res) => {
 
     } while (shouldRetryWithAnotherAccount)
 
+    if (upstream.status >= 400) {
+      let errorResponse = upstream.data
+
+      if (upstreamUseStream && upstream.data && typeof upstream.data.on === 'function') {
+        const rawBody = await readStreamBodyToString(upstream.data, 8000)
+        errorResponse = parseErrorPayloadFromRaw(
+          rawBody,
+          `Upstream request failed (${upstream.status})`
+        )
+      } else if (Buffer.isBuffer(errorResponse)) {
+        errorResponse = parseErrorPayloadFromRaw(
+          errorResponse.toString(),
+          `Upstream request failed (${upstream.status})`
+        )
+      } else if (typeof errorResponse === 'string') {
+        errorResponse = parseErrorPayloadFromRaw(
+          errorResponse,
+          `Upstream request failed (${upstream.status})`
+        )
+      } else if (!errorResponse || typeof errorResponse !== 'object') {
+        errorResponse = {
+          error: {
+            message: `Upstream request failed (${upstream.status})`
+          }
+        }
+      }
+
+      res.status(upstream.status).json(errorResponse)
+      return
+    }
+
     res.status(upstream.status)
 
-    if (isStream) {
+    if (clientWantsStream) {
       // 流式响应头
       res.setHeader('Content-Type', 'text/event-stream')
       res.setHeader('Cache-Control', 'no-cache')
@@ -1294,7 +1474,7 @@ const handleResponses = async (req, res) => {
       }
     }
 
-    if (isStream) {
+    if (clientWantsStream) {
       // 立即刷新响应头，开始 SSE
       if (typeof res.flushHeaders === 'function') {
         res.flushHeaders()
@@ -1309,13 +1489,43 @@ const handleResponses = async (req, res) => {
     let rateLimitDetected = false
     let rateLimitResetsInSeconds = null
 
-    if (!isStream) {
+    if (!clientWantsStream) {
       // 非流式响应处理
       try {
         logger.info(`📄 Processing OpenAI non-stream response for model: ${requestedModel}`)
 
         // 直接获取完整响应
-        const responseData = upstream.data
+        let responseData = upstream.data
+        if (upstreamUseStream && upstream.data && typeof upstream.data.on === 'function') {
+          const { completedResponse, text, usageData: streamUsageData, model: streamModel } =
+            await collectResponsesStreamResult(upstream.data)
+
+          if (completedResponse && typeof completedResponse === 'object') {
+            responseData = completedResponse
+          } else {
+            const fallbackModel = streamModel || requestedModel || 'gpt-4'
+            responseData = {
+              id: `resp_${Date.now()}`,
+              object: 'response',
+              model: fallbackModel,
+              output: [
+                {
+                  type: 'message',
+                  role: 'assistant',
+                  content: text
+                    ? [
+                        {
+                          type: 'output_text',
+                          text
+                        }
+                      ]
+                    : []
+                }
+              ],
+              usage: streamUsageData || null
+            }
+          }
+        }
 
         // 从响应中获取实际的 model 和 usage
         actualModel = responseData.model || responseData.response?.model || requestedModel || 'gpt-4'
