@@ -1119,14 +1119,9 @@ const handleResponses = async (req, res) => {
     ))
 
     if (isChatCompletionsCompat) {
-      req.body =
-        accountType === 'openai-responses'
-          ? { ...(originalRequestBody || {}) }
-          : convertChatCompletionsRequestToResponses(originalRequestBody || {})
-
-      if (accountType !== 'openai-responses') {
-        req.body.stream = true
-      }
+      req.body = convertChatCompletionsRequestToResponses(originalRequestBody || {})
+      req.body.stream = true
+      req._openaiCompatClientWantsStream = clientWantsStream
     }
 
     // 如果是 OpenAI-Responses 账户，使用专门的中继服务处理

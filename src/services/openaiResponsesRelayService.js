@@ -16,6 +16,7 @@ const {
 } = require('../utils/streamInterruptionHelper')
 
 const DEFAULT_OPENAI_RESPONSES_STREAM_HEARTBEAT_INTERVAL_MS = 15000
+const OPENAI_COMPAT_MODE_CHAT_COMPLETIONS = 'chat_completions'
 
 // 抽取缓存写入 token，兼容多种字段命名
 function extractCacheCreationTokens(usageData) {
@@ -92,6 +93,511 @@ async function getOpenAIResponsesStreamHeartbeatIntervalMs() {
   return DEFAULT_OPENAI_RESPONSES_STREAM_HEARTBEAT_INTERVAL_MS
 }
 
+function isChatCompletionsCompatMode(req) {
+  return req?._openaiCompatMode === OPENAI_COMPAT_MODE_CHAT_COMPLETIONS
+}
+
+function parseJsonSafely(payload) {
+  if (!payload || typeof payload !== 'string') {
+    return null
+  }
+
+  try {
+    return JSON.parse(payload)
+  } catch (_) {
+    return null
+  }
+}
+
+function extractCodexDeltaFromEventData(eventData) {
+  if (!eventData || typeof eventData !== 'object') {
+    return ''
+  }
+
+  if (eventData.type === 'response.output_text.delta' && typeof eventData.delta === 'string') {
+    return eventData.delta
+  }
+
+  if (
+    eventData.type === 'response.output_item.delta' &&
+    typeof eventData.delta?.text === 'string'
+  ) {
+    return eventData.delta.text
+  }
+
+  if (eventData.type === 'content_block_delta' && typeof eventData.delta?.text === 'string') {
+    return eventData.delta.text
+  }
+
+  if (typeof eventData.text === 'string') {
+    return eventData.text
+  }
+
+  return ''
+}
+
+function parseSSEDataLine(line) {
+  if (!line || typeof line !== 'string' || !line.startsWith('data:')) {
+    return ''
+  }
+  return line.slice(5).trim()
+}
+
+function stringifyToolArguments(argumentsPayload) {
+  if (typeof argumentsPayload === 'string') {
+    return argumentsPayload
+  }
+
+  if (argumentsPayload === undefined || argumentsPayload === null) {
+    return '{}'
+  }
+
+  try {
+    return JSON.stringify(argumentsPayload)
+  } catch (_) {
+    return '{}'
+  }
+}
+
+function extractTextFromResponseContentBlocks(content = []) {
+  if (!Array.isArray(content)) {
+    return ''
+  }
+
+  const chunks = []
+  for (const block of content) {
+    if (typeof block === 'string') {
+      chunks.push(block)
+      continue
+    }
+
+    if (!block || typeof block !== 'object') {
+      continue
+    }
+
+    if (typeof block.text === 'string') {
+      chunks.push(block.text)
+      continue
+    }
+
+    if (typeof block.content === 'string') {
+      chunks.push(block.content)
+    }
+  }
+
+  return chunks.join('')
+}
+
+function extractToolCallsFromResponseOutput(output = []) {
+  if (!Array.isArray(output)) {
+    return []
+  }
+
+  const toolCalls = []
+
+  const pushToolCall = (toolCall, index, nestedIndex = null) => {
+    if (!toolCall || typeof toolCall !== 'object') {
+      return
+    }
+
+    const rawName = toolCall.name || toolCall.function?.name
+    if (!rawName) {
+      return
+    }
+
+    const rawArguments =
+      toolCall.arguments ||
+      toolCall.function?.arguments ||
+      toolCall.input ||
+      toolCall.params ||
+      '{}'
+
+    const idFallback =
+      nestedIndex === null ? `call_${index}` : `call_${index}_${nestedIndex}`
+    const toolCallId = toolCall.call_id || toolCall.id || idFallback
+
+    toolCalls.push({
+      id: String(toolCallId),
+      type: 'function',
+      function: {
+        name: rawName,
+        arguments: stringifyToolArguments(rawArguments)
+      }
+    })
+  }
+
+  output.forEach((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return
+    }
+
+    if (item.type === 'function_call' || item.type === 'tool_call') {
+      pushToolCall(item, index)
+      return
+    }
+
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      item.content.forEach((block, nestedIndex) => {
+        if (block?.type === 'function_call' || block?.type === 'tool_call') {
+          pushToolCall(block, index, nestedIndex)
+        }
+      })
+    }
+  })
+
+  return toolCalls
+}
+
+function collectResponseOutputSummary(responsePayload = {}) {
+  const output = Array.isArray(responsePayload?.output)
+    ? responsePayload.output
+    : Array.isArray(responsePayload?.response?.output)
+      ? responsePayload.response.output
+      : []
+
+  let text = ''
+  for (const item of output) {
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+
+    if (item.type === 'message') {
+      text += extractTextFromResponseContentBlocks(item.content)
+      continue
+    }
+
+    if ((item.type === 'output_text' || item.type === 'text') && typeof item.text === 'string') {
+      text += item.text
+      continue
+    }
+
+    if (Array.isArray(item.content)) {
+      text += extractTextFromResponseContentBlocks(item.content)
+    }
+  }
+
+  if (!text && typeof responsePayload?.output_text === 'string') {
+    text = responsePayload.output_text
+  }
+
+  const toolCalls = extractToolCallsFromResponseOutput(output)
+  return { text, toolCalls }
+}
+
+function convertUsageToChatCompletionUsage(usageData) {
+  if (!usageData || typeof usageData !== 'object') {
+    return null
+  }
+
+  const promptTokens = Number(usageData.input_tokens ?? usageData.prompt_tokens ?? 0) || 0
+  const completionTokens = Number(usageData.output_tokens ?? usageData.completion_tokens ?? 0) || 0
+  const cacheReadTokens =
+    Number(
+      usageData.input_tokens_details?.cached_tokens ??
+        usageData.prompt_tokens_details?.cached_tokens ??
+        0
+    ) || 0
+  const cacheCreateTokens = extractCacheCreationTokens(usageData)
+  const totalTokens =
+    Number(usageData.total_tokens ?? promptTokens + completionTokens + cacheCreateTokens) || 0
+
+  const usage = {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens
+  }
+
+  if (cacheReadTokens > 0 || cacheCreateTokens > 0) {
+    usage.prompt_tokens_details = {
+      cached_tokens: cacheReadTokens,
+      cache_creation_tokens: cacheCreateTokens
+    }
+  }
+
+  return usage
+}
+
+function resolveUnixTimestamp(value, fallback) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.floor(value)
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) {
+      return Math.floor(numeric)
+    }
+
+    const parsedTime = Date.parse(value)
+    if (!Number.isNaN(parsedTime)) {
+      return Math.floor(parsedTime / 1000)
+    }
+  }
+
+  return fallback
+}
+
+function inferChatCompletionFinishReason(responsePayload, hasToolCalls = false) {
+  if (hasToolCalls) {
+    return 'tool_calls'
+  }
+
+  const rawReason =
+    responsePayload?.stop_reason || responsePayload?.response?.stop_reason || responsePayload?.reason
+  if (typeof rawReason === 'string') {
+    const normalized = rawReason.toLowerCase()
+    if (normalized === 'max_output_tokens' || normalized === 'max_tokens' || normalized === 'length') {
+      return 'length'
+    }
+    if (normalized === 'content_filter') {
+      return 'content_filter'
+    }
+  }
+
+  const status = responsePayload?.status || responsePayload?.response?.status
+  if (status === 'incomplete') {
+    return 'length'
+  }
+
+  return 'stop'
+}
+
+function getChatCompletionsStreamId() {
+  return `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function createChatCompletionChunk({
+  id,
+  model,
+  delta = {},
+  finishReason = null,
+  usage = null,
+  created = Math.floor(Date.now() / 1000)
+}) {
+  const chunk = {
+    id: id || getChatCompletionsStreamId(),
+    object: 'chat.completion.chunk',
+    created,
+    model: model || 'gpt-4',
+    choices: [
+      {
+        index: 0,
+        delta: delta && typeof delta === 'object' ? delta : {},
+        finish_reason: finishReason
+      }
+    ]
+  }
+
+  if (usage && typeof usage === 'object') {
+    chunk.usage = usage
+  }
+
+  return chunk
+}
+
+function buildChatCompletionResponse(responseData, requestedModel, usageDataOverride = null) {
+  const source = responseData && typeof responseData === 'object' ? responseData : {}
+  const model = source.model || source.response?.model || requestedModel || 'gpt-4'
+  const rawId = source.id || source.response?.id || `resp_${Date.now()}`
+  const id =
+    typeof rawId === 'string' && rawId.startsWith('chatcmpl-')
+      ? rawId
+      : `chatcmpl-${String(rawId).replace(/[^a-zA-Z0-9_-]/g, '') || Date.now()}`
+
+  const created = resolveUnixTimestamp(
+    source.created || source.created_at || source.response?.created || source.response?.created_at,
+    Math.floor(Date.now() / 1000)
+  )
+
+  const { text, toolCalls } = collectResponseOutputSummary(source)
+  const finishReason = inferChatCompletionFinishReason(source, toolCalls.length > 0)
+  const message = {
+    role: 'assistant',
+    content: text || (toolCalls.length > 0 ? null : '')
+  }
+
+  if (toolCalls.length > 0) {
+    message.tool_calls = toolCalls
+  }
+
+  const result = {
+    id,
+    object: 'chat.completion',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        message,
+        finish_reason: finishReason
+      }
+    ]
+  }
+
+  const usageData = usageDataOverride || source.usage || source.response?.usage
+  const usage = convertUsageToChatCompletionUsage(usageData)
+  if (usage) {
+    result.usage = usage
+  }
+
+  return result
+}
+
+function buildResponsesJsonFromCollectedStream({
+  completedResponse,
+  text,
+  usageData,
+  model,
+  requestedModel
+}) {
+  if (completedResponse && typeof completedResponse === 'object') {
+    return completedResponse
+  }
+
+  return {
+    id: `resp_${Date.now()}`,
+    object: 'response',
+    model: model || requestedModel || 'gpt-4',
+    output: [
+      {
+        type: 'message',
+        role: 'assistant',
+        content: text
+          ? [
+              {
+                type: 'output_text',
+                text
+              }
+            ]
+          : []
+      }
+    ],
+    usage: usageData || null
+  }
+}
+
+function extractInstructionTextFromInput(input) {
+  if (!Array.isArray(input)) {
+    return ''
+  }
+
+  const chunks = []
+  for (const item of input) {
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+
+    const role = typeof item.role === 'string' ? item.role.toLowerCase() : ''
+    if (role !== 'system' && role !== 'developer') {
+      continue
+    }
+
+    if (typeof item.content === 'string' && item.content.trim()) {
+      chunks.push(item.content.trim())
+      continue
+    }
+
+    if (Array.isArray(item.content)) {
+      const text = extractTextFromResponseContentBlocks(item.content).trim()
+      if (text) {
+        chunks.push(text)
+      }
+    }
+  }
+
+  return chunks.join('\n\n')
+}
+
+function ensureResponsesInstructions(body = {}) {
+  if (!body || typeof body !== 'object') {
+    return body
+  }
+
+  const normalized = { ...body }
+  if (
+    typeof normalized.instructions === 'string' &&
+    normalized.instructions.trim()
+  ) {
+    normalized.instructions = normalized.instructions.trim()
+    return normalized
+  }
+
+  const inferred = extractInstructionTextFromInput(normalized.input)
+  normalized.instructions = inferred || 'You are a helpful assistant.'
+  return normalized
+}
+
+async function collectResponsesStreamResult(stream) {
+  let buffer = ''
+  let text = ''
+  let completedResponse = null
+  let usageData = null
+  let model = null
+  let errorData = null
+
+  const processEventBlock = (eventBlock) => {
+    const lines = eventBlock.split('\n')
+    for (const line of lines) {
+      const payload = parseSSEDataLine(line)
+      if (!payload || payload === '[DONE]') {
+        continue
+      }
+
+      const eventData = parseJsonSafely(payload)
+      if (!eventData || typeof eventData !== 'object') {
+        continue
+      }
+
+      if (eventData.error && !errorData) {
+        errorData = eventData
+      }
+
+      const delta = extractCodexDeltaFromEventData(eventData)
+      if (delta) {
+        text += delta
+      }
+
+      if (eventData.type === 'response.completed' && eventData.response) {
+        completedResponse = eventData.response
+        if (eventData.response.model) {
+          model = eventData.response.model
+        }
+        if (eventData.response.usage) {
+          usageData = eventData.response.usage
+        }
+      }
+    }
+  }
+
+  await new Promise((resolve, reject) => {
+    stream.on('data', (chunk) => {
+      buffer += chunk.toString()
+      if (!buffer.includes('\n\n')) {
+        return
+      }
+
+      const events = buffer.split('\n\n')
+      buffer = events.pop() || ''
+      for (const event of events) {
+        if (event.trim()) {
+          processEventBlock(event)
+        }
+      }
+    })
+
+    stream.on('end', () => {
+      if (buffer.trim()) {
+        processEventBlock(buffer)
+      }
+      resolve()
+    })
+
+    stream.on('error', reject)
+  })
+
+  return { completedResponse, text, usageData, model, errorData }
+}
+
 class OpenAIResponsesRelayService {
   constructor() {
     this.defaultTimeout = config.requestTimeout || 600000
@@ -128,8 +634,19 @@ class OpenAIResponsesRelayService {
       req.once('close', handleClientDisconnect)
       res.once('close', handleClientDisconnect)
 
+      const isChatCompletionsCompat = isChatCompletionsCompatMode(req)
+      const clientWantsStream = isChatCompletionsCompat
+        ? req._openaiCompatClientWantsStream === true
+        : req.body?.stream === true
+      const upstreamUseStream = true
+      const upstreamPath = isChatCompletionsCompat ? '/v1/responses' : req.path
+      const upstreamBody = isChatCompletionsCompat
+        ? ensureResponsesInstructions(req.body || {})
+        : { ...(req.body || {}) }
+      upstreamBody.stream = upstreamUseStream
+
       // 构建目标 URL
-      const targetUrl = `${fullAccount.baseApi}${req.path}`
+      const targetUrl = `${fullAccount.baseApi}${upstreamPath}`
       logger.info(`🎯 Forwarding to: ${targetUrl}`)
 
       // 构建请求头 - 使用统一的 headerFilter 移除 CDN headers
@@ -138,6 +655,8 @@ class OpenAIResponsesRelayService {
         Authorization: `Bearer ${fullAccount.apiKey}`,
         'Content-Type': 'application/json'
       }
+      delete headers['content-length']
+      delete headers['Content-Length']
 
       // 处理 User-Agent
       if (fullAccount.userAgent) {
@@ -155,9 +674,9 @@ class OpenAIResponsesRelayService {
         method: req.method,
         url: targetUrl,
         headers,
-        data: req.body,
+        data: upstreamBody,
         timeout: this.defaultTimeout,
-        responseType: req.body?.stream ? 'stream' : 'json',
+        responseType: upstreamUseStream ? 'stream' : 'json',
         validateStatus: () => true, // 允许处理所有状态码
         signal: abortController.signal
       }
@@ -181,9 +700,12 @@ class OpenAIResponsesRelayService {
         accountName: account.name,
         targetUrl,
         method: req.method,
-        stream: req.body?.stream || false,
-        model: req.body?.model || 'unknown',
-        userAgent: headers['User-Agent'] || 'not set'
+        stream: clientWantsStream,
+        upstreamStream: upstreamUseStream,
+        compatMode: isChatCompletionsCompat ? OPENAI_COMPAT_MODE_CHAT_COMPLETIONS : 'none',
+        model: upstreamBody?.model || req.body?.model || 'unknown',
+        userAgent: headers['User-Agent'] || 'not set',
+        upstreamPath
       })
 
       // 发送请求
@@ -194,7 +716,7 @@ class OpenAIResponsesRelayService {
         const { resetsInSeconds, errorData } = await this._handle429Error(
           account,
           response,
-          req.body?.stream,
+          upstreamUseStream,
           sessionHash
         )
 
@@ -322,21 +844,62 @@ class OpenAIResponsesRelayService {
         lastUsedAt: new Date().toISOString()
       })
 
-      // 处理流式响应
-      if (req.body?.stream && response.data && typeof response.data.pipe === 'function') {
+      // 处理 chat/completions 兼容响应
+      if (isChatCompletionsCompat && response.data && typeof response.data.pipe === 'function') {
+        if (clientWantsStream) {
+          return this._handleChatCompatStreamResponse(
+            response,
+            res,
+            account,
+            apiKeyData,
+            upstreamBody?.model || req.body?.model,
+            handleClientDisconnect,
+            req
+          )
+        }
+
+        return this._handleCollectedStreamJsonResponse(
+          response,
+          res,
+          account,
+          apiKeyData,
+          upstreamBody?.model || req.body?.model,
+          true
+        )
+      }
+
+      // 处理原生 responses 请求
+      if (upstreamUseStream && response.data && typeof response.data.pipe === 'function') {
+        if (!clientWantsStream) {
+          return this._handleCollectedStreamJsonResponse(
+            response,
+            res,
+            account,
+            apiKeyData,
+            upstreamBody?.model || req.body?.model,
+            false
+          )
+        }
+
         return this._handleStreamResponse(
           response,
           res,
           account,
           apiKeyData,
-          req.body?.model,
+          upstreamBody?.model || req.body?.model,
           handleClientDisconnect,
           req
         )
       }
 
       // 处理非流式响应
-      return this._handleNormalResponse(response, res, account, apiKeyData, req.body?.model)
+      return this._handleNormalResponse(
+        response,
+        res,
+        account,
+        apiKeyData,
+        upstreamBody?.model || req.body?.model
+      )
     } catch (error) {
       // 清理 AbortController
       if (abortController && !abortController.signal.aborted) {
@@ -743,6 +1306,429 @@ class OpenAIResponsesRelayService {
       }
     }
 
+    req.on('close', cleanup)
+    req.on('aborted', cleanup)
+  }
+
+  async _handleCollectedStreamJsonResponse(
+    response,
+    res,
+    account,
+    apiKeyData,
+    requestedModel,
+    asChatCompletion = false
+  ) {
+    try {
+      const { completedResponse, text, usageData, model, errorData } = await collectResponsesStreamResult(
+        response.data
+      )
+
+      if (errorData && !completedResponse) {
+        const errorPayload =
+          errorData && typeof errorData === 'object'
+            ? errorData
+            : { error: { message: 'Upstream stream returned an error event' } }
+        const errorType = errorPayload.error?.type || ''
+        const status =
+          errorType.includes('rate_limit') || errorType.includes('usage_limit') ? 429 : 502
+        return res.status(status).json(errorPayload)
+      }
+
+      const upstreamResponsePayload = buildResponsesJsonFromCollectedStream({
+        completedResponse,
+        text,
+        usageData,
+        model,
+        requestedModel
+      })
+
+      if (asChatCompletion) {
+        const chatResponse = buildChatCompletionResponse(
+          upstreamResponsePayload,
+          model || requestedModel,
+          usageData || upstreamResponsePayload?.usage || null
+        )
+        return this._handleNormalResponse(
+          { status: 200, data: chatResponse },
+          res,
+          account,
+          apiKeyData,
+          model || requestedModel
+        )
+      }
+
+      return this._handleNormalResponse(
+        { status: 200, data: upstreamResponsePayload },
+        res,
+        account,
+        apiKeyData,
+        model || requestedModel
+      )
+    } catch (error) {
+      logger.error('Failed to collect OpenAI-Responses stream for non-stream output:', error)
+      return res.status(502).json({
+        error: {
+          message: 'Failed to process upstream stream response',
+          type: 'stream_error',
+          code: 'stream_collect_failed'
+        }
+      })
+    }
+  }
+
+  async _handleChatCompatStreamResponse(
+    response,
+    res,
+    account,
+    apiKeyData,
+    requestedModel,
+    handleClientDisconnect,
+    req
+  ) {
+    res.setHeader('Content-Type', 'text/event-stream')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.setHeader('Connection', 'keep-alive')
+    res.setHeader('X-Accel-Buffering', 'no')
+
+    const heartbeatIntervalMs = await getOpenAIResponsesStreamHeartbeatIntervalMs()
+    const streamId = getChatCompletionsStreamId()
+
+    let usageData = null
+    let actualModel = null
+    let completedResponse = null
+    let buffer = ''
+    let streamEnded = false
+    let heartbeatTimer = null
+    let lastDataAt = Date.now()
+    let initialChunkSent = false
+    let finalChunkSent = false
+    let doneSent = false
+    let usageReported = false
+    let rateLimitDetected = false
+    let rateLimitResetsInSeconds = null
+
+    const clearHeartbeat = () => {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer)
+        heartbeatTimer = null
+      }
+    }
+
+    const sendHeartbeat = () => {
+      if (streamEnded || !isWritableSSEStream(res)) {
+        clearHeartbeat()
+        return
+      }
+
+      if (Date.now() - lastDataAt < heartbeatIntervalMs) {
+        return
+      }
+
+      try {
+        res.write(': keep-alive\n\n')
+      } catch (heartbeatError) {
+        logger.warn(
+          'Failed to send OpenAI-Responses chat-compat heartbeat:',
+          heartbeatError.message
+        )
+        clearHeartbeat()
+      }
+    }
+
+    const sendInitialChunk = () => {
+      if (initialChunkSent || !isWritableSSEStream(res)) {
+        return
+      }
+
+      const initialChunk = createChatCompletionChunk({
+        id: streamId,
+        model: actualModel || requestedModel || 'gpt-4',
+        delta: { role: 'assistant' },
+        finishReason: null
+      })
+
+      res.write(`data: ${JSON.stringify(initialChunk)}\n\n`)
+      initialChunkSent = true
+    }
+
+    const sendDeltaChunk = (deltaText) => {
+      if (!deltaText || !isWritableSSEStream(res)) {
+        return
+      }
+
+      sendInitialChunk()
+      const chunk = createChatCompletionChunk({
+        id: streamId,
+        model: actualModel || requestedModel || 'gpt-4',
+        delta: { content: deltaText },
+        finishReason: null
+      })
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+    }
+
+    const sendFinalChunk = (usageOverride = null) => {
+      if (finalChunkSent || !isWritableSSEStream(res)) {
+        return
+      }
+
+      sendInitialChunk()
+      const responsePayload =
+        completedResponse ||
+        (actualModel || usageData
+          ? {
+              model: actualModel || requestedModel || 'gpt-4',
+              usage: usageOverride || usageData
+            }
+          : {})
+
+      const { toolCalls } = collectResponseOutputSummary(responsePayload)
+      const finishReason = inferChatCompletionFinishReason(responsePayload, toolCalls.length > 0)
+      const delta = toolCalls.length > 0 ? { tool_calls: toolCalls } : {}
+      const usage = convertUsageToChatCompletionUsage(
+        usageOverride || responsePayload.usage || usageData
+      )
+
+      const finalChunk = createChatCompletionChunk({
+        id: streamId,
+        model: responsePayload.model || actualModel || requestedModel || 'gpt-4',
+        delta,
+        finishReason,
+        usage
+      })
+
+      res.write(`data: ${JSON.stringify(finalChunk)}\n\n`)
+      finalChunkSent = true
+    }
+
+    const sendDone = () => {
+      if (doneSent || !isWritableSSEStream(res)) {
+        return
+      }
+      res.write('data: [DONE]\n\n')
+      doneSent = true
+    }
+
+    const maybeMarkRateLimit = async () => {
+      if (!rateLimitDetected) {
+        return
+      }
+
+      const sessionId = req.headers['session_id'] || req.body?.session_id
+      const sessionHash = sessionId
+        ? crypto.createHash('sha256').update(sessionId).digest('hex')
+        : null
+
+      await unifiedOpenAIScheduler.markAccountRateLimited(
+        account.id,
+        'openai-responses',
+        sessionHash,
+        rateLimitResetsInSeconds
+      )
+    }
+
+    const maybeRecordUsage = async () => {
+      if (!usageData || usageReported) {
+        return
+      }
+
+      const totalInputTokens = usageData.input_tokens || usageData.prompt_tokens || 0
+      const outputTokens = usageData.output_tokens || usageData.completion_tokens || 0
+      const cacheReadTokens =
+        usageData.input_tokens_details?.cached_tokens ||
+        usageData.prompt_tokens_details?.cached_tokens ||
+        0
+      const cacheCreateTokens = extractCacheCreationTokens(usageData)
+      const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
+      const totalTokens = usageData.total_tokens || totalInputTokens + outputTokens + cacheCreateTokens
+      const modelToRecord = actualModel || requestedModel || 'gpt-4'
+
+      await apiKeyService.recordUsage(
+        apiKeyData.id,
+        actualInputTokens,
+        outputTokens,
+        cacheCreateTokens,
+        cacheReadTokens,
+        modelToRecord,
+        account.id
+      )
+      await openaiResponsesAccountService.updateAccountUsage(account.id, totalTokens)
+
+      if (parseFloat(account.dailyQuota) > 0) {
+        const CostCalculator = require('../utils/costCalculator')
+        const costInfo = CostCalculator.calculateCost(
+          {
+            input_tokens: actualInputTokens,
+            output_tokens: outputTokens,
+            cache_creation_input_tokens: cacheCreateTokens,
+            cache_read_input_tokens: cacheReadTokens
+          },
+          modelToRecord
+        )
+        await openaiResponsesAccountService.updateUsageQuota(account.id, costInfo.costs.total)
+      }
+
+      usageReported = true
+      logger.info(
+        `📊 Recorded chat-compat stream usage - Input: ${totalInputTokens}(actual:${actualInputTokens}+cached:${cacheReadTokens}), CacheCreate: ${cacheCreateTokens}, Output: ${outputTokens}, Total: ${totalTokens}, Model: ${modelToRecord}`
+      )
+    }
+
+    const processEventBlock = (eventBlock) => {
+      const lines = eventBlock.split('\n')
+      for (const line of lines) {
+        const payload = parseSSEDataLine(line)
+        if (!payload || payload === '[DONE]') {
+          continue
+        }
+
+        const eventData = parseJsonSafely(payload)
+        if (!eventData || typeof eventData !== 'object') {
+          continue
+        }
+
+        const deltaText = extractCodexDeltaFromEventData(eventData)
+        if (deltaText) {
+          sendDeltaChunk(deltaText)
+        }
+
+        if (eventData.error) {
+          if (
+            eventData.error.type === 'rate_limit_error' ||
+            eventData.error.type === 'usage_limit_reached' ||
+            eventData.error.type === 'rate_limit_exceeded'
+          ) {
+            rateLimitDetected = true
+            if (eventData.error.resets_in_seconds) {
+              rateLimitResetsInSeconds = eventData.error.resets_in_seconds
+            }
+          }
+        }
+
+        if (eventData.type === 'response.completed' && eventData.response) {
+          completedResponse = eventData.response
+          if (eventData.response.model) {
+            actualModel = eventData.response.model
+          }
+          if (eventData.response.usage) {
+            usageData = eventData.response.usage
+          }
+          sendFinalChunk(eventData.response.usage || null)
+          sendDone()
+        }
+      }
+    }
+
+    heartbeatTimer = setInterval(sendHeartbeat, heartbeatIntervalMs)
+    if (typeof heartbeatTimer.unref === 'function') {
+      heartbeatTimer.unref()
+    }
+    sendInitialChunk()
+
+    response.data.on('data', (chunk) => {
+      if (streamEnded) {
+        return
+      }
+
+      try {
+        lastDataAt = Date.now()
+        buffer += chunk.toString()
+
+        if (!buffer.includes('\n\n')) {
+          return
+        }
+
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+        for (const eventBlock of events) {
+          if (eventBlock.trim()) {
+            processEventBlock(eventBlock)
+          }
+        }
+      } catch (error) {
+        logger.error('Failed to process OpenAI-Responses chat-compat stream chunk:', error)
+      }
+    })
+
+    response.data.on('end', async () => {
+      if (streamEnded) {
+        return
+      }
+      streamEnded = true
+      clearHeartbeat()
+
+      if (buffer.trim()) {
+        processEventBlock(buffer)
+      }
+
+      try {
+        await maybeRecordUsage()
+      } catch (error) {
+        logger.error('Failed to record chat-compat stream usage:', error)
+      }
+
+      try {
+        await maybeMarkRateLimit()
+      } catch (error) {
+        logger.error('Failed to mark chat-compat stream rate limit:', error)
+      }
+
+      req.removeListener('close', handleClientDisconnect)
+      res.removeListener('close', handleClientDisconnect)
+
+      sendFinalChunk(usageData)
+      sendDone()
+      if (isWritableSSEStream(res)) {
+        res.end()
+      }
+    })
+
+    response.data.on('error', (error) => {
+      if (streamEnded) {
+        return
+      }
+      streamEnded = true
+      clearHeartbeat()
+      logger.error('OpenAI-Responses chat-compat stream error:', error)
+
+      const interruptionReason = resolveStreamInterruptionReasonFromError(
+        error,
+        STREAM_INTERRUPTION_REASONS.UPSTREAM_STREAM_ERROR
+      )
+      recordStreamInterruption(redis, interruptionReason, 'openai-responses')
+
+      req.removeListener('close', handleClientDisconnect)
+      res.removeListener('close', handleClientDisconnect)
+
+      if (!res.headersSent) {
+        res.status(502).json({ error: { message: error?.message || 'Upstream stream error' } })
+      } else if (isWritableSSEStream(res)) {
+        const payload = {
+          error: {
+            message: error?.message || 'Upstream stream error',
+            type: 'stream_error',
+            code: interruptionReason
+          }
+        }
+        res.write(`data: ${JSON.stringify(payload)}\n\n`)
+        sendDone()
+        res.end()
+      }
+    })
+
+    const cleanup = () => {
+      if (streamEnded) {
+        return
+      }
+      streamEnded = true
+      clearHeartbeat()
+      recordStreamInterruption(redis, STREAM_INTERRUPTION_REASONS.CLIENT_ABORT, 'openai-responses')
+      try {
+        response.data?.unpipe?.(res)
+        response.data?.destroy?.()
+      } catch (_) {
+        //
+      }
+    }
     req.on('close', cleanup)
     req.on('aborted', cleanup)
   }
