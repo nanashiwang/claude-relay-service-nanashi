@@ -200,6 +200,551 @@ function sendOpenAIStreamErrorEvent(res, error, source = 'upstream_stream_error'
   }
 }
 
+const OPENAI_COMPAT_MODE_CHAT_COMPLETIONS = 'chat_completions'
+
+function isChatCompletionsCompatMode(req) {
+  return req?._openaiCompatMode === OPENAI_COMPAT_MODE_CHAT_COMPLETIONS
+}
+
+function getChatCompletionsStreamId() {
+  return `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function extractTextFromChatMessageContent(content) {
+  if (typeof content === 'string') {
+    return content
+  }
+
+  if (Array.isArray(content)) {
+    const chunks = []
+    for (const part of content) {
+      if (typeof part === 'string') {
+        chunks.push(part)
+        continue
+      }
+
+      if (!part || typeof part !== 'object') {
+        continue
+      }
+
+      if (typeof part.text === 'string') {
+        chunks.push(part.text)
+        continue
+      }
+
+      if (typeof part.content === 'string') {
+        chunks.push(part.content)
+      }
+    }
+    return chunks.join('')
+  }
+
+  if (content && typeof content === 'object') {
+    if (typeof content.text === 'string') {
+      return content.text
+    }
+
+    if (typeof content.content === 'string') {
+      return content.content
+    }
+  }
+
+  return ''
+}
+
+function normalizeChatRole(role) {
+  const normalizedRole = typeof role === 'string' ? role.toLowerCase().trim() : 'user'
+  if (['system', 'developer', 'user', 'assistant'].includes(normalizedRole)) {
+    return normalizedRole
+  }
+  return normalizedRole === 'tool' ? 'user' : 'user'
+}
+
+function stringifyToolArguments(argumentsPayload) {
+  if (typeof argumentsPayload === 'string') {
+    return argumentsPayload
+  }
+
+  if (argumentsPayload === undefined || argumentsPayload === null) {
+    return '{}'
+  }
+
+  try {
+    return JSON.stringify(argumentsPayload)
+  } catch (_) {
+    return '{}'
+  }
+}
+
+function convertChatMessagesToResponsesInput(messages = []) {
+  if (!Array.isArray(messages)) {
+    return []
+  }
+
+  const input = []
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') {
+      continue
+    }
+
+    const originalRole = typeof message.role === 'string' ? message.role.toLowerCase().trim() : 'user'
+    const role = normalizeChatRole(originalRole)
+    let content = extractTextFromChatMessageContent(message.content)
+
+    if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      const toolCallTexts = message.tool_calls
+        .map((toolCall) => {
+          const toolName = toolCall?.function?.name || 'unknown_tool'
+          const argumentsText = stringifyToolArguments(toolCall?.function?.arguments)
+          return `[tool_call:${toolName}] ${argumentsText}`
+        })
+        .filter(Boolean)
+      if (toolCallTexts.length > 0) {
+        content = content ? `${content}\n${toolCallTexts.join('\n')}` : toolCallTexts.join('\n')
+      }
+    }
+
+    if (originalRole === 'tool') {
+      const toolCallId = message.tool_call_id ? `(${message.tool_call_id})` : ''
+      const toolResult = content || ''
+      content = `Tool result${toolCallId}: ${toolResult}`
+    }
+
+    if (!content && role !== 'assistant') {
+      continue
+    }
+
+    input.push({
+      role,
+      content: content || ''
+    })
+  }
+
+  return input
+}
+
+function normalizeChatToolsForResponses(tools) {
+  if (!Array.isArray(tools)) {
+    return undefined
+  }
+
+  const normalizedTools = []
+  for (const tool of tools) {
+    if (!tool || typeof tool !== 'object') {
+      continue
+    }
+
+    if (tool.type === 'function' && tool.function && typeof tool.function === 'object') {
+      const name = tool.function.name || tool.name
+      if (!name) {
+        continue
+      }
+
+      normalizedTools.push({
+        type: 'function',
+        name,
+        description: tool.function.description || tool.description,
+        parameters: tool.function.parameters || tool.parameters || {}
+      })
+      continue
+    }
+
+    if (tool.type === 'function' && tool.name) {
+      normalizedTools.push(tool)
+      continue
+    }
+
+    normalizedTools.push(tool)
+  }
+
+  return normalizedTools.length > 0 ? normalizedTools : undefined
+}
+
+function normalizeChatToolChoiceForResponses(toolChoice) {
+  if (toolChoice === undefined || toolChoice === null) {
+    return undefined
+  }
+
+  if (typeof toolChoice === 'string') {
+    return toolChoice
+  }
+
+  if (typeof toolChoice !== 'object') {
+    return undefined
+  }
+
+  if (toolChoice.type === 'function') {
+    const name = toolChoice.function?.name || toolChoice.name
+    if (name) {
+      return { type: 'function', name }
+    }
+  }
+
+  return undefined
+}
+
+function convertChatCompletionsRequestToResponses(body = {}) {
+  const sourceBody = body && typeof body === 'object' ? body : {}
+  const converted = {
+    model: sourceBody.model,
+    stream: sourceBody.stream === true
+  }
+
+  const input = convertChatMessagesToResponsesInput(sourceBody.messages)
+  if (input.length > 0) {
+    converted.input = input
+  }
+
+  if (sourceBody.max_output_tokens !== undefined) {
+    converted.max_output_tokens = sourceBody.max_output_tokens
+  } else if (sourceBody.max_tokens !== undefined) {
+    converted.max_output_tokens = sourceBody.max_tokens
+  } else if (sourceBody.max_completion_tokens !== undefined) {
+    converted.max_output_tokens = sourceBody.max_completion_tokens
+  }
+
+  const passthroughKeys = [
+    'temperature',
+    'top_p',
+    'stop',
+    'presence_penalty',
+    'frequency_penalty',
+    'reasoning',
+    'metadata',
+    'parallel_tool_calls',
+    'session_id',
+    'conversation_id',
+    'user',
+    'service_tier'
+  ]
+
+  for (const key of passthroughKeys) {
+    if (sourceBody[key] !== undefined) {
+      converted[key] = sourceBody[key]
+    }
+  }
+
+  const tools = normalizeChatToolsForResponses(sourceBody.tools)
+  if (tools) {
+    converted.tools = tools
+  }
+
+  const toolChoice = normalizeChatToolChoiceForResponses(sourceBody.tool_choice)
+  if (toolChoice !== undefined) {
+    converted.tool_choice = toolChoice
+  }
+
+  return converted
+}
+
+function extractTextFromResponseContentBlocks(content = []) {
+  if (!Array.isArray(content)) {
+    return ''
+  }
+
+  const chunks = []
+  for (const block of content) {
+    if (typeof block === 'string') {
+      chunks.push(block)
+      continue
+    }
+
+    if (!block || typeof block !== 'object') {
+      continue
+    }
+
+    if (typeof block.text === 'string') {
+      chunks.push(block.text)
+      continue
+    }
+
+    if (typeof block.content === 'string') {
+      chunks.push(block.content)
+    }
+  }
+
+  return chunks.join('')
+}
+
+function extractToolCallsFromResponseOutput(output = []) {
+  if (!Array.isArray(output)) {
+    return []
+  }
+
+  const toolCalls = []
+
+  const pushToolCall = (toolCall, index, nestedIndex = null) => {
+    if (!toolCall || typeof toolCall !== 'object') {
+      return
+    }
+
+    const rawName = toolCall.name || toolCall.function?.name
+    if (!rawName) {
+      return
+    }
+
+    const rawArguments =
+      toolCall.arguments ||
+      toolCall.function?.arguments ||
+      toolCall.input ||
+      toolCall.params ||
+      '{}'
+
+    const idFallback =
+      nestedIndex === null ? `call_${index}` : `call_${index}_${nestedIndex}`
+    const toolCallId = toolCall.call_id || toolCall.id || idFallback
+
+    toolCalls.push({
+      id: String(toolCallId),
+      type: 'function',
+      function: {
+        name: rawName,
+        arguments: stringifyToolArguments(rawArguments)
+      }
+    })
+  }
+
+  output.forEach((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return
+    }
+
+    if (item.type === 'function_call' || item.type === 'tool_call') {
+      pushToolCall(item, index)
+      return
+    }
+
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      item.content.forEach((block, nestedIndex) => {
+        if (block?.type === 'function_call' || block?.type === 'tool_call') {
+          pushToolCall(block, index, nestedIndex)
+        }
+      })
+    }
+  })
+
+  return toolCalls
+}
+
+function collectResponseOutputSummary(responsePayload = {}) {
+  const output = Array.isArray(responsePayload?.output)
+    ? responsePayload.output
+    : Array.isArray(responsePayload?.response?.output)
+      ? responsePayload.response.output
+      : []
+
+  let text = ''
+  for (const item of output) {
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+
+    if (item.type === 'message') {
+      text += extractTextFromResponseContentBlocks(item.content)
+      continue
+    }
+
+    if ((item.type === 'output_text' || item.type === 'text') && typeof item.text === 'string') {
+      text += item.text
+      continue
+    }
+
+    if (Array.isArray(item.content)) {
+      text += extractTextFromResponseContentBlocks(item.content)
+    }
+  }
+
+  if (!text && typeof responsePayload?.output_text === 'string') {
+    text = responsePayload.output_text
+  }
+
+  const toolCalls = extractToolCallsFromResponseOutput(output)
+
+  return { text, toolCalls }
+}
+
+function convertUsageToChatCompletionUsage(usageData) {
+  if (!usageData || typeof usageData !== 'object') {
+    return null
+  }
+
+  const promptTokens = Number(usageData.input_tokens ?? usageData.prompt_tokens ?? 0) || 0
+  const completionTokens = Number(usageData.output_tokens ?? usageData.completion_tokens ?? 0) || 0
+  const cacheReadTokens =
+    Number(
+      usageData.input_tokens_details?.cached_tokens ??
+        usageData.prompt_tokens_details?.cached_tokens ??
+        0
+    ) || 0
+  const cacheCreateTokens = extractCacheCreationTokens(usageData)
+  const totalTokens =
+    Number(usageData.total_tokens ?? promptTokens + completionTokens + cacheCreateTokens) || 0
+
+  const usage = {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: totalTokens
+  }
+
+  if (cacheReadTokens > 0 || cacheCreateTokens > 0) {
+    usage.prompt_tokens_details = {
+      cached_tokens: cacheReadTokens,
+      cache_creation_tokens: cacheCreateTokens
+    }
+  }
+
+  return usage
+}
+
+function resolveUnixTimestamp(value, fallback) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.floor(value)
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    const numeric = Number(value)
+    if (Number.isFinite(numeric)) {
+      return Math.floor(numeric)
+    }
+
+    const parsedTime = Date.parse(value)
+    if (!Number.isNaN(parsedTime)) {
+      return Math.floor(parsedTime / 1000)
+    }
+  }
+
+  return fallback
+}
+
+function inferChatCompletionFinishReason(responsePayload, hasToolCalls = false) {
+  if (hasToolCalls) {
+    return 'tool_calls'
+  }
+
+  const rawReason =
+    responsePayload?.stop_reason || responsePayload?.response?.stop_reason || responsePayload?.reason
+  if (typeof rawReason === 'string') {
+    const normalized = rawReason.toLowerCase()
+    if (normalized === 'max_output_tokens' || normalized === 'max_tokens' || normalized === 'length') {
+      return 'length'
+    }
+    if (normalized === 'content_filter') {
+      return 'content_filter'
+    }
+  }
+
+  const status = responsePayload?.status || responsePayload?.response?.status
+  if (status === 'incomplete') {
+    return 'length'
+  }
+
+  return 'stop'
+}
+
+function buildChatCompletionResponse(responseData, requestedModel, usageDataOverride = null) {
+  const source = responseData && typeof responseData === 'object' ? responseData : {}
+  const model = source.model || source.response?.model || requestedModel || 'gpt-4'
+  const rawId = source.id || source.response?.id || `resp_${Date.now()}`
+  const id =
+    typeof rawId === 'string' && rawId.startsWith('chatcmpl-')
+      ? rawId
+      : `chatcmpl-${String(rawId).replace(/[^a-zA-Z0-9_-]/g, '') || Date.now()}`
+
+  const created = resolveUnixTimestamp(
+    source.created || source.created_at || source.response?.created || source.response?.created_at,
+    Math.floor(Date.now() / 1000)
+  )
+
+  const { text, toolCalls } = collectResponseOutputSummary(source)
+  const finishReason = inferChatCompletionFinishReason(source, toolCalls.length > 0)
+  const message = {
+    role: 'assistant',
+    content: text || (toolCalls.length > 0 ? null : '')
+  }
+
+  if (toolCalls.length > 0) {
+    message.tool_calls = toolCalls
+  }
+
+  const result = {
+    id,
+    object: 'chat.completion',
+    created,
+    model,
+    choices: [
+      {
+        index: 0,
+        message,
+        finish_reason: finishReason
+      }
+    ]
+  }
+
+  const usageData = usageDataOverride || source.usage || source.response?.usage
+  const usage = convertUsageToChatCompletionUsage(usageData)
+  if (usage) {
+    result.usage = usage
+  }
+
+  return result
+}
+
+function createChatCompletionChunk({
+  id,
+  model,
+  delta = {},
+  finishReason = null,
+  usage = null,
+  created = Math.floor(Date.now() / 1000)
+}) {
+  const chunk = {
+    id: id || getChatCompletionsStreamId(),
+    object: 'chat.completion.chunk',
+    created,
+    model: model || 'gpt-4',
+    choices: [
+      {
+        index: 0,
+        delta: delta && typeof delta === 'object' ? delta : {},
+        finish_reason: finishReason
+      }
+    ]
+  }
+
+  if (usage && typeof usage === 'object') {
+    chunk.usage = usage
+  }
+
+  return chunk
+}
+
+function extractCodexDeltaFromEventData(eventData) {
+  if (!eventData || typeof eventData !== 'object') {
+    return ''
+  }
+
+  if (eventData.type === 'response.output_text.delta' && typeof eventData.delta === 'string') {
+    return eventData.delta
+  }
+
+  if (
+    eventData.type === 'response.output_item.delta' &&
+    typeof eventData.delta?.text === 'string'
+  ) {
+    return eventData.delta.text
+  }
+
+  if (eventData.type === 'content_block_delta' && typeof eventData.delta?.text === 'string') {
+    return eventData.delta.text
+  }
+
+  if (typeof eventData.text === 'string') {
+    return eventData.text
+  }
+
+  return ''
+}
+
 async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel = null) {
   try {
     // 生成会话哈希（如果有会话ID）
@@ -361,8 +906,12 @@ const handleResponses = async (req, res) => {
 
     sessionHash = sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : null
 
+    const isChatCompletionsCompat = isChatCompletionsCompatMode(req)
+    const originalRequestBody =
+      req.body && typeof req.body === 'object' ? { ...req.body } : req.body
+
     // 从请求体中提取模型和流式标志
-    let requestedModel = req.body?.model || null
+    let requestedModel = originalRequestBody?.model || null
     const isCodexModel =
       typeof requestedModel === 'string' && requestedModel.toLowerCase().includes('codex')
 
@@ -370,10 +919,15 @@ const handleResponses = async (req, res) => {
     if (requestedModel && requestedModel.startsWith('gpt-5-') && !isCodexModel) {
       logger.info(`📝 Model ${requestedModel} detected, normalizing to gpt-5 for Codex API`)
       requestedModel = 'gpt-5'
-      req.body.model = 'gpt-5' // 同时更新请求体中的模型
+      if (req.body && typeof req.body === 'object') {
+        req.body.model = 'gpt-5' // 同时更新请求体中的模型
+      }
+      if (originalRequestBody && typeof originalRequestBody === 'object') {
+        originalRequestBody.model = 'gpt-5'
+      }
     }
 
-    const isStream = req.body?.stream !== false // 默认为流式（兼容现有行为）
+    const isStream = isChatCompletionsCompat ? req.body?.stream === true : req.body?.stream !== false
 
     // 判断是否为 Codex CLI 的请求（基于 User-Agent）
     const userAgent = req.headers['user-agent'] || ''
@@ -381,7 +935,7 @@ const handleResponses = async (req, res) => {
     const isCodexCLI = codexCliPattern.test(userAgent)
 
     // 如果不是 Codex CLI 请求，则进行适配
-    if (!isCodexCLI) {
+    if (!isCodexCLI && !isChatCompletionsCompat) {
       // 移除不需要的请求体字段
       const fieldsToRemove = [
         'temperature',
@@ -402,6 +956,8 @@ const handleResponses = async (req, res) => {
         "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.\n\n## General\n\n- When searching for text or files, prefer using `rg` or `rg --files` respectively because `rg` is much faster than alternatives like `grep`. (If the `rg` command is not found, then use alternatives.)\n\n## Editing constraints\n\n- Default to ASCII when editing or creating files. Only introduce non-ASCII or other Unicode characters when there is a clear justification and the file already uses them.\n- Add succinct code comments that explain what is going on if code is not self-explanatory. You should not add comments like \"Assigns the value to the variable\", but a brief comment might be useful ahead of a complex code block that the user would otherwise have to spend time parsing out. Usage of these comments should be rare.\n- Try to use apply_patch for single file edits, but it is fine to explore other options to make the edit if it does not work well. Do not use apply_patch for changes that are auto-generated (i.e. generating package.json or running a lint or format command like gofmt) or when scripting is more efficient (such as search and replacing a string across a codebase).\n- You may be in a dirty git worktree.\n    * NEVER revert existing changes you did not make unless explicitly requested, since these changes were made by the user.\n    * If asked to make a commit or code edits and there are unrelated changes to your work or changes that you didn't make in those files, don't revert those changes.\n    * If the changes are in files you've touched recently, you should read carefully and understand how you can work with the changes rather than reverting them.\n    * If the changes are in unrelated files, just ignore them and don't revert them.\n- Do not amend a commit unless explicitly requested to do so.\n- While you are working, you might notice unexpected changes that you didn't make. If this happens, STOP IMMEDIATELY and ask the user how they would like to proceed.\n- **NEVER** use destructive commands like `git reset --hard` or `git checkout --` unless specifically requested or approved by the user.\n\n## Plan tool\n\nWhen using the planning tool:\n- Skip using the planning tool for straightforward tasks (roughly the easiest 25%).\n- Do not make single-step plans.\n- When you made a plan, update it after having performed one of the sub-tasks that you shared on the plan.\n\n## Codex CLI harness, sandboxing, and approvals\n\nThe Codex CLI harness supports several different configurations for sandboxing and escalation approvals that the user can choose from.\n\nFilesystem sandboxing defines which files can be read or written. The options for `sandbox_mode` are:\n- **read-only**: The sandbox only permits reading files.\n- **workspace-write**: The sandbox permits reading files, and editing files in `cwd` and `writable_roots`. Editing files in other directories requires approval.\n- **danger-full-access**: No filesystem sandboxing - all commands are permitted.\n\nNetwork sandboxing defines whether network can be accessed without approval. Options for `network_access` are:\n- **restricted**: Requires approval\n- **enabled**: No approval needed\n\nApprovals are your mechanism to get user consent to run shell commands without the sandbox. Possible configuration options for `approval_policy` are\n- **untrusted**: The harness will escalate most commands for user approval, apart from a limited allowlist of safe \"read\" commands.\n- **on-failure**: The harness will allow all commands to run in the sandbox (if enabled), and failures will be escalated to the user for approval to run again without the sandbox.\n- **on-request**: Commands will be run in the sandbox by default, and you can specify in your tool call if you want to escalate a command to run without sandboxing. (Note that this mode is not always available. If it is, you'll see parameters for it in the `shell` command description.)\n- **never**: This is a non-interactive mode where you may NEVER ask the user for approval to run commands. Instead, you must always persist and work around constraints to solve the task for the user. You MUST do your utmost best to finish the task and validate your work before yielding. If this mode is paired with `danger-full-access`, take advantage of it to deliver the best outcome for the user. Further, in this mode, your default testing philosophy is overridden: Even if you don't see local patterns for testing, you may add tests and scripts to validate your work. Just remove them before yielding.\n\nWhen you are running with `approval_policy == on-request`, and sandboxing enabled, here are scenarios where you'll need to request approval:\n- You need to run a command that writes to a directory that requires it (e.g. running tests that write to /var)\n- You need to run a GUI app (e.g., open/xdg-open/osascript) to open browsers or files.\n- You are running sandboxed and need to run a command that requires network access (e.g. installing packages)\n- If you run a command that is important to solving the user's query, but it fails because of sandboxing, rerun the command with approval. ALWAYS proceed to use the `with_escalated_permissions` and `justification` parameters - do not message the user before requesting approval for the command.\n- You are about to take a potentially destructive action such as an `rm` or `git reset` that the user did not explicitly ask for\n- (for all of these, you should weigh alternative paths that do not require approval)\n\nWhen `sandbox_mode` is set to read-only, you'll need to request approval for any command that isn't a read.\n\nYou will be told what filesystem sandboxing, network sandboxing, and approval mode are active in a developer or user message. If you are not told about this, assume that you are running with workspace-write, network sandboxing enabled, and approval on-failure.\n\nAlthough they introduce friction to the user because your work is paused until the user responds, you should leverage them when necessary to accomplish important work. If the completing the task requires escalated permissions, Do not let these settings or the sandbox deter you from attempting to accomplish the user's task unless it is set to \"never\", in which case never ask for approvals.\n\nWhen requesting approval to execute a command that will require escalated privileges:\n  - Provide the `with_escalated_permissions` parameter with the boolean value true\n  - Include a short, 1 sentence explanation for why you need to enable `with_escalated_permissions` in the justification parameter\n\n## Special user requests\n\n- If the user makes a simple request (such as asking for the time) which you can fulfill by running a terminal command (such as `date`), you should do so.\n- If the user asks for a \"review\", default to a code review mindset: prioritise identifying bugs, risks, behavioural regressions, and missing tests. Findings must be the primary focus of the response - keep summaries or overviews brief and only after enumerating the issues. Present findings first (ordered by severity with file/line references), follow with open questions or assumptions, and offer a change-summary only as a secondary detail. If no findings are discovered, state that explicitly and mention any residual risks or testing gaps.\n\n## Frontend tasks\nWhen doing frontend design tasks, avoid collapsing into \"AI slop\" or safe, average-looking layouts.\nAim for interfaces that feel intentional, bold, and a bit surprising.\n- Typography: Use expressive, purposeful fonts and avoid default stacks (Inter, Roboto, Arial, system).\n- Color & Look: Choose a clear visual direction; define CSS variables; avoid purple-on-white defaults. No purple bias or dark mode bias.\n- Motion: Use a few meaningful animations (page-load, staggered reveals) instead of generic micro-motions.\n- Background: Don't rely on flat, single-color backgrounds; use gradients, shapes, or subtle patterns to build atmosphere.\n- Overall: Avoid boilerplate layouts and interchangeable UI patterns. Vary themes, type families, and visual languages across outputs.\n- Ensure the page loads properly on both desktop and mobile\n\nException: If working within an existing website or design system, preserve the established patterns, structure, and visual language.\n\n## Presenting your work and final message\n\nYou are producing plain text that will later be styled by the CLI. Follow these rules exactly. Formatting should make results easy to scan, but not feel mechanical. Use judgment to decide how much structure adds value.\n\n- Default: be very concise; friendly coding teammate tone.\n- Ask only when needed; suggest ideas; mirror the user's style.\n- For substantial work, summarize clearly; follow final‑answer formatting.\n- Skip heavy formatting for simple confirmations.\n- Don't dump large files you've written; reference paths only.\n- No \"save/copy this file\" - User is on the same machine.\n- Offer logical next steps (tests, commits, build) briefly; add verify steps if you couldn't do something.\n- For code changes:\n  * Lead with a quick explanation of the change, and then give more details on the context covering where and why a change was made. Do not start this explanation with \"summary\", just jump right in.\n  * If there are natural next steps the user may want to take, suggest them at the end of your response. Do not make suggestions if there are no natural next steps.\n  * When suggesting multiple options, use numeric lists for the suggestions so the user can quickly respond with a single number.\n- The user does not command execution outputs. When asked to show the output of a command (e.g. `git show`), relay the important details in your answer or summarize the key lines so the user understands the result.\n\n### Final answer structure and style guidelines\n\n- Plain text; CLI handles styling. Use structure only when it helps scanability.\n- Headers: optional; short Title Case (1-3 words) wrapped in **…**; no blank line before the first bullet; add only if they truly help.\n- Bullets: use - ; merge related points; keep to one line when possible; 4–6 per list ordered by importance; keep phrasing consistent.\n- Monospace: backticks for commands/paths/env vars/code ids and inline examples; use for literal keyword bullets; never combine with **.\n- Code samples or multi-line snippets should be wrapped in fenced code blocks; include an info string as often as possible.\n- Structure: group related bullets; order sections general → specific → supporting; for subsections, start with a bolded keyword bullet, then items; match complexity to the task.\n- Tone: collaborative, concise, factual; present tense, active voice; self‑contained; no \"above/below\"; parallel wording.\n- Don'ts: no nested bullets/hierarchies; no ANSI codes; don't cram unrelated keywords; keep keyword lists short—wrap/reformat if long; avoid naming formatting styles in answers.\n- Adaptation: code explanations → precise, structured with code refs; simple tasks → lead with outcome; big changes → logical walkthrough + rationale + next actions; casual one-offs → plain sentences, no headers/bullets.\n- File References: When referencing files in your response follow the below rules:\n  * Use inline code to make file paths clickable.\n  * Each reference should have a stand alone path. Even if it's the same file.\n  * Accepted: absolute, workspace‑relative, a/ or b/ diff prefixes, or bare filename/suffix.\n  * Optionally include line/column (1‑based): :line[:column] or #Lline[Ccolumn] (column defaults to 1).\n  * Do not use URIs like file://, vscode://, or https://.\n  * Do not provide range of lines\n  * Examples: src/app.ts, src/app.ts:42, b/server/index.js#L10, C:\\repo\\project\\main.rs:12:5\n"
 
       logger.info('📝 Non-Codex CLI request detected, applying Codex CLI adaptation')
+    } else if (isChatCompletionsCompat) {
+      logger.info('✅ Chat Completions compatibility mode enabled for OpenAI relay')
     } else {
       logger.info('✅ Codex CLI request detected, forwarding as-is')
     }
@@ -416,6 +972,13 @@ const handleResponses = async (req, res) => {
       sessionId,
       requestedModel
     ))
+
+    if (isChatCompletionsCompat) {
+      req.body =
+        accountType === 'openai-responses'
+          ? { ...(originalRequestBody || {}) }
+          : convertChatCompletionsRequestToResponses(originalRequestBody || {})
+    }
 
     // 如果是 OpenAI-Responses 账户，使用专门的中继服务处理
     if (accountType === 'openai-responses') {
@@ -755,8 +1318,8 @@ const handleResponses = async (req, res) => {
         const responseData = upstream.data
 
         // 从响应中获取实际的 model 和 usage
-        actualModel = responseData.model || requestedModel || 'gpt-4'
-        usageData = responseData.usage
+        actualModel = responseData.model || responseData.response?.model || requestedModel || 'gpt-4'
+        usageData = responseData.usage || responseData.response?.usage
 
         logger.debug(`📊 Non-stream response - Model: ${actualModel}, Usage:`, usageData)
 
@@ -800,7 +1363,16 @@ const handleResponses = async (req, res) => {
         }
 
         // 返回响应
-        res.json(responseData)
+        if (isChatCompletionsCompat) {
+          const chatCompletionResponse = buildChatCompletionResponse(
+            responseData,
+            actualModel || requestedModel,
+            usageData
+          )
+          res.json(chatCompletionResponse)
+        } else {
+          res.json(responseData)
+        }
         return
       } catch (error) {
         logger.error('Failed to process non-stream response:', error)
@@ -845,6 +1417,131 @@ const handleResponses = async (req, res) => {
     heartbeatTimer = setInterval(sendHeartbeat, heartbeatIntervalMs)
     if (typeof heartbeatTimer.unref === 'function') {
       heartbeatTimer.unref()
+    }
+
+    const chatCompatStreamId = isChatCompletionsCompat ? getChatCompletionsStreamId() : null
+    let chatCompatInitialChunkSent = false
+    let chatCompatFinalChunkSent = false
+    let chatCompatDoneSent = false
+    let chatCompatCompletedResponse = null
+
+    const sendChatCompatInitialChunk = () => {
+      if (!isChatCompletionsCompat || chatCompatInitialChunkSent || !isWritableSSEStream(res)) {
+        return
+      }
+
+      const chunk = createChatCompletionChunk({
+        id: chatCompatStreamId,
+        model: actualModel || requestedModel || 'gpt-4',
+        delta: { role: 'assistant' },
+        finishReason: null
+      })
+
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+      chatCompatInitialChunkSent = true
+    }
+
+    const sendChatCompatDeltaChunk = (deltaText) => {
+      if (!isChatCompletionsCompat || !deltaText || !isWritableSSEStream(res)) {
+        return
+      }
+
+      sendChatCompatInitialChunk()
+      const chunk = createChatCompletionChunk({
+        id: chatCompatStreamId,
+        model: actualModel || requestedModel || 'gpt-4',
+        delta: { content: deltaText },
+        finishReason: null
+      })
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+    }
+
+    const sendChatCompatFinalChunk = (usageOverride = null) => {
+      if (!isChatCompletionsCompat || chatCompatFinalChunkSent || !isWritableSSEStream(res)) {
+        return
+      }
+
+      sendChatCompatInitialChunk()
+
+      const responsePayload =
+        chatCompatCompletedResponse ||
+        (actualModel || usageData
+          ? {
+              model: actualModel || requestedModel || 'gpt-4',
+              usage: usageOverride || usageData
+            }
+          : {})
+
+      const { toolCalls } = collectResponseOutputSummary(responsePayload)
+      const finishReason = inferChatCompletionFinishReason(responsePayload, toolCalls.length > 0)
+      const delta = toolCalls.length > 0 ? { tool_calls: toolCalls } : {}
+      const usage = convertUsageToChatCompletionUsage(
+        usageOverride || responsePayload.usage || usageData
+      )
+
+      const chunk = createChatCompletionChunk({
+        id: chatCompatStreamId,
+        model: responsePayload.model || actualModel || requestedModel || 'gpt-4',
+        delta,
+        finishReason,
+        usage
+      })
+
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+      chatCompatFinalChunkSent = true
+    }
+
+    const sendChatCompatDone = () => {
+      if (!isChatCompletionsCompat || chatCompatDoneSent || !isWritableSSEStream(res)) {
+        return
+      }
+
+      res.write('data: [DONE]\n\n')
+      chatCompatDoneSent = true
+    }
+
+    const forwardChatCompatEventBlock = (eventBlock) => {
+      if (!isChatCompletionsCompat) {
+        return
+      }
+
+      const lines = eventBlock.split('\n')
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) {
+          continue
+        }
+
+        const jsonPayload = line.slice(6).trim()
+        if (!jsonPayload) {
+          continue
+        }
+
+        if (jsonPayload === '[DONE]') {
+          continue
+        }
+
+        try {
+          const eventData = JSON.parse(jsonPayload)
+          const deltaText = extractCodexDeltaFromEventData(eventData)
+          if (deltaText) {
+            sendChatCompatDeltaChunk(deltaText)
+          }
+
+          if (eventData.type === 'response.completed' && eventData.response) {
+            chatCompatCompletedResponse = eventData.response
+            if (eventData.response.model) {
+              actualModel = eventData.response.model
+            }
+            if (eventData.response.usage) {
+              usageData = eventData.response.usage
+            }
+            sendChatCompatFinalChunk(eventData.response.usage || null)
+            sendChatCompatDone()
+          }
+        } catch (_) {
+          // 忽略解析错误
+        }
+      }
     }
 
     const parseSSEForUsage = (data) => {
@@ -893,13 +1590,17 @@ const handleResponses = async (req, res) => {
       }
     }
 
+    if (isChatCompletionsCompat) {
+      sendChatCompatInitialChunk()
+    }
+
     upstream.data.on('data', (chunk) => {
       try {
         lastDataAt = Date.now()
         const chunkStr = chunk.toString()
 
         // 转发数据给客户端
-        if (!res.destroyed) {
+        if (!isChatCompletionsCompat && !res.destroyed) {
           res.write(chunk)
         }
 
@@ -914,6 +1615,7 @@ const handleResponses = async (req, res) => {
           for (const event of events) {
             if (event.trim()) {
               parseSSEForUsage(event)
+              forwardChatCompatEventBlock(event)
             }
           }
         }
@@ -931,6 +1633,7 @@ const handleResponses = async (req, res) => {
       // 处理剩余的 buffer
       if (buffer.trim()) {
         parseSSEForUsage(buffer)
+        forwardChatCompatEventBlock(buffer)
       }
 
       // 记录使用统计
@@ -1000,6 +1703,11 @@ const handleResponses = async (req, res) => {
         }
       }
 
+      if (isChatCompletionsCompat) {
+        sendChatCompatFinalChunk(usageData)
+        sendChatCompatDone()
+      }
+
       if (isWritableSSEStream(res)) {
         res.end()
       }
@@ -1025,7 +1733,19 @@ const handleResponses = async (req, res) => {
         return
       }
 
-      sendOpenAIStreamErrorEvent(res, err, interruptionReason)
+      if (isChatCompletionsCompat && isWritableSSEStream(res)) {
+        const errorPayload = {
+          error: {
+            message: err?.message || 'Upstream stream error',
+            type: 'stream_error',
+            code: interruptionReason
+          }
+        }
+        res.write(`data: ${JSON.stringify(errorPayload)}\n\n`)
+        sendChatCompatDone()
+      } else {
+        sendOpenAIStreamErrorEvent(res, err, interruptionReason)
+      }
       if (isWritableSSEStream(res)) {
         res.end()
       }

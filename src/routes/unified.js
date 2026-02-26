@@ -71,6 +71,7 @@ async function routeToBackend(req, res, requestedModel) {
         }
       })
     }
+    req._openaiCompatMode = 'chat_completions'
     return await openaiRoutes.handleResponses(req, res)
   } else if (backend === 'gemini') {
     // Gemini 后端
@@ -112,7 +113,7 @@ async function routeToBackend(req, res, requestedModel) {
 }
 
 // 🔄 OpenAI 兼容的 chat/completions 端点（智能后端路由）
-router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
+router.post(['/v1/chat/completions', '/chat/completions'], authenticateApiKey, async (req, res) => {
   try {
     // 验证必需参数
     if (!req.body.messages || !Array.isArray(req.body.messages) || req.body.messages.length === 0) {
@@ -145,7 +146,7 @@ router.post('/v1/chat/completions', authenticateApiKey, async (req, res) => {
 })
 
 // 🔄 OpenAI 兼容的 completions 端点（传统格式，智能后端路由）
-router.post('/v1/completions', authenticateApiKey, async (req, res) => {
+router.post(['/v1/completions', '/completions'], authenticateApiKey, async (req, res) => {
   try {
     // 验证必需参数
     if (!req.body.prompt) {
