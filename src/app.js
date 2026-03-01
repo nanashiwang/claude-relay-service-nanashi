@@ -4,6 +4,8 @@ const helmet = require('helmet')
 const compression = require('compression')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
+const cluster = require('cluster')
 const bcrypt = require('bcryptjs')
 
 const config = require('../config/config')
@@ -40,9 +42,13 @@ const {
 const { browserFallbackMiddleware } = require('./middleware/browserFallback')
 
 class Application {
-  constructor() {
+  constructor(options = {}) {
     this.app = express()
     this.server = null
+    this.backgroundTasksEnabled =
+      options.backgroundTasksEnabled !== undefined
+        ? options.backgroundTasksEnabled
+        : process.env.ENABLE_BACKGROUND_TASKS !== 'false'
   }
 
   async initialize() {
@@ -569,7 +575,11 @@ class Application {
       logger.info(`⏱️  Server timeout set to ${serverTimeout}ms (${serverTimeout / 1000}s)`)
 
       // 🔄 定期清理任务
-      this.startCleanupTasks()
+      if (this.backgroundTasksEnabled) {
+        this.startCleanupTasks()
+      } else {
+        logger.info('⏭️ Background cleanup tasks disabled for this worker')
+      }
 
       // 🛑 优雅关闭
       this.setupGracefulShutdown()
@@ -798,55 +808,59 @@ class Application {
             logger.error('❌ Error cleaning up model service:', error)
           }
 
-          // 停止限流清理服务
-          try {
-            const rateLimitCleanupService = require('./services/rateLimitCleanupService')
-            rateLimitCleanupService.stop()
-            logger.info('🚨 Rate limit cleanup service stopped')
-          } catch (error) {
-            logger.error('❌ Error stopping rate limit cleanup service:', error)
-          }
-
-          // 停止用户消息队列清理服务
-          try {
-            const userMessageQueueService = require('./services/userMessageQueueService')
-            userMessageQueueService.stopCleanupTask()
-            logger.info('📬 User message queue service stopped')
-          } catch (error) {
-            logger.error('❌ Error stopping user message queue service:', error)
-          }
-
-          // 停止费用排序索引服务
-          try {
-            const costRankService = require('./services/costRankService')
-            costRankService.shutdown()
-            logger.info('📊 Cost rank service stopped')
-          } catch (error) {
-            logger.error('❌ Error stopping cost rank service:', error)
-          }
-
-          // 停止账户定时测试调度器
-          try {
-            const accountTestSchedulerService = require('./services/accountTestSchedulerService')
-            accountTestSchedulerService.stop()
-            logger.info('🧪 Account test scheduler service stopped')
-          } catch (error) {
-            logger.error('❌ Error stopping account test scheduler service:', error)
-          }
-
-          // 🔢 清理所有并发计数（Phase 1 修复：防止重启泄漏）
-          try {
-            logger.info('🔢 Cleaning up all concurrency counters...')
-            const keys = await redis.keys('concurrency:*')
-            if (keys.length > 0) {
-              await redis.client.del(...keys)
-              logger.info(`✅ Cleaned ${keys.length} concurrency keys`)
-            } else {
-              logger.info('✅ No concurrency keys to clean')
+          if (this.backgroundTasksEnabled) {
+            // 停止限流清理服务
+            try {
+              const rateLimitCleanupService = require('./services/rateLimitCleanupService')
+              rateLimitCleanupService.stop()
+              logger.info('🚨 Rate limit cleanup service stopped')
+            } catch (error) {
+              logger.error('❌ Error stopping rate limit cleanup service:', error)
             }
-          } catch (error) {
-            logger.error('❌ Error cleaning up concurrency counters:', error)
-            // 不阻止退出流程
+
+            // 停止用户消息队列清理服务
+            try {
+              const userMessageQueueService = require('./services/userMessageQueueService')
+              userMessageQueueService.stopCleanupTask()
+              logger.info('📬 User message queue service stopped')
+            } catch (error) {
+              logger.error('❌ Error stopping user message queue service:', error)
+            }
+
+            // 停止费用排序索引服务
+            try {
+              const costRankService = require('./services/costRankService')
+              costRankService.shutdown()
+              logger.info('📊 Cost rank service stopped')
+            } catch (error) {
+              logger.error('❌ Error stopping cost rank service:', error)
+            }
+
+            // 停止账户定时测试调度器
+            try {
+              const accountTestSchedulerService = require('./services/accountTestSchedulerService')
+              accountTestSchedulerService.stop()
+              logger.info('🧪 Account test scheduler service stopped')
+            } catch (error) {
+              logger.error('❌ Error stopping account test scheduler service:', error)
+            }
+
+            // 🔢 清理所有并发计数（Phase 1 修复：防止重启泄漏）
+            try {
+              logger.info('🔢 Cleaning up all concurrency counters...')
+              const keys = await redis.keys('concurrency:*')
+              if (keys.length > 0) {
+                await redis.client.del(...keys)
+                logger.info(`✅ Cleaned ${keys.length} concurrency keys`)
+              } else {
+                logger.info('✅ No concurrency keys to clean')
+              }
+            } catch (error) {
+              logger.error('❌ Error cleaning up concurrency counters:', error)
+              // 不阻止退出流程
+            }
+          } else {
+            logger.info('⏭️ Skip scheduler cleanup on non-leader worker')
           }
 
           try {
@@ -888,11 +902,97 @@ class Application {
 
 // 启动应用
 if (require.main === module) {
-  const app = new Application()
-  app.start().catch((error) => {
-    logger.error('💥 Application startup failed:', error)
-    process.exit(1)
-  })
+  const clusterMode = process.env.CLUSTER_MODE === 'true'
+
+  const getWorkerCount = () => {
+    const parallelism =
+      typeof os.availableParallelism === 'function' ? os.availableParallelism() : os.cpus().length
+    const envValue = process.env.CLUSTER_WORKERS
+    if (!envValue || envValue === 'auto') {
+      return Math.max(1, parallelism)
+    }
+    const parsed = parseInt(envValue, 10)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return Math.max(1, parallelism)
+    }
+    return parsed
+  }
+
+  if (clusterMode && cluster.isPrimary) {
+    const workerCount = getWorkerCount()
+    let leaderWorkerId = null
+    let shuttingDown = false
+
+    const forkWorker = (isLeader = false) => {
+      const worker = cluster.fork({
+        ...process.env,
+        ENABLE_BACKGROUND_TASKS: isLeader ? 'true' : 'false',
+        CLUSTER_WORKER_ROLE: isLeader ? 'leader' : 'worker'
+      })
+      if (isLeader) {
+        leaderWorkerId = worker.id
+      }
+      return worker
+    }
+
+    logger.start(`🚀 Cluster mode enabled, starting ${workerCount} workers`)
+    for (let i = 0; i < workerCount; i++) {
+      forkWorker(i === 0)
+    }
+
+    cluster.on('online', (worker) => {
+      const role = worker.id === leaderWorkerId ? 'leader' : 'worker'
+      logger.info(`👷 Worker online: id=${worker.id}, pid=${worker.process.pid}, role=${role}`)
+    })
+
+    cluster.on('exit', (worker, code, signal) => {
+      if (shuttingDown) {
+        logger.info(`🛑 Worker exited during shutdown: id=${worker.id}, pid=${worker.process.pid}`)
+        return
+      }
+
+      const wasLeader = worker.id === leaderWorkerId
+      logger.warn(
+        `⚠️ Worker exited: id=${worker.id}, pid=${worker.process.pid}, code=${code}, signal=${signal}`
+      )
+
+      if (wasLeader) {
+        leaderWorkerId = null
+      }
+
+      const replacementIsLeader = wasLeader || leaderWorkerId === null
+      const replacement = forkWorker(replacementIsLeader)
+      logger.info(
+        `♻️ Worker restarted: old=${worker.id}, new=${replacement.id}, leader=${replacementIsLeader}`
+      )
+    })
+
+    const shutdownPrimary = (signal) => {
+      if (shuttingDown) {
+        return
+      }
+      shuttingDown = true
+      logger.info(`🛑 Primary received ${signal}, stopping all workers...`)
+      for (const id in cluster.workers) {
+        const worker = cluster.workers[id]
+        if (worker && !worker.isDead()) {
+          worker.process.kill('SIGTERM')
+        }
+      }
+      setTimeout(() => process.exit(0), 10000)
+    }
+
+    process.on('SIGINT', () => shutdownPrimary('SIGINT'))
+    process.on('SIGTERM', () => shutdownPrimary('SIGTERM'))
+  } else {
+    const app = new Application({
+      backgroundTasksEnabled: process.env.ENABLE_BACKGROUND_TASKS !== 'false'
+    })
+    app.start().catch((error) => {
+      logger.error('💥 Application startup failed:', error)
+      process.exit(1)
+    })
+  }
 }
 
 module.exports = Application

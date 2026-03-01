@@ -18,6 +18,26 @@ const { formatAccountExpiry, mapExpiryField } = require('./utils')
 
 const router = express.Router()
 
+function parseBooleanQuery(value, defaultValue = true) {
+  if (value === undefined || value === null || value === '') {
+    return defaultValue
+  }
+
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  const normalized = String(value).trim().toLowerCase()
+  if (normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on') {
+    return true
+  }
+  if (normalized === '0' || normalized === 'false' || normalized === 'no' || normalized === 'off') {
+    return false
+  }
+
+  return defaultValue
+}
+
 // OpenAI OAuth 配置
 const OPENAI_CONFIG = {
   BASE_URL: 'https://auth.openai.com',
@@ -230,11 +250,18 @@ router.post('/exchange-code', authenticateAdmin, async (req, res) => {
 router.get('/', authenticateAdmin, async (req, res) => {
   try {
     const { platform, groupId } = req.query
+    const includeUsage = parseBooleanQuery(req.query.includeUsage, true)
+    const includeGroups = parseBooleanQuery(req.query.includeGroups, true)
+    const includeUsageCost = parseBooleanQuery(req.query.includeUsageCost, true)
+    const shouldLoadGroups = includeGroups || groupId === 'ungrouped'
     let accounts = await openaiAccountService.getAllAccounts()
 
     // 缓存账户所属分组，避免重复查询
     const accountGroupCache = new Map()
     const fetchAccountGroups = async (accountId) => {
+      if (!shouldLoadGroups) {
+        return []
+      }
       if (!accountGroupCache.has(accountId)) {
         const groups = await accountGroupService.getAccountGroups(accountId)
         accountGroupCache.set(accountId, groups || [])
@@ -271,21 +298,25 @@ router.get('/', authenticateAdmin, async (req, res) => {
     const accountsWithStats = await Promise.all(
       accounts.map(async (account) => {
         try {
-          const usageStats = await redis.getAccountUsageStats(account.id, 'openai')
-          const groupInfos = await fetchAccountGroups(account.id)
+          const usageStats = includeUsage
+            ? await redis.getAccountUsageStats(account.id, 'openai', {
+                includeCost: includeUsageCost
+              })
+            : null
+          const groupInfos = includeGroups ? await fetchAccountGroups(account.id) : []
           const formattedAccount = formatAccountExpiry(account)
           return {
             ...formattedAccount,
             groupInfos,
             usage: {
-              daily: usageStats.daily,
-              total: usageStats.total,
-              monthly: usageStats.monthly
+              daily: usageStats?.daily || { requests: 0, tokens: 0, allTokens: 0 },
+              total: usageStats?.total || { requests: 0, tokens: 0, allTokens: 0 },
+              monthly: usageStats?.monthly || { requests: 0, tokens: 0, allTokens: 0 }
             }
           }
         } catch (error) {
           logger.debug(`Failed to get usage stats for OpenAI account ${account.id}:`, error)
-          const groupInfos = await fetchAccountGroups(account.id)
+          const groupInfos = includeGroups ? await fetchAccountGroups(account.id) : []
           const formattedAccount = formatAccountExpiry(account)
           return {
             ...formattedAccount,

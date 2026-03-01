@@ -3100,6 +3100,8 @@ const loadAccounts = async (forceReload = false) => {
     if (groupFilter.value !== 'all') {
       params.groupId = groupFilter.value
     }
+    // 列表场景仅需轻量 usage，避免触发昂贵的按模型成本扫描
+    params.includeUsageCost = false
 
     const platformsToFetch = getPlatformsForFilter(platformFilter.value)
 

@@ -577,6 +577,11 @@ const removeTag = (index) => {
 const refreshAccounts = async () => {
   accountsLoading.value = true
   try {
+    const lightweightAccountParams = {
+      includeUsage: false,
+      includeGroups: false,
+      includeUsageCost: false
+    }
     const [
       claudeData,
       claudeConsoleData,
@@ -588,14 +593,14 @@ const refreshAccounts = async () => {
       droidData,
       groupsData
     ] = await Promise.all([
-      apiClient.get('/admin/claude-accounts'),
-      apiClient.get('/admin/claude-console-accounts'),
-      apiClient.get('/admin/gemini-accounts'),
-      apiClient.get('/admin/gemini-api-accounts'), // 获取 Gemini-API 账号
-      apiClient.get('/admin/openai-accounts'),
-      apiClient.get('/admin/openai-responses-accounts'),
-      apiClient.get('/admin/bedrock-accounts'),
-      apiClient.get('/admin/droid-accounts'),
+      apiClient.get('/admin/claude-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/claude-console-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/gemini-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/gemini-api-accounts', { params: lightweightAccountParams }), // 获取 Gemini-API 账号
+      apiClient.get('/admin/openai-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/openai-responses-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/bedrock-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/droid-accounts', { params: lightweightAccountParams }),
       apiClient.get('/admin/account-groups')
     ])
 

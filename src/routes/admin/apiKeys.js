@@ -708,13 +708,7 @@ router.get('/api-keys/tags', authenticateAdmin, async (req, res) => {
 router.get('/accounts/binding-counts', authenticateAdmin, async (req, res) => {
   try {
     // 使用优化的分页方法获取所有非删除的 API Keys（只需要绑定字段）
-    const result = await redis.getApiKeysPaginated({
-      page: 1,
-      pageSize: 10000, // 获取所有
-      excludeDeleted: true
-    })
-
-    const apiKeys = result.items
+    const apiKeys = await redis.getAllApiKeyBindings({ excludeDeleted: true })
 
     // 初始化统计对象
     const bindingCounts = {

@@ -2410,6 +2410,11 @@ const loadAccounts = async (forceRefresh = false) => {
 
   accountsLoading.value = true
   try {
+    const lightweightAccountParams = {
+      includeUsage: false,
+      includeGroups: false,
+      includeUsageCost: false
+    }
     const [
       claudeData,
       claudeConsoleData,
@@ -2421,14 +2426,14 @@ const loadAccounts = async (forceRefresh = false) => {
       droidData,
       groupsData
     ] = await Promise.all([
-      apiClient.get('/admin/claude-accounts'),
-      apiClient.get('/admin/claude-console-accounts'),
-      apiClient.get('/admin/gemini-accounts'),
-      apiClient.get('/admin/gemini-api-accounts'), // 加载 Gemini-API 账号
-      apiClient.get('/admin/openai-accounts'),
-      apiClient.get('/admin/openai-responses-accounts'), // 加载 OpenAI-Responses 账号
-      apiClient.get('/admin/bedrock-accounts'),
-      apiClient.get('/admin/droid-accounts'),
+      apiClient.get('/admin/claude-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/claude-console-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/gemini-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/gemini-api-accounts', { params: lightweightAccountParams }), // 加载 Gemini-API 账号
+      apiClient.get('/admin/openai-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/openai-responses-accounts', { params: lightweightAccountParams }), // 加载 OpenAI-Responses 账号
+      apiClient.get('/admin/bedrock-accounts', { params: lightweightAccountParams }),
+      apiClient.get('/admin/droid-accounts', { params: lightweightAccountParams }),
       apiClient.get('/admin/account-groups')
     ])
 

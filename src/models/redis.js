@@ -252,6 +252,88 @@ class RedisClient {
    * @param {Object} data - 原始数据
    * @returns {Object} 解析后的数据
    */
+  /**
+   * 仅批量获取 API Key 绑定字段（轻量，避免加载无关数据）
+   * @param {string[]} keyIds
+   * @returns {Promise<Object[]>}
+   */
+  async batchGetApiKeyBindings(keyIds) {
+    if (!keyIds || keyIds.length === 0) {
+      return []
+    }
+
+    const pipeline = this.client.pipeline()
+    for (const keyId of keyIds) {
+      pipeline.hmget(
+        `apikey:${keyId}`,
+        'isDeleted',
+        'claudeAccountId',
+        'claudeConsoleAccountId',
+        'geminiAccountId',
+        'openaiAccountId',
+        'azureOpenaiAccountId',
+        'bedrockAccountId',
+        'droidAccountId',
+        'ccrAccountId'
+      )
+    }
+
+    const results = await pipeline.exec()
+    const bindings = []
+
+    for (let i = 0; i < results.length; i++) {
+      const [err, data] = results[i]
+      if (err || !Array.isArray(data) || data.length === 0) {
+        continue
+      }
+
+      const [
+        isDeleted,
+        claudeAccountId,
+        claudeConsoleAccountId,
+        geminiAccountId,
+        openaiAccountId,
+        azureOpenaiAccountId,
+        bedrockAccountId,
+        droidAccountId,
+        ccrAccountId
+      ] = data
+
+      bindings.push({
+        id: keyIds[i],
+        isDeleted: isDeleted || '',
+        claudeAccountId: claudeAccountId || '',
+        claudeConsoleAccountId: claudeConsoleAccountId || '',
+        geminiAccountId: geminiAccountId || '',
+        openaiAccountId: openaiAccountId || '',
+        azureOpenaiAccountId: azureOpenaiAccountId || '',
+        bedrockAccountId: bedrockAccountId || '',
+        droidAccountId: droidAccountId || '',
+        ccrAccountId: ccrAccountId || ''
+      })
+    }
+
+    return bindings
+  }
+
+  /**
+   * 获取 API Key 绑定快照（轻量）
+   * @param {Object} options
+   * @param {boolean} options.excludeDeleted
+   * @returns {Promise<Object[]>}
+   */
+  async getAllApiKeyBindings(options = {}) {
+    const { excludeDeleted = true } = options
+    const keyIds = await this.scanApiKeyIds()
+    const bindings = await this.batchGetApiKeyBindings(keyIds)
+
+    if (!excludeDeleted) {
+      return bindings
+    }
+
+    return bindings.filter((item) => item.isDeleted !== 'true')
+  }
+
   _parseApiKeyData(data) {
     if (!data) {
       return data
@@ -1172,7 +1254,7 @@ class RedisClient {
   }
 
   // 📊 获取账户使用统计
-  async getAccountUsageStats(accountId, accountType = null) {
+  async getAccountUsageStats(accountId, accountType = null, options = {}) {
     const accountKey = `account_usage:${accountId}`
     const today = getDateStringInTimezone()
     const accountDailyKey = `account_usage:daily:${accountId}:${today}`
@@ -1182,6 +1264,7 @@ class RedisClient {
       '0'
     )}`
     const accountMonthlyKey = `account_usage:monthly:${accountId}:${currentMonth}`
+    const includeCost = options.includeCost !== false
 
     const [total, daily, monthly] = await Promise.all([
       this.client.hgetall(accountKey),
@@ -1256,7 +1339,7 @@ class RedisClient {
     const monthlyData = handleAccountData(monthly)
 
     // 获取每日费用（基于模型使用）
-    const dailyCost = await this.getAccountDailyCost(accountId)
+    const dailyCost = includeCost ? await this.getAccountDailyCost(accountId) : 0
 
     return {
       accountId,
