@@ -1444,13 +1444,20 @@ class RedisClient {
 
   async getAllClaudeAccounts() {
     const keys = await this.client.keys('claude:account:*')
-    const accounts = []
-    for (const key of keys) {
-      const accountData = await this.client.hgetall(key)
-      if (accountData && Object.keys(accountData).length > 0) {
-        accounts.push({ id: key.replace('claude:account:', ''), ...accountData })
-      }
+    if (keys.length === 0) {
+      return []
     }
+
+    const pipeline = this.client.pipeline()
+    keys.forEach((key) => pipeline.hgetall(key))
+    const results = await pipeline.exec()
+
+    const accounts = []
+    results.forEach(([error, accountData], index) => {
+      if (!error && accountData && Object.keys(accountData).length > 0) {
+        accounts.push({ id: keys[index].replace('claude:account:', ''), ...accountData })
+      }
+    })
     return accounts
   }
 
@@ -1472,13 +1479,20 @@ class RedisClient {
 
   async getAllDroidAccounts() {
     const keys = await this.client.keys('droid:account:*')
-    const accounts = []
-    for (const key of keys) {
-      const accountData = await this.client.hgetall(key)
-      if (accountData && Object.keys(accountData).length > 0) {
-        accounts.push({ id: key.replace('droid:account:', ''), ...accountData })
-      }
+    if (keys.length === 0) {
+      return []
     }
+
+    const pipeline = this.client.pipeline()
+    keys.forEach((key) => pipeline.hgetall(key))
+    const results = await pipeline.exec()
+
+    const accounts = []
+    results.forEach(([error, accountData], index) => {
+      if (!error && accountData && Object.keys(accountData).length > 0) {
+        accounts.push({ id: keys[index].replace('droid:account:', ''), ...accountData })
+      }
+    })
     return accounts
   }
 
@@ -1502,13 +1516,20 @@ class RedisClient {
 
   async getAllOpenAIAccounts() {
     const keys = await this.client.keys('openai:account:*')
-    const accounts = []
-    for (const key of keys) {
-      const accountData = await this.client.hgetall(key)
-      if (accountData && Object.keys(accountData).length > 0) {
-        accounts.push({ id: key.replace('openai:account:', ''), ...accountData })
-      }
+    if (keys.length === 0) {
+      return []
     }
+
+    const pipeline = this.client.pipeline()
+    keys.forEach((key) => pipeline.hgetall(key))
+    const results = await pipeline.exec()
+
+    const accounts = []
+    results.forEach(([error, accountData], index) => {
+      if (!error && accountData && Object.keys(accountData).length > 0) {
+        accounts.push({ id: keys[index].replace('openai:account:', ''), ...accountData })
+      }
+    })
     return accounts
   }
 

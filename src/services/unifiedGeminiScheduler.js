@@ -51,6 +51,62 @@ class UnifiedGeminiScheduler {
     return isActive === true || isActive === 'true'
   }
 
+  _hasRateLimitFlag(rateLimitStatus) {
+    if (!rateLimitStatus) {
+      return false
+    }
+
+    if (typeof rateLimitStatus === 'string') {
+      return rateLimitStatus === 'limited'
+    }
+
+    if (typeof rateLimitStatus === 'object') {
+      return rateLimitStatus.status === 'limited' || rateLimitStatus.isRateLimited === true
+    }
+
+    return false
+  }
+
+  _isRateLimitActiveBySnapshot(account) {
+    if (!account || !this._hasRateLimitFlag(account.rateLimitStatus)) {
+      return false
+    }
+
+    const now = Date.now()
+    const resetAtRaw = account.rateLimitResetAt || account.rateLimitStatus?.rateLimitResetAt
+    if (resetAtRaw) {
+      const resetAtMs = Date.parse(resetAtRaw)
+      if (!Number.isNaN(resetAtMs)) {
+        return now < resetAtMs
+      }
+    }
+
+    const limitedAtRaw = account.rateLimitedAt || account.rateLimitStatus?.rateLimitedAt
+    const limitedAtMs = limitedAtRaw ? Date.parse(limitedAtRaw) : NaN
+    if (Number.isNaN(limitedAtMs)) {
+      return true
+    }
+
+    const durationMinutes = parseInt(account.rateLimitDuration, 10) || 60
+    return now < limitedAtMs + durationMinutes * 60 * 1000
+  }
+
+  async _isAccountRateLimitedForScheduling(account, accountType = null) {
+    if (!account) {
+      return false
+    }
+
+    if (!this._hasRateLimitFlag(account.rateLimitStatus)) {
+      return false
+    }
+
+    if (this._isRateLimitActiveBySnapshot(account)) {
+      return true
+    }
+
+    return this.isAccountRateLimited(account.id, accountType)
+  }
+
   // 🎯 统一调度Gemini账号
   async selectAccountForApiKey(
     apiKeyData,
@@ -251,7 +307,7 @@ class UnifiedGeminiScheduler {
           this._isActive(boundAccount.isActive) &&
           boundAccount.status !== 'error'
         ) {
-          const isRateLimited = await this.isAccountRateLimited(accountId)
+          const isRateLimited = await this._isAccountRateLimitedForScheduling(boundAccount, 'gemini-api')
           if (!isRateLimited) {
             // 检查模型支持
             if (
@@ -308,7 +364,7 @@ class UnifiedGeminiScheduler {
           ) {
             return availableAccounts
           }
-          const isRateLimited = await this.isAccountRateLimited(boundAccount.id)
+          const isRateLimited = await this._isAccountRateLimitedForScheduling(boundAccount, 'gemini')
           if (!isRateLimited) {
             // 检查模型支持
             if (
@@ -390,7 +446,7 @@ class UnifiedGeminiScheduler {
         }
 
         // 检查是否被限流
-        const isRateLimited = await this.isAccountRateLimited(account.id)
+        const isRateLimited = await this._isAccountRateLimitedForScheduling(account, 'gemini')
         if (!isRateLimited) {
           availableAccounts.push({
             ...account,
@@ -428,7 +484,7 @@ class UnifiedGeminiScheduler {
           }
 
           // 检查是否被限流
-          const isRateLimited = await this.isAccountRateLimited(account.id)
+          const isRateLimited = await this._isAccountRateLimitedForScheduling(account, 'gemini-api')
           if (!isRateLimited) {
             availableAccounts.push({
               ...account,
@@ -793,7 +849,7 @@ class UnifiedGeminiScheduler {
           }
 
           // 检查是否被限流
-          const isRateLimited = await this.isAccountRateLimited(account.id, accountType)
+          const isRateLimited = await this._isAccountRateLimitedForScheduling(account, accountType)
           if (!isRateLimited) {
             availableAccounts.push({
               ...account,

@@ -1,4 +1,4 @@
-const { v4: uuidv4 } = require('uuid')
+﻿const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
 const ProxyHelper = require('../utils/proxyHelper')
 const redis = require('../models/redis')
@@ -8,27 +8,27 @@ const LRUCache = require('../utils/lruCache')
 
 class ClaudeConsoleAccountService {
   constructor() {
-    // 加密相关常量
+    // 鍔犲瘑鐩稿叧甯搁噺
     this.ENCRYPTION_ALGORITHM = 'aes-256-cbc'
     this.ENCRYPTION_SALT = 'claude-console-salt'
 
-    // Redis键前缀
+    // Redis閿墠缂€
     this.ACCOUNT_KEY_PREFIX = 'claude_console_account:'
     this.SHARED_ACCOUNTS_KEY = 'shared_claude_console_accounts'
 
-    // 🚀 性能优化：缓存派生的加密密钥，避免每次重复计算
-    // scryptSync 是 CPU 密集型操作，缓存可以减少 95%+ 的 CPU 密集型操作
+    // 馃殌 鎬ц兘浼樺寲锛氱紦瀛樻淳鐢熺殑鍔犲瘑瀵嗛挜锛岄伩鍏嶆瘡娆￠噸澶嶈绠?
+    // scryptSync 鏄?CPU 瀵嗛泦鍨嬫搷浣滐紝缂撳瓨鍙互鍑忓皯 95%+ 鐨?CPU 瀵嗛泦鍨嬫搷浣?
     this._encryptionKeyCache = null
 
-    // 🔄 解密结果缓存，提高解密性能
+    // 馃攧 瑙ｅ瘑缁撴灉缂撳瓨锛屾彁楂樿В瀵嗘€ц兘
     this._decryptCache = new LRUCache(500)
 
-    // 🧹 定期清理缓存（每10分钟）
+    // 馃Ч 瀹氭湡娓呯悊缂撳瓨锛堟瘡10鍒嗛挓锛?
     setInterval(
       () => {
         this._decryptCache.cleanup()
         logger.info(
-          '🧹 Claude Console decrypt cache cleanup completed',
+          '馃Ч Claude Console decrypt cache cleanup completed',
           this._decryptCache.getStats()
         )
       },
@@ -50,36 +50,36 @@ class ClaudeConsoleAccountService {
     return parsed
   }
 
-  // 🏢 创建Claude Console账户
+  // 馃彚 鍒涘缓Claude Console璐︽埛
   async createAccount(options = {}) {
     const {
       name = 'Claude Console Account',
       description = '',
       apiUrl = '',
       apiKey = '',
-      priority = 50, // 默认优先级50（1-100）
-      supportedModels = [], // 支持的模型列表或映射表，空数组/对象表示支持所有
+      priority = 50, // 榛樿浼樺厛绾?0锛?-100锛?
+      supportedModels = [], // 鏀寔鐨勬ā鍨嬪垪琛ㄦ垨鏄犲皠琛紝绌烘暟缁?瀵硅薄琛ㄧず鏀寔鎵€鏈?
       userAgent = 'claude-cli/1.0.69 (external, cli)',
-      rateLimitDuration = 60, // 限流时间（分钟）
+      rateLimitDuration = 60, // 闄愭祦鏃堕棿锛堝垎閽燂級
       proxy = null,
       isActive = true,
       accountType = 'shared', // 'dedicated' or 'shared'
-      schedulable = true, // 是否可被调度
-      dailyQuota = 0, // 每日额度限制（美元），0表示不限制
-      quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
-      maxConcurrentTasks = 0, // 最大并发任务数，0表示无限制
-      disableAutoProtection = false, // 是否关闭自动防护（429/401/400/529 不自动禁用）
-      interceptWarmup = false // 拦截预热请求（标题生成、Warmup等）
+      schedulable = true, // 鏄惁鍙璋冨害
+      dailyQuota = 0, // 姣忔棩棰濆害闄愬埗锛堢編鍏冿級锛?琛ㄧず涓嶉檺鍒?
+      quotaResetTime = '00:00', // 棰濆害閲嶇疆鏃堕棿锛圚H:mm鏍煎紡锛?
+      maxConcurrentTasks = 0, // 鏈€澶у苟鍙戜换鍔℃暟锛?琛ㄧず鏃犻檺鍒?
+      disableAutoProtection = false, // 鏄惁鍏抽棴鑷姩闃叉姢锛?29/401/400/529 涓嶈嚜鍔ㄧ鐢級
+      interceptWarmup = false // 鎷︽埅棰勭儹璇锋眰锛堟爣棰樼敓鎴愩€乄armup绛夛級
     } = options
 
-    // 验证必填字段
+    // 楠岃瘉蹇呭～瀛楁
     if (!apiUrl || !apiKey) {
       throw new Error('API URL and API Key are required for Claude Console account')
     }
 
     const accountId = uuidv4()
 
-    // 处理 supportedModels，确保向后兼容
+    // 澶勭悊 supportedModels锛岀‘淇濆悜鍚庡吋瀹?
     const processedModels = this._processModelMapping(supportedModels)
 
     const accountData = {
@@ -101,25 +101,25 @@ class ClaudeConsoleAccountService {
       status: 'active',
       errorMessage: '',
 
-      // ✅ 新增：账户订阅到期时间（业务字段，手动管理）
-      // 注意：Claude Console 没有 OAuth token，因此没有 expiresAt（token过期）
+      // 鉁?鏂板锛氳处鎴疯闃呭埌鏈熸椂闂达紙涓氬姟瀛楁锛屾墜鍔ㄧ鐞嗭級
+      // 娉ㄦ剰锛欳laude Console 娌℃湁 OAuth token锛屽洜姝ゆ病鏈?expiresAt锛坱oken杩囨湡锛?
       subscriptionExpiresAt: options.subscriptionExpiresAt || null,
 
-      // 限流相关
+      // 闄愭祦鐩稿叧
       rateLimitedAt: '',
       rateLimitStatus: '',
-      // 调度控制
+      // 璋冨害鎺у埗
       schedulable: schedulable.toString(),
-      // 额度管理相关
-      dailyQuota: dailyQuota.toString(), // 每日额度限制（美元）
-      dailyUsage: '0', // 当日使用金额（美元）
-      // 使用与统计一致的时区日期，避免边界问题
-      lastResetDate: redis.getDateStringInTimezone(), // 最后重置日期（按配置时区）
-      quotaResetTime, // 额度重置时间
-      quotaStoppedAt: '', // 因额度停用的时间
-      maxConcurrentTasks: maxConcurrentTasks.toString(), // 最大并发任务数，0表示无限制
-      disableAutoProtection: disableAutoProtection.toString(), // 关闭自动防护
-      interceptWarmup: interceptWarmup.toString() // 拦截预热请求
+      // 棰濆害绠＄悊鐩稿叧
+      dailyQuota: dailyQuota.toString(), // 姣忔棩棰濆害闄愬埗锛堢編鍏冿級
+      dailyUsage: '0', // 褰撴棩浣跨敤閲戦锛堢編鍏冿級
+      // 浣跨敤涓庣粺璁′竴鑷寸殑鏃跺尯鏃ユ湡锛岄伩鍏嶈竟鐣岄棶棰?
+      lastResetDate: redis.getDateStringInTimezone(), // 鏈€鍚庨噸缃棩鏈燂紙鎸夐厤缃椂鍖猴級
+      quotaResetTime, // 棰濆害閲嶇疆鏃堕棿
+      quotaStoppedAt: '', // 鍥犻搴﹀仠鐢ㄧ殑鏃堕棿
+      maxConcurrentTasks: maxConcurrentTasks.toString(), // 鏈€澶у苟鍙戜换鍔℃暟锛?琛ㄧず鏃犻檺鍒?
+      disableAutoProtection: disableAutoProtection.toString(), // 鍏抽棴鑷姩闃叉姢
+      interceptWarmup: interceptWarmup.toString() // 鎷︽埅棰勭儹璇锋眰
     }
 
     const client = redis.getClientSafe()
@@ -130,12 +130,12 @@ class ClaudeConsoleAccountService {
 
     await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, accountData)
 
-    // 如果是共享账户，添加到共享账户集合
+    // 濡傛灉鏄叡浜处鎴凤紝娣诲姞鍒板叡浜处鎴烽泦鍚?
     if (accountType === 'shared') {
       await client.sadd(this.SHARED_ACCOUNTS_KEY, accountId)
     }
 
-    logger.success(`🏢 Created Claude Console account: ${name} (${accountId})`)
+    logger.success(`馃彚 Created Claude Console account: ${name} (${accountId})`)
 
     return {
       id: accountId,
@@ -156,85 +156,105 @@ class ClaudeConsoleAccountService {
       lastResetDate: accountData.lastResetDate,
       quotaResetTime,
       quotaStoppedAt: null,
-      maxConcurrentTasks, // 新增：返回并发限制配置
-      disableAutoProtection, // 新增：返回自动防护开关
-      interceptWarmup, // 新增：返回预热请求拦截开关
-      activeTaskCount: 0 // 新增：新建账户当前并发数为0
+      maxConcurrentTasks, // 鏂板锛氳繑鍥炲苟鍙戦檺鍒堕厤缃?
+      disableAutoProtection, // 鏂板锛氳繑鍥炶嚜鍔ㄩ槻鎶ゅ紑鍏?
+      interceptWarmup, // 鏂板锛氳繑鍥為鐑姹傛嫤鎴紑鍏?
+      activeTaskCount: 0 // 鏂板锛氭柊寤鸿处鎴峰綋鍓嶅苟鍙戞暟涓?
     }
   }
 
-  // 📋 获取所有Claude Console账户
-  async getAllAccounts() {
+  // 馃搵 鑾峰彇鎵€鏈塁laude Console璐︽埛
+  async getAllAccounts(includeConcurrency = true) {
     try {
       const client = redis.getClientSafe()
       const keys = await client.keys(`${this.ACCOUNT_KEY_PREFIX}*`)
-      const accounts = []
+      if (keys.length === 0) {
+        return []
+      }
 
-      for (const key of keys) {
-        const accountData = await client.hgetall(key)
-        if (accountData && Object.keys(accountData).length > 0) {
-          if (!accountData.id) {
-            logger.warn(`⚠️ 检测到缺少ID的Claude Console账户数据，执行清理: ${key}`)
-            await client.del(key)
-            continue
-          }
+      const pipeline = client.pipeline()
+      keys.forEach((key) => pipeline.hgetall(key))
+      const results = await pipeline.exec()
 
-          // 获取限流状态信息
-          const rateLimitInfo = this._getRateLimitInfo(accountData)
+      const accountDataList = []
+      for (let i = 0; i < results.length; i++) {
+        const [error, accountData] = results[i]
+        if (error || !accountData || Object.keys(accountData).length === 0) {
+          continue
+        }
 
-          // 获取实时并发计数
-          const activeTaskCount = await redis.getConsoleAccountConcurrency(accountData.id)
+        if (!accountData.id) {
+          logger.warn(`⚠️ 检测到缺少ID的Claude Console账户数据，执行清理: ${keys[i]}`)
+          await client.del(keys[i])
+          continue
+        }
 
-          accounts.push({
-            id: accountData.id,
-            platform: accountData.platform,
-            name: accountData.name,
-            description: accountData.description,
-            apiUrl: accountData.apiUrl,
-            priority: parseInt(accountData.priority) || 50,
-            supportedModels: JSON.parse(accountData.supportedModels || '[]'),
-            userAgent: accountData.userAgent,
-            rateLimitDuration: Number.isNaN(parseInt(accountData.rateLimitDuration))
-              ? 60
-              : parseInt(accountData.rateLimitDuration),
-            isActive: accountData.isActive === 'true',
-            proxy: accountData.proxy ? JSON.parse(accountData.proxy) : null,
-            accountType: accountData.accountType || 'shared',
-            createdAt: accountData.createdAt,
-            lastUsedAt: accountData.lastUsedAt,
-            status: accountData.status || 'active',
-            errorMessage: accountData.errorMessage,
-            rateLimitInfo,
-            schedulable: accountData.schedulable !== 'false', // 默认为true，只有明确设置为false才不可调度
+        accountDataList.push(accountData)
+      }
 
-            // ✅ 前端显示订阅过期时间（业务字段）
-            expiresAt: accountData.subscriptionExpiresAt || null,
-
-            // 额度管理相关
-            dailyQuota: parseFloat(accountData.dailyQuota || '0'),
-            dailyUsage: parseFloat(accountData.dailyUsage || '0'),
-            lastResetDate: accountData.lastResetDate || '',
-            quotaResetTime: accountData.quotaResetTime || '00:00',
-            quotaStoppedAt: accountData.quotaStoppedAt || null,
-
-            // 并发控制相关
-            maxConcurrentTasks: parseInt(accountData.maxConcurrentTasks) || 0,
-            activeTaskCount,
-            disableAutoProtection: accountData.disableAutoProtection === 'true',
-            // 拦截预热请求
-            interceptWarmup: accountData.interceptWarmup === 'true'
+      const activeTaskCountMap = new Map()
+      if (includeConcurrency && accountDataList.length > 0) {
+        const concurrencyResults = await Promise.all(
+          accountDataList.map(async (accountData) => {
+            try {
+              const count = await redis.getConsoleAccountConcurrency(accountData.id)
+              return [accountData.id, count]
+            } catch {
+              return [accountData.id, 0]
+            }
           })
+        )
+
+        for (const [accountId, count] of concurrencyResults) {
+          activeTaskCountMap.set(accountId, count)
         }
       }
 
-      return accounts
+      return accountDataList.map((accountData) => {
+        const rateLimitInfo = this._getRateLimitInfo(accountData)
+        const activeTaskCount = includeConcurrency ? activeTaskCountMap.get(accountData.id) || 0 : 0
+
+        return {
+          id: accountData.id,
+          platform: accountData.platform,
+          name: accountData.name,
+          description: accountData.description,
+          apiUrl: accountData.apiUrl,
+          priority: parseInt(accountData.priority) || 50,
+          supportedModels: JSON.parse(accountData.supportedModels || '[]'),
+          userAgent: accountData.userAgent,
+          rateLimitDuration: Number.isNaN(parseInt(accountData.rateLimitDuration))
+            ? 60
+            : parseInt(accountData.rateLimitDuration),
+          isActive: accountData.isActive === 'true',
+          proxy: accountData.proxy ? JSON.parse(accountData.proxy) : null,
+          accountType: accountData.accountType || 'shared',
+          createdAt: accountData.createdAt,
+          lastUsedAt: accountData.lastUsedAt,
+          status: accountData.status || 'active',
+          errorMessage: accountData.errorMessage,
+          rateLimitInfo,
+          schedulable: accountData.schedulable !== 'false',
+
+          expiresAt: accountData.subscriptionExpiresAt || null,
+
+          dailyQuota: parseFloat(accountData.dailyQuota || '0'),
+          dailyUsage: parseFloat(accountData.dailyUsage || '0'),
+          lastResetDate: accountData.lastResetDate || '',
+          quotaResetTime: accountData.quotaResetTime || '00:00',
+          quotaStoppedAt: accountData.quotaStoppedAt || null,
+
+          maxConcurrentTasks: parseInt(accountData.maxConcurrentTasks) || 0,
+          activeTaskCount,
+          disableAutoProtection: accountData.disableAutoProtection === 'true',
+          interceptWarmup: accountData.interceptWarmup === 'true'
+        }
+      })
     } catch (error) {
       logger.error('❌ Failed to get Claude Console accounts:', error)
       throw error
     }
   }
-
-  // 🔍 获取单个账户（内部使用，包含敏感信息）
   async getAccount(accountId) {
     const client = redis.getClientSafe()
     logger.debug(`[DEBUG] Getting account data for ID: ${accountId}`)
@@ -248,7 +268,7 @@ class ClaudeConsoleAccountService {
     logger.debug(`[DEBUG] Raw account data keys: ${Object.keys(accountData).join(', ')}`)
     logger.debug(`[DEBUG] Raw supportedModels value: ${accountData.supportedModels}`)
 
-    // 解密敏感字段（只解密apiKey，apiUrl不加密）
+    // 瑙ｅ瘑鏁忔劅瀛楁锛堝彧瑙ｅ瘑apiKey锛宎piUrl涓嶅姞瀵嗭級
     const decryptedKey = this._decryptSensitiveData(accountData.apiKey)
     logger.debug(
       `[DEBUG] URL exists: ${!!accountData.apiUrl}, Decrypted key exists: ${!!decryptedKey}`
@@ -256,7 +276,7 @@ class ClaudeConsoleAccountService {
 
     accountData.apiKey = decryptedKey
 
-    // 解析JSON字段
+    // 瑙ｆ瀽JSON瀛楁
     const parsedModels = JSON.parse(accountData.supportedModels || '[]')
     logger.debug(`[DEBUG] Parsed supportedModels: ${JSON.stringify(parsedModels)}`)
 
@@ -267,16 +287,16 @@ class ClaudeConsoleAccountService {
       accountData.rateLimitDuration = Number.isNaN(_parsedDuration) ? 60 : _parsedDuration
     }
     accountData.isActive = accountData.isActive === 'true'
-    accountData.schedulable = accountData.schedulable !== 'false' // 默认为true
+    accountData.schedulable = accountData.schedulable !== 'false' // 榛樿涓簍rue
     accountData.disableAutoProtection = accountData.disableAutoProtection === 'true'
 
     if (accountData.proxy) {
       accountData.proxy = JSON.parse(accountData.proxy)
     }
 
-    // 解析并发控制字段
+    // 瑙ｆ瀽骞跺彂鎺у埗瀛楁
     accountData.maxConcurrentTasks = parseInt(accountData.maxConcurrentTasks) || 0
-    // 获取实时并发计数
+    // 鑾峰彇瀹炴椂骞跺彂璁℃暟
     accountData.activeTaskCount = await redis.getConsoleAccountConcurrency(accountId)
 
     logger.debug(
@@ -286,7 +306,7 @@ class ClaudeConsoleAccountService {
     return accountData
   }
 
-  // 📝 更新账户
+  // 馃摑 鏇存柊璐︽埛
   async updateAccount(accountId, updates) {
     try {
       const existingAccount = await this.getAccount(accountId)
@@ -297,7 +317,7 @@ class ClaudeConsoleAccountService {
       const client = redis.getClientSafe()
       const updatedData = {}
 
-      // 处理各个字段的更新
+      // 澶勭悊鍚勪釜瀛楁鐨勬洿鏂?
       logger.debug(
         `[DEBUG] Update request received with fields: ${Object.keys(updates).join(', ')}`
       )
@@ -322,7 +342,7 @@ class ClaudeConsoleAccountService {
       }
       if (updates.supportedModels !== undefined) {
         logger.debug(`[DEBUG] Updating supportedModels: ${JSON.stringify(updates.supportedModels)}`)
-        // 处理 supportedModels，确保向后兼容
+        // 澶勭悊 supportedModels锛岀‘淇濆悜鍚庡吋瀹?
         const processedModels = this._processModelMapping(updates.supportedModels)
         updatedData.supportedModels = JSON.stringify(processedModels)
       }
@@ -340,23 +360,23 @@ class ClaudeConsoleAccountService {
       }
       if (updates.schedulable !== undefined) {
         updatedData.schedulable = updates.schedulable.toString()
-        // 如果是手动修改调度状态，清除所有自动停止相关的字段
-        // 防止自动恢复
+        // 濡傛灉鏄墜鍔ㄤ慨鏀硅皟搴︾姸鎬侊紝娓呴櫎鎵€鏈夎嚜鍔ㄥ仠姝㈢浉鍏崇殑瀛楁
+        // 闃叉鑷姩鎭㈠
         updatedData.rateLimitAutoStopped = ''
         updatedData.quotaAutoStopped = ''
-        // 兼容旧的标记
+        // 鍏煎鏃х殑鏍囪
         updatedData.autoStoppedAt = ''
         updatedData.stoppedReason = ''
 
-        // 记录日志
+        // 璁板綍鏃ュ織
         if (updates.schedulable === true || updates.schedulable === 'true') {
-          logger.info(`✅ Manually enabled scheduling for Claude Console account ${accountId}`)
+          logger.info(`鉁?Manually enabled scheduling for Claude Console account ${accountId}`)
         } else {
-          logger.info(`⛔ Manually disabled scheduling for Claude Console account ${accountId}`)
+          logger.info(`鉀?Manually disabled scheduling for Claude Console account ${accountId}`)
         }
       }
 
-      // 额度管理相关字段
+      // 棰濆害绠＄悊鐩稿叧瀛楁
       if (updates.dailyQuota !== undefined) {
         updatedData.dailyQuota = updates.dailyQuota.toString()
       }
@@ -373,7 +393,7 @@ class ClaudeConsoleAccountService {
         updatedData.quotaStoppedAt = updates.quotaStoppedAt
       }
 
-      // 并发控制相关字段
+      // 骞跺彂鎺у埗鐩稿叧瀛楁
       if (updates.maxConcurrentTasks !== undefined) {
         updatedData.maxConcurrentTasks = updates.maxConcurrentTasks.toString()
       }
@@ -384,13 +404,13 @@ class ClaudeConsoleAccountService {
         updatedData.interceptWarmup = updates.interceptWarmup.toString()
       }
 
-      // ✅ 直接保存 subscriptionExpiresAt（如果提供）
-      // Claude Console 没有 token 刷新逻辑，不会覆盖此字段
+      // 鉁?鐩存帴淇濆瓨 subscriptionExpiresAt锛堝鏋滄彁渚涳級
+      // Claude Console 娌℃湁 token 鍒锋柊閫昏緫锛屼笉浼氳鐩栨瀛楁
       if (updates.subscriptionExpiresAt !== undefined) {
         updatedData.subscriptionExpiresAt = updates.subscriptionExpiresAt
       }
 
-      // 处理账户类型变更
+      // 澶勭悊璐︽埛绫诲瀷鍙樻洿
       if (updates.accountType && updates.accountType !== existingAccount.accountType) {
         updatedData.accountType = updates.accountType
 
@@ -403,7 +423,7 @@ class ClaudeConsoleAccountService {
 
       updatedData.updatedAt = new Date().toISOString()
 
-      // 检查是否手动禁用了账号，如果是则发送webhook通知
+      // 妫€鏌ユ槸鍚︽墜鍔ㄧ鐢ㄤ簡璐﹀彿锛屽鏋滄槸鍒欏彂閫亀ebhook閫氱煡
       if (updates.isActive === false && existingAccount.isActive === true) {
         try {
           const webhookNotifier = require('../utils/webhookNotifier')
@@ -428,16 +448,16 @@ class ClaudeConsoleAccountService {
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updatedData)
 
-      logger.success(`📝 Updated Claude Console account: ${accountId}`)
+      logger.success(`馃摑 Updated Claude Console account: ${accountId}`)
 
       return { success: true }
     } catch (error) {
-      logger.error('❌ Failed to update Claude Console account:', error)
+      logger.error('鉂?Failed to update Claude Console account:', error)
       throw error
     }
   }
 
-  // 🗑️ 删除账户
+  // 馃棏锔?鍒犻櫎璐︽埛
   async deleteAccount(accountId) {
     try {
       const client = redis.getClientSafe()
@@ -447,24 +467,24 @@ class ClaudeConsoleAccountService {
         throw new Error('Account not found')
       }
 
-      // 从Redis删除
+      // 浠嶳edis鍒犻櫎
       await client.del(`${this.ACCOUNT_KEY_PREFIX}${accountId}`)
 
-      // 从共享账户集合中移除
+      // 浠庡叡浜处鎴烽泦鍚堜腑绉婚櫎
       if (account.accountType === 'shared') {
         await client.srem(this.SHARED_ACCOUNTS_KEY, accountId)
       }
 
-      logger.success(`🗑️ Deleted Claude Console account: ${accountId}`)
+      logger.success(`馃棏锔?Deleted Claude Console account: ${accountId}`)
 
       return { success: true }
     } catch (error) {
-      logger.error('❌ Failed to delete Claude Console account:', error)
+      logger.error('鉂?Failed to delete Claude Console account:', error)
       throw error
     }
   }
 
-  // 🚫 标记账号为限流状态
+  // 馃毇 鏍囪璐﹀彿涓洪檺娴佺姸鎬?
   async markAccountRateLimited(accountId) {
     try {
       const client = redis.getClientSafe()
@@ -474,10 +494,10 @@ class ClaudeConsoleAccountService {
         throw new Error('Account not found')
       }
 
-      // 如果限流时间设置为 0，表示不启用限流机制，直接返回
+      // 濡傛灉闄愭祦鏃堕棿璁剧疆涓?0锛岃〃绀轰笉鍚敤闄愭祦鏈哄埗锛岀洿鎺ヨ繑鍥?
       if (account.rateLimitDuration === 0) {
         logger.info(
-          `ℹ️ Claude Console account ${account.name} (${accountId}) has rate limiting disabled, skipping rate limit`
+          `鈩癸笍 Claude Console account ${account.name} (${accountId}) has rate limiting disabled, skipping rate limit`
         )
         return { success: true, skipped: true }
       }
@@ -485,15 +505,15 @@ class ClaudeConsoleAccountService {
       const updates = {
         rateLimitedAt: new Date().toISOString(),
         rateLimitStatus: 'limited',
-        isActive: 'false', // 禁用账户
-        schedulable: 'false', // 停止调度，与其他平台保持一致
+        isActive: 'false', // 绂佺敤璐︽埛
+        schedulable: 'false', // 鍋滄璋冨害锛屼笌鍏朵粬骞冲彴淇濇寔涓€鑷?
         errorMessage: `Rate limited at ${new Date().toISOString()}`,
-        // 使用独立的限流自动停止标记
+        // 浣跨敤鐙珛鐨勯檺娴佽嚜鍔ㄥ仠姝㈡爣璁?
         rateLimitAutoStopped: 'true'
       }
 
-      // 只有当前状态不是quota_exceeded时才设置为rate_limited
-      // 避免覆盖更重要的配额超限状态
+      // 鍙湁褰撳墠鐘舵€佷笉鏄痲uota_exceeded鏃舵墠璁剧疆涓簉ate_limited
+      // 閬垮厤瑕嗙洊鏇撮噸瑕佺殑閰嶉瓒呴檺鐘舵€?
       const currentStatus = await client.hget(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, 'status')
       if (currentStatus !== 'quota_exceeded') {
         updates.status = 'rate_limited'
@@ -501,7 +521,7 @@ class ClaudeConsoleAccountService {
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
 
-      // 发送Webhook通知
+      // 鍙戦€乄ebhook閫氱煡
       try {
         const webhookNotifier = require('../utils/webhookNotifier')
         const { getISOStringWithTimezone } = require('../utils/dateHelper')
@@ -519,42 +539,42 @@ class ClaudeConsoleAccountService {
       }
 
       logger.warn(
-        `🚫 Claude Console account marked as rate limited: ${account.name} (${accountId})`
+        `馃毇 Claude Console account marked as rate limited: ${account.name} (${accountId})`
       )
       return { success: true }
     } catch (error) {
-      logger.error(`❌ Failed to mark Claude Console account as rate limited: ${accountId}`, error)
+      logger.error(`鉂?Failed to mark Claude Console account as rate limited: ${accountId}`, error)
       throw error
     }
   }
 
-  // ✅ 移除账号的限流状态
+  // 鉁?绉婚櫎璐﹀彿鐨勯檺娴佺姸鎬?
   async removeAccountRateLimit(accountId) {
     try {
       const client = redis.getClientSafe()
       const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
 
-      // 获取账户当前状态和额度信息
+      // 鑾峰彇璐︽埛褰撳墠鐘舵€佸拰棰濆害淇℃伅
       const [currentStatus, quotaStoppedAt] = await client.hmget(
         accountKey,
         'status',
         'quotaStoppedAt'
       )
 
-      // 删除限流相关字段
+      // 鍒犻櫎闄愭祦鐩稿叧瀛楁
       await client.hdel(accountKey, 'rateLimitedAt', 'rateLimitStatus')
 
-      // 根据不同情况决定是否恢复账户
+      // 鏍规嵁涓嶅悓鎯呭喌鍐冲畾鏄惁鎭㈠璐︽埛
       if (currentStatus === 'rate_limited') {
         if (quotaStoppedAt) {
-          // 还有额度限制，改为quota_exceeded状态
+          // 杩樻湁棰濆害闄愬埗锛屾敼涓簈uota_exceeded鐘舵€?
           await client.hset(accountKey, {
             status: 'quota_exceeded'
-            // isActive保持false
+            // isActive淇濇寔false
           })
-          logger.info(`⚠️ Rate limit removed but quota exceeded remains for account: ${accountId}`)
+          logger.info(`鈿狅笍 Rate limit removed but quota exceeded remains for account: ${accountId}`)
         } else {
-          // 没有额度限制，完全恢复
+          // 娌℃湁棰濆害闄愬埗锛屽畬鍏ㄦ仮澶?
           const accountData = await client.hgetall(accountKey)
           const updateData = {
             isActive: 'true',
@@ -564,11 +584,11 @@ class ClaudeConsoleAccountService {
 
           const hadAutoStop = accountData.rateLimitAutoStopped === 'true'
 
-          // 只恢复因限流而自动停止的账户
+          // 鍙仮澶嶅洜闄愭祦鑰岃嚜鍔ㄥ仠姝㈢殑璐︽埛
           if (hadAutoStop && accountData.schedulable === 'false') {
-            updateData.schedulable = 'true' // 恢复调度
+            updateData.schedulable = 'true' // 鎭㈠璋冨害
             logger.info(
-              `✅ Auto-resuming scheduling for Claude Console account ${accountId} after rate limit cleared`
+              `鉁?Auto-resuming scheduling for Claude Console account ${accountId} after rate limit cleared`
             )
           }
 
@@ -577,25 +597,25 @@ class ClaudeConsoleAccountService {
           }
 
           await client.hset(accountKey, updateData)
-          logger.success(`✅ Rate limit removed and account re-enabled: ${accountId}`)
+          logger.success(`鉁?Rate limit removed and account re-enabled: ${accountId}`)
         }
       } else {
         if (await client.hdel(accountKey, 'rateLimitAutoStopped')) {
           logger.info(
-            `ℹ️ Removed stale auto-stop flag for Claude Console account ${accountId} during rate limit recovery`
+            `鈩癸笍 Removed stale auto-stop flag for Claude Console account ${accountId} during rate limit recovery`
           )
         }
-        logger.success(`✅ Rate limit removed for Claude Console account: ${accountId}`)
+        logger.success(`鉁?Rate limit removed for Claude Console account: ${accountId}`)
       }
 
       return { success: true }
     } catch (error) {
-      logger.error(`❌ Failed to remove rate limit for Claude Console account: ${accountId}`, error)
+      logger.error(`鉂?Failed to remove rate limit for Claude Console account: ${accountId}`, error)
       throw error
     }
   }
 
-  // 🔍 检查账号是否处于限流状态
+  // 馃攳 妫€鏌ヨ处鍙锋槸鍚﹀浜庨檺娴佺姸鎬?
   async isAccountRateLimited(accountId) {
     try {
       const account = await this.getAccount(accountId)
@@ -603,7 +623,7 @@ class ClaudeConsoleAccountService {
         return false
       }
 
-      // 如果限流时间设置为 0，表示不启用限流机制
+      // 濡傛灉闄愭祦鏃堕棿璁剧疆涓?0锛岃〃绀轰笉鍚敤闄愭祦鏈哄埗
       if (account.rateLimitDuration === 0) {
         return false
       }
@@ -613,7 +633,7 @@ class ClaudeConsoleAccountService {
         const now = new Date()
         const minutesSinceRateLimit = (now - rateLimitedAt) / (1000 * 60)
 
-        // 使用账户配置的限流时间
+        // 浣跨敤璐︽埛閰嶇疆鐨勯檺娴佹椂闂?
         const rateLimitDuration =
           typeof account.rateLimitDuration === 'number' && !Number.isNaN(account.rateLimitDuration)
             ? account.rateLimitDuration
@@ -630,14 +650,14 @@ class ClaudeConsoleAccountService {
       return false
     } catch (error) {
       logger.error(
-        `❌ Failed to check rate limit status for Claude Console account: ${accountId}`,
+        `鉂?Failed to check rate limit status for Claude Console account: ${accountId}`,
         error
       )
       return false
     }
   }
 
-  // 🔍 检查账号是否因额度超限而被停用（懒惰检查）
+  // 馃攳 妫€鏌ヨ处鍙锋槸鍚﹀洜棰濆害瓒呴檺鑰岃鍋滅敤锛堟噿鎯版鏌ワ級
   async isAccountQuotaExceeded(accountId) {
     try {
       const account = await this.getAccount(accountId)
@@ -645,57 +665,57 @@ class ClaudeConsoleAccountService {
         return false
       }
 
-      // 如果没有设置额度限制，不会超额
+      // 濡傛灉娌℃湁璁剧疆棰濆害闄愬埗锛屼笉浼氳秴棰?
       const dailyQuota = parseFloat(account.dailyQuota || '0')
       if (isNaN(dailyQuota) || dailyQuota <= 0) {
         return false
       }
 
-      // 如果账户没有被额度停用，检查当前使用情况
+      // 濡傛灉璐︽埛娌℃湁琚搴﹀仠鐢紝妫€鏌ュ綋鍓嶄娇鐢ㄦ儏鍐?
       if (!account.quotaStoppedAt) {
         return false
       }
 
-      // 检查是否应该重置额度（到了新的重置时间点）
+      // 妫€鏌ユ槸鍚﹀簲璇ラ噸缃搴︼紙鍒颁簡鏂扮殑閲嶇疆鏃堕棿鐐癸級
       if (this._shouldResetQuota(account)) {
         await this.resetDailyUsage(accountId)
         return false
       }
 
-      // 仍在额度超限状态
+      // 浠嶅湪棰濆害瓒呴檺鐘舵€?
       return true
     } catch (error) {
       logger.error(
-        `❌ Failed to check quota exceeded status for Claude Console account: ${accountId}`,
+        `鉂?Failed to check quota exceeded status for Claude Console account: ${accountId}`,
         error
       )
       return false
     }
   }
 
-  // 🔍 判断是否应该重置账户额度
+  // 馃攳 鍒ゆ柇鏄惁搴旇閲嶇疆璐︽埛棰濆害
   _shouldResetQuota(account) {
-    // 与 Redis 统计一致：按配置时区判断“今天”与时间点
+    // 涓?Redis 缁熻涓€鑷达細鎸夐厤缃椂鍖哄垽鏂€滀粖澶┾€濅笌鏃堕棿鐐?
     const tzNow = redis.getDateInTimezone(new Date())
     const today = redis.getDateStringInTimezone(tzNow)
 
-    // 如果已经是今天重置过的，不需要重置
+    // 濡傛灉宸茬粡鏄粖澶╅噸缃繃鐨勶紝涓嶉渶瑕侀噸缃?
     if (account.lastResetDate === today) {
       return false
     }
 
-    // 检查是否到了重置时间点（按配置时区的小时/分钟）
+    // 妫€鏌ユ槸鍚﹀埌浜嗛噸缃椂闂寸偣锛堟寜閰嶇疆鏃跺尯鐨勫皬鏃?鍒嗛挓锛?
     const resetTime = account.quotaResetTime || '00:00'
     const [resetHour, resetMinute] = resetTime.split(':').map((n) => parseInt(n))
 
     const currentHour = tzNow.getUTCHours()
     const currentMinute = tzNow.getUTCMinutes()
 
-    // 如果当前时间已过重置时间且不是同一天重置的，应该重置
+    // 濡傛灉褰撳墠鏃堕棿宸茶繃閲嶇疆鏃堕棿涓斾笉鏄悓涓€澶╅噸缃殑锛屽簲璇ラ噸缃?
     return currentHour > resetHour || (currentHour === resetHour && currentMinute >= resetMinute)
   }
 
-  // 🚫 标记账号为未授权状态（401错误）
+  // 馃毇 鏍囪璐﹀彿涓烘湭鎺堟潈鐘舵€侊紙401閿欒锛?
   async markAccountUnauthorized(accountId) {
     try {
       const client = redis.getClientSafe()
@@ -715,7 +735,7 @@ class ClaudeConsoleAccountService {
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
 
-      // 发送Webhook通知
+      // 鍙戦€乄ebhook閫氱煡
       try {
         const webhookNotifier = require('../utils/webhookNotifier')
         await webhookNotifier.sendAccountAnomalyNotification({
@@ -724,7 +744,7 @@ class ClaudeConsoleAccountService {
           platform: 'claude-console',
           status: 'error',
           errorCode: 'CLAUDE_CONSOLE_UNAUTHORIZED',
-          reason: 'API Key无效或已过期（401错误），账户已停止调度',
+          reason: 'API Key无效或已过期（401错误），账号已停止调度',
           timestamp: new Date().toISOString()
         })
       } catch (webhookError) {
@@ -732,16 +752,16 @@ class ClaudeConsoleAccountService {
       }
 
       logger.warn(
-        `🚫 Claude Console account marked as unauthorized: ${account.name} (${accountId})`
+        `馃毇 Claude Console account marked as unauthorized: ${account.name} (${accountId})`
       )
       return { success: true }
     } catch (error) {
-      logger.error(`❌ Failed to mark Claude Console account as unauthorized: ${accountId}`, error)
+      logger.error(`鉂?Failed to mark Claude Console account as unauthorized: ${accountId}`, error)
       throw error
     }
   }
 
-  // 🚫 标记账号为临时封禁状态（400错误 - 账户临时禁用）
+  // 馃毇 鏍囪璐﹀彿涓轰复鏃跺皝绂佺姸鎬侊紙400閿欒 - 璐︽埛涓存椂绂佺敤锛?
   async markConsoleAccountBlocked(accountId, errorDetails = '') {
     try {
       const client = redis.getClientSafe()
@@ -755,14 +775,14 @@ class ClaudeConsoleAccountService {
 
       if (blockedMinutes <= 0) {
         logger.info(
-          `ℹ️ CLAUDE_CONSOLE_BLOCKED_HANDLING_MINUTES 未设置或为0，跳过账户封禁：${account.name} (${accountId})`
+          `鈩癸笍 CLAUDE_CONSOLE_BLOCKED_HANDLING_MINUTES 鏈缃垨涓?锛岃烦杩囪处鎴峰皝绂侊細${account.name} (${accountId})`
         )
 
         if (account.blockedStatus === 'blocked') {
           try {
             await this.removeAccountBlocked(accountId)
           } catch (cleanupError) {
-            logger.warn(`⚠️ 尝试移除账户封禁状态失败：${accountId}`, cleanupError)
+            logger.warn(`鈿狅笍 灏濊瘯绉婚櫎璐︽埛灏佺鐘舵€佸け璐ワ細${accountId}`, cleanupError)
           }
         }
 
@@ -772,17 +792,17 @@ class ClaudeConsoleAccountService {
       const updates = {
         blockedAt: new Date().toISOString(),
         blockedStatus: 'blocked',
-        isActive: 'false', // 禁用账户（与429保持一致）
-        schedulable: 'false', // 停止调度（与429保持一致）
-        status: 'account_blocked', // 设置状态（与429保持一致）
-        errorMessage: '账户临时被禁用（400错误）',
-        // 使用独立的封禁自动停止标记
+        isActive: 'false', // 绂佺敤璐︽埛锛堜笌429淇濇寔涓€鑷达級
+        schedulable: 'false', // 鍋滄璋冨害锛堜笌429淇濇寔涓€鑷达級
+        status: 'account_blocked', // 璁剧疆鐘舵€侊紙涓?29淇濇寔涓€鑷达級
+        errorMessage: '????????400???',
+        // 浣跨敤鐙珛鐨勫皝绂佽嚜鍔ㄥ仠姝㈡爣璁?
         blockedAutoStopped: 'true'
       }
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
 
-      // 发送Webhook通知，包含完整错误详情
+      // 鍙戦€乄ebhook閫氱煡锛屽寘鍚畬鏁撮敊璇鎯?
       try {
         const webhookNotifier = require('../utils/webhookNotifier')
         await webhookNotifier.sendAccountAnomalyNotification({
@@ -791,7 +811,7 @@ class ClaudeConsoleAccountService {
           platform: 'claude-console',
           status: 'error',
           errorCode: 'CLAUDE_CONSOLE_BLOCKED',
-          reason: `账户临时被禁用（400错误）。账户将在 ${blockedMinutes} 分钟后自动恢复。`,
+          reason: `????????400???????? ${blockedMinutes} ????????`,
           errorDetails: errorDetails || '无错误详情',
           timestamp: new Date().toISOString()
         })
@@ -799,43 +819,43 @@ class ClaudeConsoleAccountService {
         logger.error('Failed to send blocked webhook notification:', webhookError)
       }
 
-      logger.warn(`🚫 Claude Console account temporarily blocked: ${account.name} (${accountId})`)
+      logger.warn(`馃毇 Claude Console account temporarily blocked: ${account.name} (${accountId})`)
       return { success: true }
     } catch (error) {
-      logger.error(`❌ Failed to mark Claude Console account as blocked: ${accountId}`, error)
+      logger.error(`鉂?Failed to mark Claude Console account as blocked: ${accountId}`, error)
       throw error
     }
   }
 
-  // ✅ 移除账号的临时封禁状态
+  // 鉁?绉婚櫎璐﹀彿鐨勪复鏃跺皝绂佺姸鎬?
   async removeAccountBlocked(accountId) {
     try {
       const client = redis.getClientSafe()
       const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
 
-      // 获取账户当前状态和额度信息
+      // 鑾峰彇璐︽埛褰撳墠鐘舵€佸拰棰濆害淇℃伅
       const [currentStatus, quotaStoppedAt] = await client.hmget(
         accountKey,
         'status',
         'quotaStoppedAt'
       )
 
-      // 删除封禁相关字段
+      // 鍒犻櫎灏佺鐩稿叧瀛楁
       await client.hdel(accountKey, 'blockedAt', 'blockedStatus')
 
-      // 根据不同情况决定是否恢复账户
+      // 鏍规嵁涓嶅悓鎯呭喌鍐冲畾鏄惁鎭㈠璐︽埛
       if (currentStatus === 'account_blocked') {
         if (quotaStoppedAt) {
-          // 还有额度限制，改为quota_exceeded状态
+          // 杩樻湁棰濆害闄愬埗锛屾敼涓簈uota_exceeded鐘舵€?
           await client.hset(accountKey, {
             status: 'quota_exceeded'
-            // isActive保持false
+            // isActive淇濇寔false
           })
           logger.info(
-            `⚠️ Blocked status removed but quota exceeded remains for account: ${accountId}`
+            `鈿狅笍 Blocked status removed but quota exceeded remains for account: ${accountId}`
           )
         } else {
-          // 没有额度限制，完全恢复
+          // 娌℃湁棰濆害闄愬埗锛屽畬鍏ㄦ仮澶?
           const accountData = await client.hgetall(accountKey)
           const updateData = {
             isActive: 'true',
@@ -845,11 +865,11 @@ class ClaudeConsoleAccountService {
 
           const hadAutoStop = accountData.blockedAutoStopped === 'true'
 
-          // 只恢复因封禁而自动停止的账户
+          // 鍙仮澶嶅洜灏佺鑰岃嚜鍔ㄥ仠姝㈢殑璐︽埛
           if (hadAutoStop && accountData.schedulable === 'false') {
-            updateData.schedulable = 'true' // 恢复调度
+            updateData.schedulable = 'true' // 鎭㈠璋冨害
             logger.info(
-              `✅ Auto-resuming scheduling for Claude Console account ${accountId} after blocked status cleared`
+              `鉁?Auto-resuming scheduling for Claude Console account ${accountId} after blocked status cleared`
             )
           }
 
@@ -858,28 +878,28 @@ class ClaudeConsoleAccountService {
           }
 
           await client.hset(accountKey, updateData)
-          logger.success(`✅ Blocked status removed and account re-enabled: ${accountId}`)
+          logger.success(`鉁?Blocked status removed and account re-enabled: ${accountId}`)
         }
       } else {
         if (await client.hdel(accountKey, 'blockedAutoStopped')) {
           logger.info(
-            `ℹ️ Removed stale auto-stop flag for Claude Console account ${accountId} during blocked status recovery`
+            `鈩癸笍 Removed stale auto-stop flag for Claude Console account ${accountId} during blocked status recovery`
           )
         }
-        logger.success(`✅ Blocked status removed for Claude Console account: ${accountId}`)
+        logger.success(`鉁?Blocked status removed for Claude Console account: ${accountId}`)
       }
 
       return { success: true }
     } catch (error) {
       logger.error(
-        `❌ Failed to remove blocked status for Claude Console account: ${accountId}`,
+        `鉂?Failed to remove blocked status for Claude Console account: ${accountId}`,
         error
       )
       throw error
     }
   }
 
-  // 🔍 检查账号是否处于临时封禁状态
+  // 馃攳 妫€鏌ヨ处鍙锋槸鍚﹀浜庝复鏃跺皝绂佺姸鎬?
   async isAccountBlocked(accountId) {
     try {
       const account = await this.getAccount(accountId)
@@ -899,7 +919,7 @@ class ClaudeConsoleAccountService {
         const now = new Date()
         const minutesSinceBlocked = (now - blockedAt) / (1000 * 60)
 
-        // 禁用时长过后自动恢复
+        // 绂佺敤鏃堕暱杩囧悗鑷姩鎭㈠
         if (minutesSinceBlocked >= blockedDuration) {
           await this.removeAccountBlocked(accountId)
           return false
@@ -911,14 +931,14 @@ class ClaudeConsoleAccountService {
       return false
     } catch (error) {
       logger.error(
-        `❌ Failed to check blocked status for Claude Console account: ${accountId}`,
+        `鉂?Failed to check blocked status for Claude Console account: ${accountId}`,
         error
       )
       return false
     }
   }
 
-  // 🚫 标记账号为过载状态（529错误）
+  // 馃毇 鏍囪璐﹀彿涓鸿繃杞界姸鎬侊紙529閿欒锛?
   async markAccountOverloaded(accountId) {
     try {
       const client = redis.getClientSafe()
@@ -931,12 +951,12 @@ class ClaudeConsoleAccountService {
       const updates = {
         overloadedAt: new Date().toISOString(),
         overloadStatus: 'overloaded',
-        errorMessage: '服务过载（529错误）'
+        errorMessage: '服务过载（429错误）'
       }
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
 
-      // 发送Webhook通知
+      // 鍙戦€乄ebhook閫氱煡
       try {
         const webhookNotifier = require('../utils/webhookNotifier')
         await webhookNotifier.sendAccountAnomalyNotification({
@@ -945,40 +965,40 @@ class ClaudeConsoleAccountService {
           platform: 'claude-console',
           status: 'error',
           errorCode: 'CLAUDE_CONSOLE_OVERLOADED',
-          reason: '服务过载（529错误）。账户将暂时停止调度',
+          reason: '鏈嶅姟杩囪浇锛?29閿欒锛夈€傝处鎴峰皢鏆傛椂鍋滄璋冨害',
           timestamp: new Date().toISOString()
         })
       } catch (webhookError) {
         logger.error('Failed to send overload webhook notification:', webhookError)
       }
 
-      logger.warn(`🚫 Claude Console account marked as overloaded: ${account.name} (${accountId})`)
+      logger.warn(`馃毇 Claude Console account marked as overloaded: ${account.name} (${accountId})`)
       return { success: true }
     } catch (error) {
-      logger.error(`❌ Failed to mark Claude Console account as overloaded: ${accountId}`, error)
+      logger.error(`鉂?Failed to mark Claude Console account as overloaded: ${accountId}`, error)
       throw error
     }
   }
 
-  // ✅ 移除账号的过载状态
+  // 鉁?绉婚櫎璐﹀彿鐨勮繃杞界姸鎬?
   async removeAccountOverload(accountId) {
     try {
       const client = redis.getClientSafe()
 
       await client.hdel(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, 'overloadedAt', 'overloadStatus')
 
-      logger.success(`✅ Overload status removed for Claude Console account: ${accountId}`)
+      logger.success(`鉁?Overload status removed for Claude Console account: ${accountId}`)
       return { success: true }
     } catch (error) {
       logger.error(
-        `❌ Failed to remove overload status for Claude Console account: ${accountId}`,
+        `鉂?Failed to remove overload status for Claude Console account: ${accountId}`,
         error
       )
       throw error
     }
   }
 
-  // 🔍 检查账号是否处于过载状态
+  // 馃攳 妫€鏌ヨ处鍙锋槸鍚﹀浜庤繃杞界姸鎬?
   async isAccountOverloaded(accountId) {
     try {
       const account = await this.getAccount(accountId)
@@ -991,7 +1011,7 @@ class ClaudeConsoleAccountService {
         const now = new Date()
         const minutesSinceOverload = (now - overloadedAt) / (1000 * 60)
 
-        // 过载状态持续10分钟后自动恢复
+        // 杩囪浇鐘舵€佹寔缁?0鍒嗛挓鍚庤嚜鍔ㄦ仮澶?
         if (minutesSinceOverload >= 10) {
           await this.removeAccountOverload(accountId)
           return false
@@ -1003,19 +1023,19 @@ class ClaudeConsoleAccountService {
       return false
     } catch (error) {
       logger.error(
-        `❌ Failed to check overload status for Claude Console account: ${accountId}`,
+        `鉂?Failed to check overload status for Claude Console account: ${accountId}`,
         error
       )
       return false
     }
   }
 
-  // 🚫 标记账号为封锁状态（模型不支持等原因）
+  // 馃毇 鏍囪璐﹀彿涓哄皝閿佺姸鎬侊紙妯″瀷涓嶆敮鎸佺瓑鍘熷洜锛?
   async blockAccount(accountId, reason) {
     try {
       const client = redis.getClientSafe()
 
-      // 获取账户信息用于webhook通知
+      // 鑾峰彇璐︽埛淇℃伅鐢ㄤ簬webhook閫氱煡
       const accountData = await client.hgetall(`${this.ACCOUNT_KEY_PREFIX}${accountId}`)
 
       const updates = {
@@ -1026,9 +1046,9 @@ class ClaudeConsoleAccountService {
 
       await client.hset(`${this.ACCOUNT_KEY_PREFIX}${accountId}`, updates)
 
-      logger.warn(`🚫 Claude Console account blocked: ${accountId} - ${reason}`)
+      logger.warn(`馃毇 Claude Console account blocked: ${accountId} - ${reason}`)
 
-      // 发送Webhook通知
+      // 鍙戦€乄ebhook閫氱煡
       if (accountData && Object.keys(accountData).length > 0) {
         try {
           const webhookNotifier = require('../utils/webhookNotifier')
@@ -1047,27 +1067,27 @@ class ClaudeConsoleAccountService {
 
       return { success: true }
     } catch (error) {
-      logger.error(`❌ Failed to block Claude Console account: ${accountId}`, error)
+      logger.error(`鉂?Failed to block Claude Console account: ${accountId}`, error)
       throw error
     }
   }
 
-  // 🌐 创建代理agent（使用统一的代理工具）
+  // 馃寪 鍒涘缓浠ｇ悊agent锛堜娇鐢ㄧ粺涓€鐨勪唬鐞嗗伐鍏凤級
   _createProxyAgent(proxyConfig) {
     const proxyAgent = ProxyHelper.createProxyAgent(proxyConfig)
     if (proxyAgent) {
       logger.info(
-        `🌐 Using proxy for Claude Console request: ${ProxyHelper.getProxyDescription(proxyConfig)}`
+        `馃寪 Using proxy for Claude Console request: ${ProxyHelper.getProxyDescription(proxyConfig)}`
       )
     } else if (proxyConfig) {
-      logger.debug('🌐 Failed to create proxy agent for Claude Console')
+      logger.debug('馃寪 Failed to create proxy agent for Claude Console')
     } else {
-      logger.debug('🌐 No proxy configured for Claude Console request')
+      logger.debug('馃寪 No proxy configured for Claude Console request')
     }
     return proxyAgent
   }
 
-  // 🔐 加密敏感数据
+  // 馃攼 鍔犲瘑鏁忔劅鏁版嵁
   _encryptSensitiveData(data) {
     if (!data) {
       return ''
@@ -1083,18 +1103,18 @@ class ClaudeConsoleAccountService {
 
       return `${iv.toString('hex')}:${encrypted}`
     } catch (error) {
-      logger.error('❌ Encryption error:', error)
+      logger.error('鉂?Encryption error:', error)
       return data
     }
   }
 
-  // 🔓 解密敏感数据
+  // 馃敁 瑙ｅ瘑鏁忔劅鏁版嵁
   _decryptSensitiveData(encryptedData) {
     if (!encryptedData) {
       return ''
     }
 
-    // 🎯 检查缓存
+    // 馃幆 妫€鏌ョ紦瀛?
     const cacheKey = crypto.createHash('sha256').update(encryptedData).digest('hex')
     const cached = this._decryptCache.get(cacheKey)
     if (cached !== undefined) {
@@ -1113,10 +1133,10 @@ class ClaudeConsoleAccountService {
           let decrypted = decipher.update(encrypted, 'hex', 'utf8')
           decrypted += decipher.final('utf8')
 
-          // 💾 存入缓存（5分钟过期）
+          // 馃捑 瀛樺叆缂撳瓨锛?鍒嗛挓杩囨湡锛?
           this._decryptCache.set(cacheKey, decrypted, 5 * 60 * 1000)
 
-          // 📊 定期打印缓存统计
+          // 馃搳 瀹氭湡鎵撳嵃缂撳瓨缁熻
           if ((this._decryptCache.hits + this._decryptCache.misses) % 1000 === 0) {
             this._decryptCache.printStats()
           }
@@ -1127,30 +1147,30 @@ class ClaudeConsoleAccountService {
 
       return encryptedData
     } catch (error) {
-      logger.error('❌ Decryption error:', error)
+      logger.error('鉂?Decryption error:', error)
       return encryptedData
     }
   }
 
-  // 🔑 生成加密密钥
+  // 馃攽 鐢熸垚鍔犲瘑瀵嗛挜
   _generateEncryptionKey() {
-    // 性能优化：缓存密钥派生结果，避免重复的 CPU 密集计算
-    // scryptSync 是故意设计为慢速的密钥派生函数（防暴力破解）
-    // 但在高并发场景下，每次都重新计算会导致 CPU 100% 占用
+    // 鎬ц兘浼樺寲锛氱紦瀛樺瘑閽ユ淳鐢熺粨鏋滐紝閬垮厤閲嶅鐨?CPU 瀵嗛泦璁＄畻
+    // scryptSync 鏄晠鎰忚璁′负鎱㈤€熺殑瀵嗛挜娲剧敓鍑芥暟锛堥槻鏆村姏鐮磋В锛?
+    // 浣嗗湪楂樺苟鍙戝満鏅笅锛屾瘡娆￠兘閲嶆柊璁＄畻浼氬鑷?CPU 100% 鍗犵敤
     if (!this._encryptionKeyCache) {
-      // 只在第一次调用时计算，后续使用缓存
-      // 由于输入参数固定，派生结果永远相同，不影响数据兼容性
+      // 鍙湪绗竴娆¤皟鐢ㄦ椂璁＄畻锛屽悗缁娇鐢ㄧ紦瀛?
+      // 鐢变簬杈撳叆鍙傛暟鍥哄畾锛屾淳鐢熺粨鏋滄案杩滅浉鍚岋紝涓嶅奖鍝嶆暟鎹吋瀹规€?
       this._encryptionKeyCache = crypto.scryptSync(
         config.security.encryptionKey,
         this.ENCRYPTION_SALT,
         32
       )
-      logger.info('🔑 Console encryption key derived and cached for performance optimization')
+      logger.info('馃攽 Console encryption key derived and cached for performance optimization')
     }
     return this._encryptionKeyCache
   }
 
-  // 🎭 掩码API URL
+  // 馃幁 鎺╃爜API URL
   _maskApiUrl(apiUrl) {
     if (!apiUrl) {
       return ''
@@ -1164,7 +1184,7 @@ class ClaudeConsoleAccountService {
     }
   }
 
-  // 📊 获取限流信息
+  // 馃搳 鑾峰彇闄愭祦淇℃伅
   _getRateLimitInfo(accountData) {
     if (accountData.rateLimitStatus === 'limited' && accountData.rateLimitedAt) {
       const rateLimitedAt = new Date(accountData.rateLimitedAt)
@@ -1190,46 +1210,46 @@ class ClaudeConsoleAccountService {
     }
   }
 
-  // 🔄 处理模型映射，确保向后兼容
+  // 馃攧 澶勭悊妯″瀷鏄犲皠锛岀‘淇濆悜鍚庡吋瀹?
   _processModelMapping(supportedModels) {
-    // 如果是空值，返回空对象（支持所有模型）
+    // 濡傛灉鏄┖鍊硷紝杩斿洖绌哄璞★紙鏀寔鎵€鏈夋ā鍨嬶級
     if (!supportedModels || (Array.isArray(supportedModels) && supportedModels.length === 0)) {
       return {}
     }
 
-    // 如果已经是对象格式（新的映射表格式），直接返回
+    // 濡傛灉宸茬粡鏄璞℃牸寮忥紙鏂扮殑鏄犲皠琛ㄦ牸寮忥級锛岀洿鎺ヨ繑鍥?
     if (typeof supportedModels === 'object' && !Array.isArray(supportedModels)) {
       return supportedModels
     }
 
-    // 如果是数组格式（旧格式），转换为映射表
+    // 濡傛灉鏄暟缁勬牸寮忥紙鏃ф牸寮忥級锛岃浆鎹负鏄犲皠琛?
     if (Array.isArray(supportedModels)) {
       const mapping = {}
       supportedModels.forEach((model) => {
         if (model && typeof model === 'string') {
-          mapping[model] = model // 映射到自身
+          mapping[model] = model // 鏄犲皠鍒拌嚜韬?
         }
       })
       return mapping
     }
 
-    // 其他情况返回空对象
+    // 鍏朵粬鎯呭喌杩斿洖绌哄璞?
     return {}
   }
 
-  // 🔍 检查模型是否支持（用于调度）
+  // 馃攳 妫€鏌ユā鍨嬫槸鍚︽敮鎸侊紙鐢ㄤ簬璋冨害锛?
   isModelSupported(modelMapping, requestedModel) {
-    // 如果映射表为空，支持所有模型
+    // 濡傛灉鏄犲皠琛ㄤ负绌猴紝鏀寔鎵€鏈夋ā鍨?
     if (!modelMapping || Object.keys(modelMapping).length === 0) {
       return true
     }
 
-    // 检查请求的模型是否在映射表的键中（精确匹配）
+    // 妫€鏌ヨ姹傜殑妯″瀷鏄惁鍦ㄦ槧灏勮〃鐨勯敭涓紙绮剧‘鍖归厤锛?
     if (Object.prototype.hasOwnProperty.call(modelMapping, requestedModel)) {
       return true
     }
 
-    // 尝试大小写不敏感匹配
+    // 灏濊瘯澶у皬鍐欎笉鏁忔劅鍖归厤
     const requestedModelLower = requestedModel.toLowerCase()
     for (const key of Object.keys(modelMapping)) {
       if (key.toLowerCase() === requestedModelLower) {
@@ -1240,19 +1260,19 @@ class ClaudeConsoleAccountService {
     return false
   }
 
-  // 🔄 获取映射后的模型名称
+  // 馃攧 鑾峰彇鏄犲皠鍚庣殑妯″瀷鍚嶇О
   getMappedModel(modelMapping, requestedModel) {
-    // 如果映射表为空，返回原模型
+    // 濡傛灉鏄犲皠琛ㄤ负绌猴紝杩斿洖鍘熸ā鍨?
     if (!modelMapping || Object.keys(modelMapping).length === 0) {
       return requestedModel
     }
 
-    // 精确匹配
+    // 绮剧‘鍖归厤
     if (modelMapping[requestedModel]) {
       return modelMapping[requestedModel]
     }
 
-    // 大小写不敏感匹配
+    // 澶у皬鍐欎笉鏁忔劅鍖归厤
     const requestedModelLower = requestedModel.toLowerCase()
     for (const [key, value] of Object.entries(modelMapping)) {
       if (key.toLowerCase() === requestedModelLower) {
@@ -1260,60 +1280,60 @@ class ClaudeConsoleAccountService {
       }
     }
 
-    // 如果不存在则返回原模型
+    // 濡傛灉涓嶅瓨鍦ㄥ垯杩斿洖鍘熸ā鍨?
     return requestedModel
   }
 
-  // 💰 检查账户使用额度（基于实时统计数据）
+  // 馃挵 妫€鏌ヨ处鎴蜂娇鐢ㄩ搴︼紙鍩轰簬瀹炴椂缁熻鏁版嵁锛?
   async checkQuotaUsage(accountId) {
     try {
-      // 获取实时的使用统计（包含费用）
+      // 鑾峰彇瀹炴椂鐨勪娇鐢ㄧ粺璁★紙鍖呭惈璐圭敤锛?
       const usageStats = await redis.getAccountUsageStats(accountId)
       const currentDailyCost = usageStats.daily.cost || 0
 
-      // 获取账户配置
+      // 鑾峰彇璐︽埛閰嶇疆
       const accountData = await this.getAccount(accountId)
       if (!accountData) {
         logger.warn(`Account not found: ${accountId}`)
         return
       }
 
-      // 解析额度配置，确保数值有效
+      // 瑙ｆ瀽棰濆害閰嶇疆锛岀‘淇濇暟鍊兼湁鏁?
       const dailyQuota = parseFloat(accountData.dailyQuota || '0')
       if (isNaN(dailyQuota) || dailyQuota <= 0) {
-        // 没有设置有效额度，无需检查
+        // 娌℃湁璁剧疆鏈夋晥棰濆害锛屾棤闇€妫€鏌?
         return
       }
 
-      // 检查是否已经因额度停用（避免重复操作）
+      // 妫€鏌ユ槸鍚﹀凡缁忓洜棰濆害鍋滅敤锛堥伩鍏嶉噸澶嶆搷浣滐級
       if (!accountData.isActive && accountData.quotaStoppedAt) {
         return
       }
 
-      // 检查是否超过额度限制
+      // 妫€鏌ユ槸鍚﹁秴杩囬搴﹂檺鍒?
       if (currentDailyCost >= dailyQuota) {
-        // 使用原子操作避免竞态条件 - 再次检查是否已设置quotaStoppedAt
+        // 浣跨敤鍘熷瓙鎿嶄綔閬垮厤绔炴€佹潯浠?- 鍐嶆妫€鏌ユ槸鍚﹀凡璁剧疆quotaStoppedAt
         const client = redis.getClientSafe()
         const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
 
-        // double-check locking pattern - 检查quotaStoppedAt而不是status
+        // double-check locking pattern - 妫€鏌uotaStoppedAt鑰屼笉鏄痵tatus
         const existingQuotaStop = await client.hget(accountKey, 'quotaStoppedAt')
         if (existingQuotaStop) {
-          return // 已经被其他进程处理
+          return // 宸茬粡琚叾浠栬繘绋嬪鐞?
         }
 
-        // 超过额度，停用账户
+        // 瓒呰繃棰濆害锛屽仠鐢ㄨ处鎴?
         const updates = {
           isActive: false,
           quotaStoppedAt: new Date().toISOString(),
           errorMessage: `Daily quota exceeded: $${currentDailyCost.toFixed(2)} / $${dailyQuota.toFixed(2)}`,
-          schedulable: false, // 停止调度
-          // 使用独立的额度超限自动停止标记
+          schedulable: false, // 鍋滄璋冨害
+          // 浣跨敤鐙珛鐨勯搴﹁秴闄愯嚜鍔ㄥ仠姝㈡爣璁?
           quotaAutoStopped: 'true'
         }
 
-        // 只有当前状态是active时才改为quota_exceeded
-        // 如果是rate_limited等其他状态，保持原状态不变
+        // 鍙湁褰撳墠鐘舵€佹槸active鏃舵墠鏀逛负quota_exceeded
+        // 濡傛灉鏄痳ate_limited绛夊叾浠栫姸鎬侊紝淇濇寔鍘熺姸鎬佷笉鍙?
         const currentStatus = await client.hget(accountKey, 'status')
         if (currentStatus === 'active') {
           updates.status = 'quota_exceeded'
@@ -1322,10 +1342,10 @@ class ClaudeConsoleAccountService {
         await this.updateAccount(accountId, updates)
 
         logger.warn(
-          `💰 Account ${accountId} exceeded daily quota: $${currentDailyCost.toFixed(2)} / $${dailyQuota.toFixed(2)}`
+          `馃挵 Account ${accountId} exceeded daily quota: $${currentDailyCost.toFixed(2)} / $${dailyQuota.toFixed(2)}`
         )
 
-        // 发送webhook通知
+        // 鍙戦€亀ebhook閫氱煡
         try {
           const webhookNotifier = require('../utils/webhookNotifier')
           await webhookNotifier.sendAccountAnomalyNotification({
@@ -1342,14 +1362,14 @@ class ClaudeConsoleAccountService {
       }
 
       logger.debug(
-        `💰 Quota check for account ${accountId}: $${currentDailyCost.toFixed(4)} / $${dailyQuota.toFixed(2)}`
+        `馃挵 Quota check for account ${accountId}: $${currentDailyCost.toFixed(4)} / $${dailyQuota.toFixed(2)}`
       )
     } catch (error) {
       logger.error('Failed to check quota usage:', error)
     }
   }
 
-  // 🔄 重置账户每日使用量（恢复因额度停用的账户）
+  // 馃攧 閲嶇疆璐︽埛姣忔棩浣跨敤閲忥紙鎭㈠鍥犻搴﹀仠鐢ㄧ殑璐︽埛锛?
   async resetDailyUsage(accountId) {
     try {
       const accountData = await this.getAccount(accountId)
@@ -1362,8 +1382,8 @@ class ClaudeConsoleAccountService {
         lastResetDate: today
       }
 
-      // 如果账户是因为超额被停用的，恢复账户
-      // 注意：状态可能是 quota_exceeded 或 rate_limited（如果429错误时也超额了）
+      // 濡傛灉璐︽埛鏄洜涓鸿秴棰濊鍋滅敤鐨勶紝鎭㈠璐︽埛
+      // 娉ㄦ剰锛氱姸鎬佸彲鑳芥槸 quota_exceeded 鎴?rate_limited锛堝鏋?29閿欒鏃朵篃瓒呴浜嗭級
       if (
         accountData.quotaStoppedAt &&
         accountData.isActive === false &&
@@ -1374,13 +1394,13 @@ class ClaudeConsoleAccountService {
         updates.errorMessage = ''
         updates.quotaStoppedAt = ''
 
-        // 只恢复因额度超限而自动停止的账户
+        // 鍙仮澶嶅洜棰濆害瓒呴檺鑰岃嚜鍔ㄥ仠姝㈢殑璐︽埛
         if (accountData.quotaAutoStopped === 'true') {
           updates.schedulable = true
           updates.quotaAutoStopped = ''
         }
 
-        // 如果是rate_limited状态，也清除限流相关字段
+        // 濡傛灉鏄痳ate_limited鐘舵€侊紝涔熸竻闄ら檺娴佺浉鍏冲瓧娈?
         if (accountData.status === 'rate_limited') {
           const client = redis.getClientSafe()
           const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
@@ -1388,48 +1408,48 @@ class ClaudeConsoleAccountService {
         }
 
         logger.info(
-          `✅ Restored account ${accountId} after daily reset (was ${accountData.status})`
+          `鉁?Restored account ${accountId} after daily reset (was ${accountData.status})`
         )
       }
 
       await this.updateAccount(accountId, updates)
 
-      logger.debug(`🔄 Reset daily usage for account ${accountId}`)
+      logger.debug(`馃攧 Reset daily usage for account ${accountId}`)
     } catch (error) {
       logger.error('Failed to reset daily usage:', error)
     }
   }
 
-  // 🔄 重置所有账户的每日使用量
+  // 馃攧 閲嶇疆鎵€鏈夎处鎴风殑姣忔棩浣跨敤閲?
   async resetAllDailyUsage() {
     try {
       const accounts = await this.getAllAccounts()
-      // 与统计一致使用配置时区日期
+      // 涓庣粺璁′竴鑷翠娇鐢ㄩ厤缃椂鍖烘棩鏈?
       const today = redis.getDateStringInTimezone()
       let resetCount = 0
 
       for (const account of accounts) {
-        // 只重置需要重置的账户
+        // 鍙噸缃渶瑕侀噸缃殑璐︽埛
         if (account.lastResetDate !== today) {
           await this.resetDailyUsage(account.id)
           resetCount += 1
         }
       }
 
-      logger.success(`✅ Reset daily usage for ${resetCount} Claude Console accounts`)
+      logger.success(`鉁?Reset daily usage for ${resetCount} Claude Console accounts`)
     } catch (error) {
       logger.error('Failed to reset all daily usage:', error)
     }
   }
 
-  // 📊 获取账户使用统计（基于实时数据）
+  // 馃搳 鑾峰彇璐︽埛浣跨敤缁熻锛堝熀浜庡疄鏃舵暟鎹級
   async getAccountUsageStats(accountId) {
     try {
-      // 获取实时的使用统计（包含费用）
+      // 鑾峰彇瀹炴椂鐨勪娇鐢ㄧ粺璁★紙鍖呭惈璐圭敤锛?
       const usageStats = await redis.getAccountUsageStats(accountId)
       const currentDailyCost = usageStats.daily.cost || 0
 
-      // 获取账户配置
+      // 鑾峰彇璐︽埛閰嶇疆
       const accountData = await this.getAccount(accountId)
       if (!accountData) {
         return null
@@ -1439,13 +1459,13 @@ class ClaudeConsoleAccountService {
 
       return {
         dailyQuota,
-        dailyUsage: currentDailyCost, // 使用实时计算的费用
+        dailyUsage: currentDailyCost, // 浣跨敤瀹炴椂璁＄畻鐨勮垂鐢?
         remainingQuota: dailyQuota > 0 ? Math.max(0, dailyQuota - currentDailyCost) : null,
         usagePercentage: dailyQuota > 0 ? (currentDailyCost / dailyQuota) * 100 : 0,
         lastResetDate: accountData.lastResetDate,
         quotaStoppedAt: accountData.quotaStoppedAt,
         isQuotaExceeded: dailyQuota > 0 && currentDailyCost >= dailyQuota,
-        // 额外返回完整的使用统计
+        // 棰濆杩斿洖瀹屾暣鐨勪娇鐢ㄧ粺璁?
         fullUsageStats: usageStats
       }
     } catch (error) {
@@ -1454,7 +1474,7 @@ class ClaudeConsoleAccountService {
     }
   }
 
-  // 🔄 重置账户所有异常状态
+  // 馃攧 閲嶇疆璐︽埛鎵€鏈夊紓甯哥姸鎬?
   async resetAccountStatus(accountId) {
     try {
       const accountData = await this.getAccount(accountId)
@@ -1465,15 +1485,15 @@ class ClaudeConsoleAccountService {
       const client = redis.getClientSafe()
       const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
 
-      // 准备要更新的字段
+      // 鍑嗗瑕佹洿鏂扮殑瀛楁
       const updates = {
         status: 'active',
         errorMessage: '',
         schedulable: 'true',
-        isActive: 'true' // 重要：必须恢复isActive状态
+        isActive: 'true' // 閲嶈锛氬繀椤绘仮澶峣sActive鐘舵€?
       }
 
-      // 删除所有异常状态相关的字段
+      // 鍒犻櫎鎵€鏈夊紓甯哥姸鎬佺浉鍏崇殑瀛楁
       const fieldsToDelete = [
         'rateLimitedAt',
         'rateLimitStatus',
@@ -1485,13 +1505,13 @@ class ClaudeConsoleAccountService {
         'quotaStoppedAt'
       ]
 
-      // 执行更新
+      // 鎵ц鏇存柊
       await client.hset(accountKey, updates)
       await client.hdel(accountKey, ...fieldsToDelete)
 
-      logger.success(`✅ Reset all error status for Claude Console account ${accountId}`)
+      logger.success(`鉁?Reset all error status for Claude Console account ${accountId}`)
 
-      // 发送 Webhook 通知
+      // 鍙戦€?Webhook 閫氱煡
       try {
         const webhookNotifier = require('../utils/webhookNotifier')
         await webhookNotifier.sendAccountAnomalyNotification({
@@ -1509,35 +1529,35 @@ class ClaudeConsoleAccountService {
 
       return { success: true, accountId }
     } catch (error) {
-      logger.error(`❌ Failed to reset Claude Console account status: ${accountId}`, error)
+      logger.error(`鉂?Failed to reset Claude Console account status: ${accountId}`, error)
       throw error
     }
   }
 
   /**
-   * ⏰ 检查账户订阅是否过期
-   * @param {Object} account - 账户对象
-   * @returns {boolean} - true: 已过期, false: 未过期
+   * 鈴?妫€鏌ヨ处鎴疯闃呮槸鍚﹁繃鏈?
+   * @param {Object} account - 璐︽埛瀵硅薄
+   * @returns {boolean} - true: 宸茶繃鏈? false: 鏈繃鏈?
    */
   isSubscriptionExpired(account) {
     if (!account.subscriptionExpiresAt) {
-      return false // 未设置视为永不过期
+      return false // 鏈缃涓烘案涓嶈繃鏈?
     }
     const expiryDate = new Date(account.subscriptionExpiresAt)
     return expiryDate <= new Date()
   }
 
-  // 🚫 标记账户的 count_tokens 端点不可用
+  // 馃毇 鏍囪璐︽埛鐨?count_tokens 绔偣涓嶅彲鐢?
   async markCountTokensUnavailable(accountId) {
     try {
       const client = redis.getClientSafe()
       const accountKey = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
 
-      // 检查账户是否存在
+      // 妫€鏌ヨ处鎴锋槸鍚﹀瓨鍦?
       const exists = await client.exists(accountKey)
       if (!exists) {
         logger.warn(
-          `⚠️ Cannot mark count_tokens unavailable for non-existent account: ${accountId}`
+          `鈿狅笍 Cannot mark count_tokens unavailable for non-existent account: ${accountId}`
         )
         return { success: false, reason: 'Account not found' }
       }
@@ -1548,16 +1568,16 @@ class ClaudeConsoleAccountService {
       })
 
       logger.info(
-        `🚫 Marked count_tokens endpoint as unavailable for Claude Console account: ${accountId}`
+        `馃毇 Marked count_tokens endpoint as unavailable for Claude Console account: ${accountId}`
       )
       return { success: true }
     } catch (error) {
-      logger.error(`❌ Failed to mark count_tokens unavailable for account ${accountId}:`, error)
+      logger.error(`鉂?Failed to mark count_tokens unavailable for account ${accountId}:`, error)
       throw error
     }
   }
 
-  // ✅ 移除账户的 count_tokens 不可用标记
+  // 鉁?绉婚櫎璐︽埛鐨?count_tokens 涓嶅彲鐢ㄦ爣璁?
   async removeCountTokensUnavailable(accountId) {
     try {
       const client = redis.getClientSafe()
@@ -1566,19 +1586,19 @@ class ClaudeConsoleAccountService {
       await client.hdel(accountKey, 'countTokensUnavailable', 'countTokensUnavailableAt')
 
       logger.info(
-        `✅ Removed count_tokens unavailable mark for Claude Console account: ${accountId}`
+        `鉁?Removed count_tokens unavailable mark for Claude Console account: ${accountId}`
       )
       return { success: true }
     } catch (error) {
       logger.error(
-        `❌ Failed to remove count_tokens unavailable mark for account ${accountId}:`,
+        `鉂?Failed to remove count_tokens unavailable mark for account ${accountId}:`,
         error
       )
       throw error
     }
   }
 
-  // 🔍 检查账户的 count_tokens 端点是否不可用
+  // 馃攳 妫€鏌ヨ处鎴风殑 count_tokens 绔偣鏄惁涓嶅彲鐢?
   async isCountTokensUnavailable(accountId) {
     try {
       const client = redis.getClientSafe()
@@ -1587,10 +1607,11 @@ class ClaudeConsoleAccountService {
       const value = await client.hget(accountKey, 'countTokensUnavailable')
       return value === 'true'
     } catch (error) {
-      logger.error(`❌ Failed to check count_tokens availability for account ${accountId}:`, error)
-      return false // 出错时默认返回可用，避免误阻断
+      logger.error(`鉂?Failed to check count_tokens availability for account ${accountId}:`, error)
+      return false // 鍑洪敊鏃堕粯璁よ繑鍥炲彲鐢紝閬垮厤璇樆鏂?
     }
   }
 }
 
 module.exports = new ClaudeConsoleAccountService()
+

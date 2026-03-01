@@ -94,7 +94,11 @@ class UnifiedOpenAIScheduler {
   }
 
   // ✅ 确保账号在调度前完成限流恢复与 schedulable 校正
-  async _ensureAccountReadyForScheduling(account, accountId, { sanitized = true } = {}) {
+  async _ensureAccountReadyForScheduling(
+    account,
+    accountId,
+    { sanitized = true, verifyRateLimit = false } = {}
+  ) {
     const hasRateLimitFlag = this._hasRateLimitFlag(account.rateLimitStatus)
     let rateLimitChecked = false
     let stillLimited = false
@@ -151,7 +155,9 @@ class UnifiedOpenAIScheduler {
       }
     }
 
-    if (!rateLimitChecked) {
+    // Shared pool scheduling should avoid per-account redis round trips.
+    // Keep strict verification only when caller explicitly asks for it.
+    if (verifyRateLimit && !rateLimitChecked) {
       stillLimited = await this.isAccountRateLimited(accountId)
       if (stillLimited) {
         return { canUse: false, reason: 'rate_limited' }
@@ -197,7 +203,7 @@ class UnifiedOpenAIScheduler {
             const readiness = await this._ensureAccountReadyForScheduling(
               boundAccount,
               boundAccount.id,
-              { sanitized: false }
+              { sanitized: false, verifyRateLimit: true }
             )
 
             if (!readiness.canUse) {
@@ -389,7 +395,7 @@ class UnifiedOpenAIScheduler {
     // 这里只处理共享池账户
 
     // 获取所有OpenAI账户（共享池）
-    const openaiAccounts = await openaiAccountService.getAllAccounts()
+    const openaiAccounts = await openaiAccountService.getAllAccounts({ forScheduling: true })
     for (let account of openaiAccounts) {
       if (
         this._canParticipateInScheduling(account) &&
@@ -403,9 +409,9 @@ class UnifiedOpenAIScheduler {
 
         if (!readiness.canUse) {
           if (readiness.reason === 'rate_limited') {
-            logger.debug(`⏭️ 跳过 OpenAI 账号 ${account.name} - 仍处于限流状态`)
+            logger.debug(`Skipping OpenAI account ${account.name} - still rate limited`)
           } else {
-            logger.debug(`⏭️ 跳过 OpenAI 账号 ${account.name} - 已被管理员禁用调度`)
+            logger.debug(`Skipping OpenAI account ${account.name} - not schedulable`)
           }
           continue
         }
@@ -522,7 +528,8 @@ class UnifiedOpenAIScheduler {
           return false
         }
         const readiness = await this._ensureAccountReadyForScheduling(account, accountId, {
-          sanitized: false
+          sanitized: false,
+          verifyRateLimit: true
         })
 
         if (!readiness.canUse) {

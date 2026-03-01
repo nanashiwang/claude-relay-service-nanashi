@@ -643,7 +643,7 @@ class UnifiedClaudeScheduler {
         if (isOpusRequest) {
           const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(account.id)
           if (isOpusRateLimited) {
-            logger.info(
+            logger.debug(
               `🚫 Skipping account ${account.name} (${account.id}) due to active Opus limit`
             )
             continue
@@ -661,8 +661,9 @@ class UnifiedClaudeScheduler {
     }
 
     // 获取Claude Console账户
-    const consoleAccounts = await claudeConsoleAccountService.getAllAccounts()
-    logger.info(`📋 Found ${consoleAccounts.length} total Claude Console accounts`)
+    // 调度热路径不需要预先查询 activeTaskCount，后续会按需批量检查并发
+    const consoleAccounts = await claudeConsoleAccountService.getAllAccounts(false)
+    logger.debug(`📋 Found ${consoleAccounts.length} total Claude Console accounts`)
 
     // 🔢 统计Console账户并发排除情况
     let consoleAccountsEligibleCount = 0 // 符合基本条件的账户数
@@ -682,11 +683,11 @@ class UnifiedClaudeScheduler {
         const freshAccount = await claudeConsoleAccountService.getAccount(account.id)
         if (freshAccount) {
           currentAccount = freshAccount
-          logger.info(`🔄 Account ${account.name} was recovered from blocked status`)
+          logger.debug(`🔄 Account ${account.name} was recovered from blocked status`)
         }
       }
 
-      logger.info(
+      logger.debug(
         `🔍 Checking Claude Console account: ${currentAccount.name} - isActive: ${currentAccount.isActive}, status: ${currentAccount.status}, accountType: ${currentAccount.accountType}, schedulable: ${currentAccount.schedulable}`
       )
 
@@ -757,7 +758,7 @@ class UnifiedClaudeScheduler {
               priority: parseInt(currentAccount.priority) || 50,
               lastUsedAt: currentAccount.lastUsedAt || '0'
             })
-            logger.info(
+            logger.debug(
               `✅ Added Claude Console account to available pool: ${currentAccount.name} (priority: ${currentAccount.priority}, no concurrency limit)`
             )
           }
@@ -770,7 +771,7 @@ class UnifiedClaudeScheduler {
           }
         }
       } else {
-        logger.info(
+        logger.debug(
           `❌ Claude Console account ${currentAccount.name} not eligible - isActive: ${currentAccount.isActive}, status: ${currentAccount.status}, accountType: ${currentAccount.accountType}, schedulable: ${currentAccount.schedulable}`
         )
       }
@@ -803,7 +804,7 @@ class UnifiedClaudeScheduler {
             priority: parseInt(account.priority) || 50,
             lastUsedAt: account.lastUsedAt || '0'
           })
-          logger.info(
+          logger.debug(
             `✅ Added Claude Console account to available pool: ${account.name} (priority: ${account.priority}, concurrency: ${currentConcurrency}/${account.maxConcurrentTasks})`
           )
         } else {
@@ -820,10 +821,10 @@ class UnifiedClaudeScheduler {
     const bedrockAccountsResult = await bedrockAccountService.getAllAccounts()
     if (bedrockAccountsResult.success) {
       const bedrockAccounts = bedrockAccountsResult.data
-      logger.info(`📋 Found ${bedrockAccounts.length} total Bedrock accounts`)
+      logger.debug(`📋 Found ${bedrockAccounts.length} total Bedrock accounts`)
 
       for (const account of bedrockAccounts) {
-        logger.info(
+        logger.debug(
           `🔍 Checking Bedrock account: ${account.name} - isActive: ${account.isActive}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
         )
 
@@ -849,11 +850,11 @@ class UnifiedClaudeScheduler {
             priority: parseInt(account.priority) || 50,
             lastUsedAt: account.lastUsedAt || '0'
           })
-          logger.info(
+          logger.debug(
             `✅ Added Bedrock account to available pool: ${account.name} (priority: ${account.priority})`
           )
         } else {
-          logger.info(
+          logger.debug(
             `❌ Bedrock account ${account.name} not eligible - isActive: ${account.isActive}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
           )
         }
@@ -863,10 +864,10 @@ class UnifiedClaudeScheduler {
     // 获取CCR账户（共享池）- 仅当明确要求包含时
     if (includeCcr) {
       const ccrAccounts = await ccrAccountService.getAllAccounts()
-      logger.info(`📋 Found ${ccrAccounts.length} total CCR accounts`)
+      logger.debug(`📋 Found ${ccrAccounts.length} total CCR accounts`)
 
       for (const account of ccrAccounts) {
-        logger.info(
+        logger.debug(
           `🔍 Checking CCR account: ${account.name} - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
         )
 
@@ -908,7 +909,7 @@ class UnifiedClaudeScheduler {
               priority: parseInt(account.priority) || 50,
               lastUsedAt: account.lastUsedAt || '0'
             })
-            logger.info(
+            logger.debug(
               `✅ Added CCR account to available pool: ${account.name} (priority: ${account.priority})`
             )
           } else {
@@ -920,7 +921,7 @@ class UnifiedClaudeScheduler {
             }
           }
         } else {
-          logger.info(
+          logger.debug(
             `❌ CCR account ${account.name} not eligible - isActive: ${account.isActive}, status: ${account.status}, accountType: ${account.accountType}, schedulable: ${account.schedulable}`
           )
         }
@@ -1013,7 +1014,7 @@ class UnifiedClaudeScheduler {
         ) {
           const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(accountId)
           if (isOpusRateLimited) {
-            logger.info(`🚫 Account ${accountId} skipped due to active Opus limit (session check)`)
+            logger.debug(`🚫 Account ${accountId} skipped due to active Opus limit (session check)`)
             return false
           }
         }
@@ -1584,7 +1585,7 @@ class UnifiedClaudeScheduler {
               account.id
             )
             if (isOpusRateLimited) {
-              logger.info(
+              logger.debug(
                 `🚫 Skipping group member ${account.name} (${account.id}) due to active Opus limit`
               )
               continue
@@ -1724,7 +1725,7 @@ class UnifiedClaudeScheduler {
 
     try {
       const ccrAccounts = await ccrAccountService.getAllAccounts()
-      logger.info(`📋 Found ${ccrAccounts.length} total CCR accounts for CCR-only selection`)
+      logger.debug(`📋 Found ${ccrAccounts.length} total CCR accounts for CCR-only selection`)
 
       for (const account of ccrAccounts) {
         logger.debug(

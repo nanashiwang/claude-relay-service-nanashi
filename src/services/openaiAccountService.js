@@ -1,4 +1,4 @@
-const redisClient = require('../models/redis')
+﻿const redisClient = require('../models/redis')
 const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
 const axios = require('axios')
@@ -16,33 +16,33 @@ const {
 const LRUCache = require('../utils/lruCache')
 const tokenRefreshService = require('./tokenRefreshService')
 
-// 加密相关常量
+// 鍔犲瘑鐩稿叧甯搁噺
 const ALGORITHM = 'aes-256-cbc'
 const ENCRYPTION_SALT = 'openai-account-salt'
 const IV_LENGTH = 16
 
-// 🚀 性能优化：缓存派生的加密密钥，避免每次重复计算
-// scryptSync 是 CPU 密集型操作，缓存可以减少 95%+ 的 CPU 占用
+// 馃殌 鎬ц兘浼樺寲锛氱紦瀛樻淳鐢熺殑鍔犲瘑瀵嗛挜锛岄伩鍏嶆瘡娆￠噸澶嶈绠?
+// scryptSync 鏄?CPU 瀵嗛泦鍨嬫搷浣滐紝缂撳瓨鍙互鍑忓皯 95%+ 鐨?CPU 鍗犵敤
 let _encryptionKeyCache = null
 
-// 🔄 解密结果缓存，提高解密性能
+// 馃攧 瑙ｅ瘑缁撴灉缂撳瓨锛屾彁楂樿В瀵嗘€ц兘
 const decryptCache = new LRUCache(500)
 
-// 生成加密密钥（使用与 claudeAccountService 相同的方法）
+// 鐢熸垚鍔犲瘑瀵嗛挜锛堜娇鐢ㄤ笌 claudeAccountService 鐩稿悓鐨勬柟娉曪級
 function generateEncryptionKey() {
   if (!_encryptionKeyCache) {
     _encryptionKeyCache = crypto.scryptSync(config.security.encryptionKey, ENCRYPTION_SALT, 32)
-    logger.info('🔑 OpenAI encryption key derived and cached for performance optimization')
+    logger.info('馃攽 OpenAI encryption key derived and cached for performance optimization')
   }
   return _encryptionKeyCache
 }
 
-// OpenAI 账户键前缀
+// OpenAI 璐︽埛閿墠缂€
 const OPENAI_ACCOUNT_KEY_PREFIX = 'openai:account:'
 const SHARED_OPENAI_ACCOUNTS_KEY = 'shared_openai_accounts'
 const ACCOUNT_SESSION_MAPPING_PREFIX = 'openai_session_account_mapping:'
 
-// 加密函数
+// 鍔犲瘑鍑芥暟
 function encrypt(text) {
   if (!text) {
     return ''
@@ -55,13 +55,13 @@ function encrypt(text) {
   return `${iv.toString('hex')}:${encrypted.toString('hex')}`
 }
 
-// 解密函数
+// 瑙ｅ瘑鍑芥暟
 function decrypt(text) {
   if (!text || text === '') {
     return ''
   }
 
-  // 检查是否是有效的加密格式（至少需要 32 个字符的 IV + 冒号 + 加密文本）
+  // 妫€鏌ユ槸鍚︽槸鏈夋晥鐨勫姞瀵嗘牸寮忥紙鑷冲皯闇€瑕?32 涓瓧绗︾殑 IV + 鍐掑彿 + 鍔犲瘑鏂囨湰锛?
   if (text.length < 33 || text.charAt(32) !== ':') {
     logger.warn('Invalid encrypted text format, returning empty string', {
       textLength: text ? text.length : 0,
@@ -71,7 +71,7 @@ function decrypt(text) {
     return ''
   }
 
-  // 🎯 检查缓存
+  // 馃幆 妫€鏌ョ紦瀛?
   const cacheKey = crypto.createHash('sha256').update(text).digest('hex')
   const cached = decryptCache.get(cacheKey)
   if (cached !== undefined) {
@@ -80,9 +80,9 @@ function decrypt(text) {
 
   try {
     const key = generateEncryptionKey()
-    // IV 是固定长度的 32 个十六进制字符（16 字节）
+    // IV 鏄浐瀹氶暱搴︾殑 32 涓崄鍏繘鍒跺瓧绗︼紙16 瀛楄妭锛?
     const ivHex = text.substring(0, 32)
-    const encryptedHex = text.substring(33) // 跳过冒号
+    const encryptedHex = text.substring(33) // 璺宠繃鍐掑彿
 
     const iv = Buffer.from(ivHex, 'hex')
     const encryptedText = Buffer.from(encryptedHex, 'hex')
@@ -91,10 +91,10 @@ function decrypt(text) {
     decrypted = Buffer.concat([decrypted, decipher.final()])
     const result = decrypted.toString()
 
-    // 💾 存入缓存（5分钟过期）
+    // 馃捑 瀛樺叆缂撳瓨锛?鍒嗛挓杩囨湡锛?
     decryptCache.set(cacheKey, result, 5 * 60 * 1000)
 
-    // 📊 定期打印缓存统计
+    // 馃搳 瀹氭湡鎵撳嵃缂撳瓨缁熻
     if ((decryptCache.hits + decryptCache.misses) % 1000 === 0) {
       decryptCache.printStats()
     }
@@ -106,11 +106,11 @@ function decrypt(text) {
   }
 }
 
-// 🧹 定期清理缓存（每10分钟）
+// 馃Ч 瀹氭湡娓呯悊缂撳瓨锛堟瘡10鍒嗛挓锛?
 setInterval(
   () => {
     decryptCache.cleanup()
-    logger.info('🧹 OpenAI decrypt cache cleanup completed', decryptCache.getStats())
+    logger.info('馃Ч OpenAI decrypt cache cleanup completed', decryptCache.getStats())
   },
   10 * 60 * 1000
 )
@@ -194,13 +194,50 @@ function buildCodexUsageSnapshot(accountData) {
   }
 }
 
-// 刷新访问令牌
+function buildRateLimitInfoFromAccountSnapshot(accountData) {
+  const status = accountData.rateLimitStatus || 'normal'
+  const rateLimitedAt = accountData.rateLimitedAt || null
+  const rateLimitResetAt = accountData.rateLimitResetAt || null
+
+  if (status === 'limited') {
+    const now = Date.now()
+    let remainingTime = 0
+
+    if (rateLimitResetAt) {
+      const resetAt = new Date(rateLimitResetAt).getTime()
+      remainingTime = Math.max(0, resetAt - now)
+    } else if (rateLimitedAt) {
+      const limitedAt = new Date(rateLimitedAt).getTime()
+      const limitDuration = 60 * 60 * 1000
+      remainingTime = Math.max(0, limitedAt + limitDuration - now)
+    }
+
+    const minutesRemaining = remainingTime > 0 ? Math.ceil(remainingTime / (60 * 1000)) : 0
+
+    return {
+      status,
+      isRateLimited: minutesRemaining > 0,
+      rateLimitedAt,
+      rateLimitResetAt,
+      minutesRemaining
+    }
+  }
+
+  return {
+    status,
+    isRateLimited: false,
+    rateLimitedAt,
+    rateLimitResetAt,
+    minutesRemaining: 0
+  }
+}
+// 鍒锋柊璁块棶浠ょ墝
 async function refreshAccessToken(refreshToken, proxy = null) {
   try {
-    // Codex CLI 的官方 CLIENT_ID
+    // Codex CLI 鐨勫畼鏂?CLIENT_ID
     const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 
-    // 准备请求数据
+    // 鍑嗗璇锋眰鏁版嵁
     const requestData = new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: CLIENT_ID,
@@ -208,7 +245,7 @@ async function refreshAccessToken(refreshToken, proxy = null) {
       scope: 'openid profile email'
     }).toString()
 
-    // 配置请求选项
+    // 閰嶇疆璇锋眰閫夐」
     const requestOptions = {
       method: 'POST',
       url: 'https://auth.openai.com/oauth/token',
@@ -217,45 +254,45 @@ async function refreshAccessToken(refreshToken, proxy = null) {
         'Content-Length': requestData.length
       },
       data: requestData,
-      timeout: config.requestTimeout || 600000 // 使用统一的请求超时配置
+      timeout: config.requestTimeout || 600000 // 浣跨敤缁熶竴鐨勮姹傝秴鏃堕厤缃?
     }
 
-    // 配置代理（如果有）
+    // 閰嶇疆浠ｇ悊锛堝鏋滄湁锛?
     const proxyAgent = ProxyHelper.createProxyAgent(proxy)
     if (proxyAgent) {
       requestOptions.httpAgent = proxyAgent
       requestOptions.httpsAgent = proxyAgent
       requestOptions.proxy = false
       logger.info(
-        `🌐 Using proxy for OpenAI token refresh: ${ProxyHelper.getProxyDescription(proxy)}`
+        `馃寪 Using proxy for OpenAI token refresh: ${ProxyHelper.getProxyDescription(proxy)}`
       )
     } else {
-      logger.debug('🌐 No proxy configured for OpenAI token refresh')
+      logger.debug('馃寪 No proxy configured for OpenAI token refresh')
     }
 
-    // 发送请求
-    logger.info('🔍 发送 token 刷新请求，使用代理:', !!requestOptions.httpsAgent)
+    // 鍙戦€佽姹?
+    logger.info('馃攳 鍙戦€?token 鍒锋柊璇锋眰锛屼娇鐢ㄤ唬鐞?', !!requestOptions.httpsAgent)
     const response = await axios(requestOptions)
 
     if (response.status === 200 && response.data) {
       const result = response.data
 
-      logger.info('✅ Successfully refreshed OpenAI token')
+      logger.info('鉁?Successfully refreshed OpenAI token')
 
-      // 返回新的 token 信息
+      // 杩斿洖鏂扮殑 token 淇℃伅
       return {
         access_token: result.access_token,
         id_token: result.id_token,
-        refresh_token: result.refresh_token || refreshToken, // 如果没有返回新的，保留原来的
+        refresh_token: result.refresh_token || refreshToken, // 濡傛灉娌℃湁杩斿洖鏂扮殑锛屼繚鐣欏師鏉ョ殑
         expires_in: result.expires_in || 3600,
-        expiry_date: Date.now() + (result.expires_in || 3600) * 1000 // 计算过期时间
+        expiry_date: Date.now() + (result.expires_in || 3600) * 1000 // 璁＄畻杩囨湡鏃堕棿
       }
     } else {
       throw new Error(`Failed to refresh token: ${response.status} ${response.statusText}`)
     }
   } catch (error) {
     if (error.response) {
-      // 服务器响应了错误状态码
+      // 鏈嶅姟鍣ㄥ搷搴斾簡閿欒鐘舵€佺爜
       const errorData = error.response.data || {}
       logger.error('OpenAI token refresh failed:', {
         status: error.response.status,
@@ -263,25 +300,25 @@ async function refreshAccessToken(refreshToken, proxy = null) {
         headers: error.response.headers
       })
 
-      // 构建详细的错误信息
-      let errorMessage = `OpenAI 服务器返回错误 (${error.response.status})`
+      // 鏋勫缓璇︾粏鐨勯敊璇俊鎭?
+      let errorMessage = `OpenAI 服务返回错误 (${error.response.status})`
 
       if (error.response.status === 400) {
         if (errorData.error === 'invalid_grant') {
           errorMessage = 'Refresh Token 无效或已过期，请重新授权'
         } else if (errorData.error === 'invalid_request') {
-          errorMessage = `请求参数错误：${errorData.error_description || errorData.error}`
+          errorMessage = `请求参数错误: ${errorData.error_description || errorData.error}`
         } else {
-          errorMessage = `请求错误：${errorData.error_description || errorData.error || '未知错误'}`
+          errorMessage = `请求错误: ${errorData.error_description || errorData.error || '未知错误'}`
         }
       } else if (error.response.status === 401) {
         errorMessage = '认证失败：Refresh Token 无效'
       } else if (error.response.status === 403) {
-        errorMessage = '访问被拒绝：可能是 IP 被封或账户被禁用'
+        errorMessage = '访问被拒绝：可能是 IP 被封或账号被禁用'
       } else if (error.response.status === 429) {
         errorMessage = '请求过于频繁，请稍后重试'
       } else if (error.response.status >= 500) {
-        errorMessage = 'OpenAI 服务器内部错误，请稍后重试'
+        errorMessage = 'OpenAI 服务端内部错误，请稍后重试'
       } else if (errorData.error_description) {
         errorMessage = errorData.error_description
       } else if (errorData.error) {
@@ -295,10 +332,10 @@ async function refreshAccessToken(refreshToken, proxy = null) {
       fullError.details = errorData
       throw fullError
     } else if (error.request) {
-      // 请求已发出但没有收到响应
+      // 璇锋眰宸插彂鍑轰絾娌℃湁鏀跺埌鍝嶅簲
       logger.error('OpenAI token refresh no response:', error.message)
 
-      let errorMessage = '无法连接到 OpenAI 服务器'
+      let errorMessage = '无法连接到 OpenAI 服务'
       if (proxy) {
         errorMessage += `（代理: ${ProxyHelper.getProxyDescription(proxy)}）`
       }
@@ -318,16 +355,16 @@ async function refreshAccessToken(refreshToken, proxy = null) {
       fullError.code = error.code
       throw fullError
     } else {
-      // 设置请求时发生错误
+      // 璁剧疆璇锋眰鏃跺彂鐢熼敊璇?
       logger.error('OpenAI token refresh error:', error.message)
-      const fullError = new Error(`请求设置错误: ${error.message}`)
+      const fullError = new Error(`璇锋眰璁剧疆閿欒: ${error.message}`)
       fullError.originalError = error
       throw fullError
     }
   }
 }
 
-// 检查 token 是否过期
+// 妫€鏌?token 鏄惁杩囨湡
 function isTokenExpired(account) {
   if (!account.expiresAt) {
     return false
@@ -336,9 +373,9 @@ function isTokenExpired(account) {
 }
 
 /**
- * 检查账户订阅是否过期
- * @param {Object} account - 账户对象
- * @returns {boolean} - true: 已过期, false: 未过期
+ * 妫€鏌ヨ处鎴疯闃呮槸鍚﹁繃鏈?
+ * @param {Object} account - 璐︽埛瀵硅薄
+ * @returns {boolean} - true: 宸茶繃鏈? false: 鏈繃鏈?
  */
 function isSubscriptionExpired(account) {
   if (!account.subscriptionExpiresAt) {
@@ -389,7 +426,7 @@ function shouldDisableAccountAfterRefreshError(error) {
   )
 }
 
-// 刷新账户的 access token（带分布式锁）
+// ????? access token???????
 async function refreshAccountToken(accountId) {
   let lockAcquired = false
   let account = null
@@ -403,8 +440,8 @@ async function refreshAccountToken(accountId) {
 
     accountName = account.name || accountId
 
-    // 检查是否有 refresh token
-    // account.refreshToken 在 getAccount 中已经被解密了，直接使用即可
+    // 妫€鏌ユ槸鍚︽湁 refresh token
+    // account.refreshToken 鍦?getAccount 涓凡缁忚瑙ｅ瘑浜嗭紝鐩存帴浣跨敤鍗冲彲
     const refreshToken = account.refreshToken || null
 
     if (!refreshToken) {
@@ -412,20 +449,20 @@ async function refreshAccountToken(accountId) {
       throw new Error('No refresh token available')
     }
 
-    // 尝试获取分布式锁
+    // 灏濊瘯鑾峰彇鍒嗗竷寮忛攣
     lockAcquired = await tokenRefreshService.acquireRefreshLock(accountId, 'openai')
 
     if (!lockAcquired) {
-      // 如果无法获取锁，说明另一个进程正在刷新
+      // 濡傛灉鏃犳硶鑾峰彇閿侊紝璇存槑鍙︿竴涓繘绋嬫鍦ㄥ埛鏂?
       logger.info(
-        `🔒 Token refresh already in progress for OpenAI account: ${accountName} (${accountId})`
+        `馃敀 Token refresh already in progress for OpenAI account: ${accountName} (${accountId})`
       )
       logRefreshSkipped(accountId, accountName, 'openai', 'already_locked')
 
-      // 等待一段时间后返回，期望其他进程已完成刷新
+      // 绛夊緟涓€娈垫椂闂村悗杩斿洖锛屾湡鏈涘叾浠栬繘绋嬪凡瀹屾垚鍒锋柊
       await new Promise((resolve) => setTimeout(resolve, 2000))
 
-      // 重新获取账户数据（可能已被其他进程刷新）
+      // 閲嶆柊鑾峰彇璐︽埛鏁版嵁锛堝彲鑳藉凡琚叾浠栬繘绋嬪埛鏂帮級
       const updatedAccount = await getAccount(accountId)
       if (updatedAccount && !isTokenExpired(updatedAccount)) {
         return {
@@ -440,11 +477,11 @@ async function refreshAccountToken(accountId) {
       throw new Error('Token refresh in progress by another process')
     }
 
-    // 获取锁成功，开始刷新
+    // 鑾峰彇閿佹垚鍔燂紝寮€濮嬪埛鏂?
     logRefreshStart(accountId, accountName, 'openai')
-    logger.info(`🔄 Starting token refresh for OpenAI account: ${accountName} (${accountId})`)
+    logger.info(`馃攧 Starting token refresh for OpenAI account: ${accountName} (${accountId})`)
 
-    // 获取代理配置
+    // 鑾峰彇浠ｇ悊閰嶇疆
     let proxy = null
     if (account.proxy) {
       try {
@@ -459,17 +496,17 @@ async function refreshAccountToken(accountId) {
       throw new Error('Failed to refresh token')
     }
 
-    // 准备更新数据 - 不要在这里加密，让 updateAccount 统一处理
+    // 鍑嗗鏇存柊鏁版嵁 - 涓嶈鍦ㄨ繖閲屽姞瀵嗭紝璁?updateAccount 缁熶竴澶勭悊
     const updates = {
-      accessToken: newTokens.access_token, // 不加密，让 updateAccount 处理
+      accessToken: newTokens.access_token, // 涓嶅姞瀵嗭紝璁?updateAccount 澶勭悊
       expiresAt: new Date(newTokens.expiry_date).toISOString()
     }
 
-    // 如果有新的 ID token，也更新它（这对于首次未提供 ID Token 的账户特别重要）
+    // 濡傛灉鏈夋柊鐨?ID token锛屼篃鏇存柊瀹冿紙杩欏浜庨娆℃湭鎻愪緵 ID Token 鐨勮处鎴风壒鍒噸瑕侊級
     if (newTokens.id_token) {
-      updates.idToken = newTokens.id_token // 不加密，让 updateAccount 处理
+      updates.idToken = newTokens.id_token // 涓嶅姞瀵嗭紝璁?updateAccount 澶勭悊
 
-      // 如果之前没有 ID Token，尝试解析并更新用户信息
+      // 濡傛灉涔嬪墠娌℃湁 ID Token锛屽皾璇曡В鏋愬苟鏇存柊鐢ㄦ埛淇℃伅
       if (!account.idToken || account.idToken === '') {
         try {
           const idTokenParts = newTokens.id_token.split('.')
@@ -477,15 +514,15 @@ async function refreshAccountToken(accountId) {
             const payload = JSON.parse(Buffer.from(idTokenParts[1], 'base64').toString())
             const authClaims = payload['https://api.openai.com/auth'] || {}
 
-            // 更新账户信息 - 使用正确的字段名
-            // OpenAI ID Token中用户ID在chatgpt_account_id、chatgpt_user_id和user_id字段
+            // 鏇存柊璐︽埛淇℃伅 - 浣跨敤姝ｇ‘鐨勫瓧娈靛悕
+            // OpenAI ID Token涓敤鎴稩D鍦╟hatgpt_account_id銆乧hatgpt_user_id鍜寀ser_id瀛楁
             if (authClaims.chatgpt_account_id) {
               updates.accountId = authClaims.chatgpt_account_id
             }
             if (authClaims.chatgpt_user_id) {
               updates.chatgptUserId = authClaims.chatgpt_user_id
             } else if (authClaims.user_id) {
-              // 有些情况下可能只有user_id字段
+              // 鏈変簺鎯呭喌涓嬪彲鑳藉彧鏈塽ser_id瀛楁
               updates.chatgptUserId = authClaims.user_id
             }
             if (authClaims.organizations?.[0]?.id) {
@@ -498,7 +535,7 @@ async function refreshAccountToken(accountId) {
               updates.organizationTitle = authClaims.organizations[0].title
             }
             if (payload.email) {
-              updates.email = payload.email // 不加密，让 updateAccount 处理
+              updates.email = payload.email // 涓嶅姞瀵嗭紝璁?updateAccount 澶勭悊
             }
             if (payload.email_verified !== undefined) {
               updates.emailVerified = payload.email_verified
@@ -512,16 +549,16 @@ async function refreshAccountToken(accountId) {
       }
     }
 
-    // 如果返回了新的 refresh token，更新它
+    // 濡傛灉杩斿洖浜嗘柊鐨?refresh token锛屾洿鏂板畠
     if (newTokens.refresh_token && newTokens.refresh_token !== refreshToken) {
-      updates.refreshToken = newTokens.refresh_token // 不加密，让 updateAccount 处理
+      updates.refreshToken = newTokens.refresh_token // 涓嶅姞瀵嗭紝璁?updateAccount 澶勭悊
       logger.info(`Updated refresh token for account ${accountId}`)
     }
 
-    // 更新账户信息
+    // 鏇存柊璐︽埛淇℃伅
     await updateAccount(accountId, updates)
 
-    logRefreshSuccess(accountId, accountName, 'openai', newTokens) // 传入完整的 newTokens 对象
+    logRefreshSuccess(accountId, accountName, 'openai', newTokens) // 浼犲叆瀹屾暣鐨?newTokens 瀵硅薄
     return newTokens
   } catch (error) {
     logRefreshError(accountId, account?.name || accountName, 'openai', error.message)
@@ -531,7 +568,7 @@ async function refreshAccountToken(accountId) {
       try {
         await markAccountUnauthorized(accountId, `Token refresh failed: ${error.message}`)
         logger.warn(
-          `🚫 Auto-marked OpenAI account ${account?.name || accountName} as unauthorized after refresh failure`
+          `馃毇 Auto-marked OpenAI account ${account?.name || accountName} as unauthorized after refresh failure`
         )
       } catch (markError) {
         logger.error(
@@ -540,7 +577,7 @@ async function refreshAccountToken(accountId) {
         )
       }
     } else {
-      // 发送 Webhook 通知（如果启用）
+      // 鍙戦€?Webhook 閫氱煡锛堝鏋滃惎鐢級
       try {
         const webhookNotifier = require('../utils/webhookNotifier')
         await webhookNotifier.sendAccountAnomalyNotification({
@@ -553,7 +590,7 @@ async function refreshAccountToken(accountId) {
           timestamp: new Date().toISOString()
         })
         logger.info(
-          `📢 Webhook notification sent for OpenAI account ${account?.name || accountName} refresh failure`
+          `馃摙 Webhook notification sent for OpenAI account ${account?.name || accountName} refresh failure`
         )
       } catch (webhookError) {
         logger.error('Failed to send webhook notification:', webhookError)
@@ -562,20 +599,20 @@ async function refreshAccountToken(accountId) {
 
     throw error
   } finally {
-    // 确保释放锁
+    // 纭繚閲婃斁閿?
     if (lockAcquired) {
       await tokenRefreshService.releaseRefreshLock(accountId, 'openai')
-      logger.debug(`🔓 Released refresh lock for OpenAI account ${accountId}`)
+      logger.debug(`馃敁 Released refresh lock for OpenAI account ${accountId}`)
     }
   }
 }
 
-// 创建账户
+// 鍒涘缓璐︽埛
 async function createAccount(accountData) {
   const accountId = uuidv4()
   const now = new Date().toISOString()
 
-  // 处理OAuth数据
+  // 澶勭悊OAuth鏁版嵁
   let oauthData = {}
   if (accountData.openaiOauth) {
     oauthData =
@@ -584,10 +621,10 @@ async function createAccount(accountData) {
         : accountData.openaiOauth
   }
 
-  // 处理账户信息
+  // 澶勭悊璐︽埛淇℃伅
   const accountInfo = accountData.accountInfo || {}
 
-  // 检查邮箱是否已经是加密格式（包含冒号分隔的32位十六进制字符）
+  // 妫€鏌ラ偖绠辨槸鍚﹀凡缁忔槸鍔犲瘑鏍煎紡锛堝寘鍚啋鍙峰垎闅旂殑32浣嶅崄鍏繘鍒跺瓧绗︼級
   const isEmailEncrypted =
     accountInfo.email && accountInfo.email.length >= 33 && accountInfo.email.charAt(32) === ':'
 
@@ -602,8 +639,8 @@ async function createAccount(accountData) {
       accountData.rateLimitDuration !== undefined && accountData.rateLimitDuration !== null
         ? accountData.rateLimitDuration
         : 60,
-    // OAuth相关字段（加密存储）
-    // ID Token 现在是可选的，如果没有提供会在首次刷新时自动获取
+    // OAuth鐩稿叧瀛楁锛堝姞瀵嗗瓨鍌級
+    // ID Token 鐜板湪鏄彲閫夌殑锛屽鏋滄病鏈夋彁渚涗細鍦ㄩ娆″埛鏂版椂鑷姩鑾峰彇
     idToken: oauthData.idToken && oauthData.idToken.trim() ? encrypt(oauthData.idToken) : '',
     accessToken:
       oauthData.accessToken && oauthData.accessToken.trim() ? encrypt(oauthData.accessToken) : '',
@@ -612,25 +649,25 @@ async function createAccount(accountData) {
         ? encrypt(oauthData.refreshToken)
         : '',
     openaiOauth: encrypt(JSON.stringify(oauthData)),
-    // 账户信息字段 - 确保所有字段都被保存，即使是空字符串
+    // 璐︽埛淇℃伅瀛楁 - 纭繚鎵€鏈夊瓧娈甸兘琚繚瀛橈紝鍗充娇鏄┖瀛楃涓?
     accountId: accountInfo.accountId || '',
     chatgptUserId: accountInfo.chatgptUserId || '',
     organizationId: accountInfo.organizationId || '',
     organizationRole: accountInfo.organizationRole || '',
     organizationTitle: accountInfo.organizationTitle || '',
     planType: accountInfo.planType || '',
-    // 邮箱字段：检查是否已经加密，避免双重加密
+    // 閭瀛楁锛氭鏌ユ槸鍚﹀凡缁忓姞瀵嗭紝閬垮厤鍙岄噸鍔犲瘑
     email: isEmailEncrypted ? accountInfo.email : encrypt(accountInfo.email || ''),
     emailVerified: accountInfo.emailVerified === true ? 'true' : 'false',
-    // 过期时间
+    // 杩囨湡鏃堕棿
     expiresAt: oauthData.expires_in
       ? new Date(Date.now() + oauthData.expires_in * 1000).toISOString()
-      : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(), // OAuth Token 过期时间（技术字段）
+      : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(), // OAuth Token 杩囨湡鏃堕棿锛堟妧鏈瓧娈碉級
 
-    // ✅ 新增：账户订阅到期时间（业务字段，手动管理）
+    // 鉁?鏂板锛氳处鎴疯闃呭埌鏈熸椂闂达紙涓氬姟瀛楁锛屾墜鍔ㄧ鐞嗭級
     subscriptionExpiresAt: accountData.subscriptionExpiresAt || null,
 
-    // 状态字段
+    // 鐘舵€佸瓧娈?
     isActive: accountData.isActive !== false ? 'true' : 'false',
     status: 'active',
     schedulable: accountData.schedulable !== false ? 'true' : 'false',
@@ -639,7 +676,7 @@ async function createAccount(accountData) {
     updatedAt: now
   }
 
-  // 代理配置
+  // 浠ｇ悊閰嶇疆
   if (accountData.proxy) {
     account.proxy =
       typeof accountData.proxy === 'string' ? accountData.proxy : JSON.stringify(accountData.proxy)
@@ -648,7 +685,7 @@ async function createAccount(accountData) {
   const client = redisClient.getClientSafe()
   await client.hset(`${OPENAI_ACCOUNT_KEY_PREFIX}${accountId}`, account)
 
-  // 如果是共享账户，添加到共享账户集合
+  // 濡傛灉鏄叡浜处鎴凤紝娣诲姞鍒板叡浜处鎴烽泦鍚?
   if (account.accountType === 'shared') {
     await client.sadd(SHARED_OPENAI_ACCOUNTS_KEY, accountId)
   }
@@ -657,7 +694,7 @@ async function createAccount(accountData) {
   return account
 }
 
-// 获取账户
+// 鑾峰彇璐︽埛
 async function getAccount(accountId) {
   const client = redisClient.getClientSafe()
   const accountData = await client.hgetall(`${OPENAI_ACCOUNT_KEY_PREFIX}${accountId}`)
@@ -666,11 +703,11 @@ async function getAccount(accountId) {
     return null
   }
 
-  // 解密敏感数据（仅用于内部处理，不返回给前端）
+  // 瑙ｅ瘑鏁忔劅鏁版嵁锛堜粎鐢ㄤ簬鍐呴儴澶勭悊锛屼笉杩斿洖缁欏墠绔級
   if (accountData.idToken) {
     accountData.idToken = decrypt(accountData.idToken)
   }
-  // 注意：accessToken 在 openaiRoutes.js 中会被单独解密，这里不解密
+  // 娉ㄦ剰锛歛ccessToken 鍦?openaiRoutes.js 涓細琚崟鐙В瀵嗭紝杩欓噷涓嶈В瀵?
   // if (accountData.accessToken) {
   //   accountData.accessToken = decrypt(accountData.accessToken)
   // }
@@ -688,7 +725,7 @@ async function getAccount(accountId) {
     }
   }
 
-  // 解析代理配置
+  // 瑙ｆ瀽浠ｇ悊閰嶇疆
   if (accountData.proxy && typeof accountData.proxy === 'string') {
     try {
       accountData.proxy = JSON.parse(accountData.proxy)
@@ -700,7 +737,7 @@ async function getAccount(accountId) {
   return accountData
 }
 
-// 更新账户
+// 鏇存柊璐︽埛
 async function updateAccount(accountId, updates) {
   const existingAccount = await getAccount(accountId)
   if (!existingAccount) {
@@ -709,7 +746,7 @@ async function updateAccount(accountId, updates) {
 
   updates.updatedAt = new Date().toISOString()
 
-  // 加密敏感数据
+  // 鍔犲瘑鏁忔劅鏁版嵁
   if (updates.openaiOauth) {
     const oauthData =
       typeof updates.openaiOauth === 'string'
@@ -730,19 +767,19 @@ async function updateAccount(accountId, updates) {
     updates.email = encrypt(updates.email)
   }
 
-  // 处理代理配置
+  // 澶勭悊浠ｇ悊閰嶇疆
   if (updates.proxy) {
     updates.proxy =
       typeof updates.proxy === 'string' ? updates.proxy : JSON.stringify(updates.proxy)
   }
 
-  // ✅ 如果通过路由映射更新了 subscriptionExpiresAt，直接保存
-  // subscriptionExpiresAt 是业务字段，与 token 刷新独立
+  // 鉁?濡傛灉閫氳繃璺敱鏄犲皠鏇存柊浜?subscriptionExpiresAt锛岀洿鎺ヤ繚瀛?
+  // subscriptionExpiresAt 鏄笟鍔″瓧娈碉紝涓?token 鍒锋柊鐙珛
   if (updates.subscriptionExpiresAt !== undefined) {
-    // 直接保存，不做任何调整
+    // 鐩存帴淇濆瓨锛屼笉鍋氫换浣曡皟鏁?
   }
 
-  // 更新账户类型时处理共享账户集合
+  // 鏇存柊璐︽埛绫诲瀷鏃跺鐞嗗叡浜处鎴烽泦鍚?
   const client = redisClient.getClientSafe()
   if (updates.accountType && updates.accountType !== existingAccount.accountType) {
     if (updates.accountType === 'shared') {
@@ -756,10 +793,10 @@ async function updateAccount(accountId, updates) {
 
   logger.info(`Updated OpenAI account: ${accountId}`)
 
-  // 合并更新后的账户数据
+  // 鍚堝苟鏇存柊鍚庣殑璐︽埛鏁版嵁
   const updatedAccount = { ...existingAccount, ...updates }
 
-  // 返回时解析代理配置
+  // 杩斿洖鏃惰В鏋愪唬鐞嗛厤缃?
   if (updatedAccount.proxy && typeof updatedAccount.proxy === 'string') {
     try {
       updatedAccount.proxy = JSON.parse(updatedAccount.proxy)
@@ -771,23 +808,23 @@ async function updateAccount(accountId, updates) {
   return updatedAccount
 }
 
-// 删除账户
+// 鍒犻櫎璐︽埛
 async function deleteAccount(accountId) {
   const account = await getAccount(accountId)
   if (!account) {
     throw new Error('Account not found')
   }
 
-  // 从 Redis 删除
+  // 浠?Redis 鍒犻櫎
   const client = redisClient.getClientSafe()
   await client.del(`${OPENAI_ACCOUNT_KEY_PREFIX}${accountId}`)
 
-  // 从共享账户集合中移除
+  // 浠庡叡浜处鎴烽泦鍚堜腑绉婚櫎
   if (account.accountType === 'shared') {
     await client.srem(SHARED_OPENAI_ACCOUNTS_KEY, accountId)
   }
 
-  // 清理会话映射
+  // 娓呯悊浼氳瘽鏄犲皠
   const sessionMappings = await client.keys(`${ACCOUNT_SESSION_MAPPING_PREFIX}*`)
   for (const key of sessionMappings) {
     const mappedAccountId = await client.get(key)
@@ -800,116 +837,122 @@ async function deleteAccount(accountId) {
   return true
 }
 
-// 获取所有账户
-async function getAllAccounts() {
+// 鑾峰彇鎵€鏈夎处鎴?
+async function getAllAccounts(options = {}) {
+  const forScheduling = options && typeof options === 'object' && options.forScheduling === true
   const client = redisClient.getClientSafe()
   const keys = await client.keys(`${OPENAI_ACCOUNT_KEY_PREFIX}*`)
+  if (keys.length === 0) {
+    return []
+  }
+
+  const pipeline = client.pipeline()
+  keys.forEach((key) => pipeline.hgetall(key))
+  const results = await pipeline.exec()
   const accounts = []
 
-  for (const key of keys) {
-    const accountData = await client.hgetall(key)
-    if (accountData && Object.keys(accountData).length > 0) {
-      // 兼容历史脏数据：统一以 Redis key 中的 id 为准，避免删除/编辑命中错误主键。
-      const accountIdFromKey = key.replace(OPENAI_ACCOUNT_KEY_PREFIX, '')
-      if (accountData.id && accountData.id !== accountIdFromKey) {
-        logger.warn(
-          `OpenAI account id mismatch detected, key id: ${accountIdFromKey}, field id: ${accountData.id}`
-        )
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i]
+    const [error, accountData] = results[i]
+    if (error || !accountData || Object.keys(accountData).length === 0) {
+      continue
+    }
+
+    const accountIdFromKey = key.replace(OPENAI_ACCOUNT_KEY_PREFIX, '')
+    if (accountData.id && accountData.id !== accountIdFromKey) {
+      logger.warn(
+        `OpenAI account id mismatch detected, key id: ${accountIdFromKey}, field id: ${accountData.id}`
+      )
+    }
+    accountData.id = accountIdFromKey
+
+    const codexUsage = buildCodexUsageSnapshot(accountData)
+    const rateLimitInfo = buildRateLimitInfoFromAccountSnapshot(accountData)
+
+    if (!forScheduling && accountData.email) {
+      accountData.email = decrypt(accountData.email)
+    }
+
+    const hasRefreshTokenFlag = !!accountData.refreshToken
+    const maskedAccessToken = accountData.accessToken ? '[ENCRYPTED]' : ''
+    const maskedRefreshToken = accountData.refreshToken ? '[ENCRYPTED]' : ''
+    const maskedOauth = accountData.openaiOauth ? '[ENCRYPTED]' : ''
+
+    delete accountData.idToken
+    delete accountData.accessToken
+    delete accountData.refreshToken
+    delete accountData.openaiOauth
+    delete accountData.codexPrimaryUsedPercent
+    delete accountData.codexPrimaryResetAfterSeconds
+    delete accountData.codexPrimaryWindowMinutes
+    delete accountData.codexSecondaryUsedPercent
+    delete accountData.codexSecondaryResetAfterSeconds
+    delete accountData.codexSecondaryWindowMinutes
+    delete accountData.codexPrimaryOverSecondaryLimitPercent
+    delete accountData.codexUsageUpdatedAt
+
+    if (!forScheduling && accountData.proxy) {
+      try {
+        accountData.proxy = JSON.parse(accountData.proxy)
+      } catch (e) {
+        accountData.proxy = null
       }
-      accountData.id = accountIdFromKey
+    }
 
-      const codexUsage = buildCodexUsageSnapshot(accountData)
+    const tokenExpiresAt = accountData.expiresAt || null
+    const subscriptionExpiresAt =
+      accountData.subscriptionExpiresAt && accountData.subscriptionExpiresAt !== ''
+        ? accountData.subscriptionExpiresAt
+        : null
 
-      // 解密敏感数据（但不返回给前端）
-      if (accountData.email) {
-        accountData.email = decrypt(accountData.email)
-      }
-
-      // 先保存 refreshToken 是否存在的标记
-      const hasRefreshTokenFlag = !!accountData.refreshToken
-      const maskedAccessToken = accountData.accessToken ? '[ENCRYPTED]' : ''
-      const maskedRefreshToken = accountData.refreshToken ? '[ENCRYPTED]' : ''
-      const maskedOauth = accountData.openaiOauth ? '[ENCRYPTED]' : ''
-
-      // 屏蔽敏感信息（token等不应该返回给前端）
-      delete accountData.idToken
-      delete accountData.accessToken
-      delete accountData.refreshToken
-      delete accountData.openaiOauth
-      delete accountData.codexPrimaryUsedPercent
-      delete accountData.codexPrimaryResetAfterSeconds
-      delete accountData.codexPrimaryWindowMinutes
-      delete accountData.codexSecondaryUsedPercent
-      delete accountData.codexSecondaryResetAfterSeconds
-      delete accountData.codexSecondaryWindowMinutes
-      delete accountData.codexPrimaryOverSecondaryLimitPercent
-      // 时间戳改由 codexUsage.updatedAt 暴露
-      delete accountData.codexUsageUpdatedAt
-
-      // 获取限流状态信息
-      const rateLimitInfo = await getAccountRateLimitInfo(accountData.id)
-
-      // 解析代理配置
-      if (accountData.proxy) {
+    if (forScheduling) {
+      let supportedModels = []
+      if (Array.isArray(accountData.supportedModels)) {
+        supportedModels = accountData.supportedModels
+      } else if (typeof accountData.supportedModels === 'string' && accountData.supportedModels) {
         try {
-          accountData.proxy = JSON.parse(accountData.proxy)
-        } catch (e) {
-          // 如果解析失败，设置为null
-          accountData.proxy = null
+          supportedModels = JSON.parse(accountData.supportedModels)
+        } catch {
+          supportedModels = []
         }
       }
 
-      const tokenExpiresAt = accountData.expiresAt || null
-      const subscriptionExpiresAt =
-        accountData.subscriptionExpiresAt && accountData.subscriptionExpiresAt !== ''
-          ? accountData.subscriptionExpiresAt
-          : null
-
-      // 不解密敏感字段，只返回基本信息
       accounts.push({
-        ...accountData,
+        id: accountData.id,
+        name: accountData.name,
+        accountType: accountData.accountType || 'shared',
+        status: accountData.status || 'active',
         isActive: accountData.isActive === 'true',
         schedulable: accountData.schedulable !== 'false',
-        openaiOauth: maskedOauth,
-        accessToken: maskedAccessToken,
-        refreshToken: maskedRefreshToken,
-
-        // ✅ 前端显示订阅过期时间（业务字段）
-        tokenExpiresAt,
-        subscriptionExpiresAt,
-        expiresAt: subscriptionExpiresAt,
-
-        // 添加 scopes 字段用于判断认证方式
-        // 处理空字符串的情况
-        scopes:
-          accountData.scopes && accountData.scopes.trim() ? accountData.scopes.split(' ') : [],
-        // 添加 hasRefreshToken 标记
-        hasRefreshToken: hasRefreshTokenFlag,
-        // 添加限流状态信息（统一格式）
-        rateLimitStatus: rateLimitInfo
-          ? {
-              status: rateLimitInfo.status,
-              isRateLimited: rateLimitInfo.isRateLimited,
-              rateLimitedAt: rateLimitInfo.rateLimitedAt,
-              rateLimitResetAt: rateLimitInfo.rateLimitResetAt,
-              minutesRemaining: rateLimitInfo.minutesRemaining
-            }
-          : {
-              status: 'normal',
-              isRateLimited: false,
-              rateLimitedAt: null,
-              rateLimitResetAt: null,
-              minutesRemaining: 0
-            },
-        codexUsage
+        priority: parseInt(accountData.priority) || 50,
+        lastUsedAt: accountData.lastUsedAt || '',
+        expiresAt: tokenExpiresAt,
+        refreshToken: hasRefreshTokenFlag ? '[ENCRYPTED]' : '',
+        rateLimitStatus: rateLimitInfo,
+        supportedModels
       })
+      continue
     }
+
+    accounts.push({
+      ...accountData,
+      isActive: accountData.isActive === 'true',
+      schedulable: accountData.schedulable !== 'false',
+      openaiOauth: maskedOauth,
+      accessToken: maskedAccessToken,
+      refreshToken: maskedRefreshToken,
+      tokenExpiresAt,
+      subscriptionExpiresAt,
+      expiresAt: subscriptionExpiresAt,
+      scopes: accountData.scopes && accountData.scopes.trim() ? accountData.scopes.split(' ') : [],
+      hasRefreshToken: hasRefreshTokenFlag,
+      rateLimitStatus: rateLimitInfo,
+      codexUsage
+    })
   }
 
   return accounts
 }
-
-// 获取单个账户的概要信息（用于外部展示基本状态）
 async function getAccountOverview(accountId) {
   const client = redisClient.getClientSafe()
   const accountData = await client.hgetall(`${OPENAI_ACCOUNT_KEY_PREFIX}${accountId}`)
@@ -950,9 +993,9 @@ async function getAccountOverview(accountId) {
   }
 }
 
-// 选择可用账户（支持专属和共享账户）
+// 閫夋嫨鍙敤璐︽埛锛堟敮鎸佷笓灞炲拰鍏变韩璐︽埛锛?
 async function selectAvailableAccount(apiKeyId, sessionHash = null) {
-  // 首先检查是否有粘性会话
+  // 棣栧厛妫€鏌ユ槸鍚︽湁绮樻€т細璇?
   const client = redisClient.getClientSafe()
   if (sessionHash) {
     const mappedAccountId = await client.get(`${ACCOUNT_SESSION_MAPPING_PREFIX}${sessionHash}`)
@@ -973,10 +1016,10 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
     }
   }
 
-  // 获取 API Key 信息
+  // 鑾峰彇 API Key 淇℃伅
   const apiKeyData = await client.hgetall(`api_key:${apiKeyId}`)
 
-  // 检查是否绑定了 OpenAI 账户
+  // 妫€鏌ユ槸鍚︾粦瀹氫簡 OpenAI 璐︽埛
   if (apiKeyData.openaiAccountId) {
     const account = await getAccount(apiKeyData.openaiAccountId)
     if (
@@ -986,10 +1029,10 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
       account.status !== 'unauthorized' &&
       account.schedulable !== 'false'
     ) {
-      // 检查 token 是否过期
+      // 妫€鏌?token 鏄惁杩囨湡
       const isExpired = isTokenExpired(account)
 
-      // 记录token使用情况
+      // 璁板綍token浣跨敤鎯呭喌
       logTokenUsage(account.id, account.name, 'openai', account.expiresAt, isExpired)
 
       if (isExpired) {
@@ -997,11 +1040,11 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
         return await getAccount(account.id)
       }
 
-      // 创建粘性会话映射
+      // 鍒涘缓绮樻€т細璇濇槧灏?
       if (sessionHash) {
         await client.setex(
           `${ACCOUNT_SESSION_MAPPING_PREFIX}${sessionHash}`,
-          3600, // 1小时过期
+          3600, // 1灏忔椂杩囨湡
           account.id
         )
       }
@@ -1010,7 +1053,7 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
     }
   }
 
-  // 从共享账户池选择
+  // 浠庡叡浜处鎴锋睜閫夋嫨
   const sharedAccountIds = await client.smembers(SHARED_OPENAI_ACCOUNTS_KEY)
   const availableAccounts = []
 
@@ -1028,7 +1071,7 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
       availableAccounts.push(account)
     } else if (account && isSubscriptionExpired(account)) {
       logger.debug(
-        `⏰ Skipping expired OpenAI account: ${account.name}, expired at ${account.subscriptionExpiresAt}`
+        `鈴?Skipping expired OpenAI account: ${account.name}, expired at ${account.subscriptionExpiresAt}`
       )
     }
   }
@@ -1037,24 +1080,24 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
     throw new Error('No available OpenAI accounts')
   }
 
-  // 选择使用最少的账户
+  // 閫夋嫨浣跨敤鏈€灏戠殑璐︽埛
   const selectedAccount = availableAccounts.reduce((prev, curr) => {
     const prevUsage = parseInt(prev.totalUsage || 0)
     const currUsage = parseInt(curr.totalUsage || 0)
     return prevUsage <= currUsage ? prev : curr
   })
 
-  // 检查 token 是否过期
+  // 妫€鏌?token 鏄惁杩囨湡
   if (isTokenExpired(selectedAccount)) {
     await refreshAccountToken(selectedAccount.id)
     return await getAccount(selectedAccount.id)
   }
 
-  // 创建粘性会话映射
+  // 鍒涘缓绮樻€т細璇濇槧灏?
   if (sessionHash) {
     await client.setex(
       `${ACCOUNT_SESSION_MAPPING_PREFIX}${sessionHash}`,
-      3600, // 1小时过期
+      3600, // 1灏忔椂杩囨湡
       selectedAccount.id
     )
   }
@@ -1062,41 +1105,41 @@ async function selectAvailableAccount(apiKeyId, sessionHash = null) {
   return selectedAccount
 }
 
-// 检查账户是否被限流
+// 妫€鏌ヨ处鎴锋槸鍚﹁闄愭祦
 function isRateLimited(account) {
   if (account.rateLimitStatus === 'limited' && account.rateLimitedAt) {
     const limitedAt = new Date(account.rateLimitedAt).getTime()
     const now = Date.now()
-    const limitDuration = 60 * 60 * 1000 // 1小时
+    const limitDuration = 60 * 60 * 1000 // 1灏忔椂
 
     return now < limitedAt + limitDuration
   }
   return false
 }
 
-// 设置账户限流状态
+// 璁剧疆璐︽埛闄愭祦鐘舵€?
 async function setAccountRateLimited(accountId, isLimited, resetsInSeconds = null) {
   const updates = {
     rateLimitStatus: isLimited ? 'limited' : 'normal',
     rateLimitedAt: isLimited ? new Date().toISOString() : null,
-    // 限流时停止调度，解除限流时恢复调度
+    // 闄愭祦鏃跺仠姝㈣皟搴︼紝瑙ｉ櫎闄愭祦鏃舵仮澶嶈皟搴?
     schedulable: isLimited ? 'false' : 'true'
   }
 
-  // 如果提供了重置时间（秒数），计算重置时间戳
+  // 濡傛灉鎻愪緵浜嗛噸缃椂闂达紙绉掓暟锛夛紝璁＄畻閲嶇疆鏃堕棿鎴?
   if (isLimited && resetsInSeconds !== null && resetsInSeconds > 0) {
     const resetTime = new Date(Date.now() + resetsInSeconds * 1000).toISOString()
     updates.rateLimitResetAt = resetTime
     logger.info(
-      `🕐 Account ${accountId} will be reset at ${resetTime} (in ${resetsInSeconds} seconds / ${Math.ceil(resetsInSeconds / 60)} minutes)`
+      `馃晲 Account ${accountId} will be reset at ${resetTime} (in ${resetsInSeconds} seconds / ${Math.ceil(resetsInSeconds / 60)} minutes)`
     )
   } else if (isLimited) {
-    // 如果没有提供重置时间，使用默认的60分钟
-    const defaultResetSeconds = 60 * 60 // 1小时
+    // 濡傛灉娌℃湁鎻愪緵閲嶇疆鏃堕棿锛屼娇鐢ㄩ粯璁ょ殑60鍒嗛挓
+    const defaultResetSeconds = 60 * 60 // 1灏忔椂
     const resetTime = new Date(Date.now() + defaultResetSeconds * 1000).toISOString()
     updates.rateLimitResetAt = resetTime
     logger.warn(
-      `⚠️ No reset time provided for account ${accountId}, using default 60 minutes. Reset at ${resetTime}`
+      `鈿狅笍 No reset time provided for account ${accountId}, using default 60 minutes. Reset at ${resetTime}`
     )
   } else if (!isLimited) {
     updates.rateLimitResetAt = null
@@ -1107,7 +1150,7 @@ async function setAccountRateLimited(accountId, isLimited, resetsInSeconds = nul
     `Set rate limit status for OpenAI account ${accountId}: ${updates.rateLimitStatus}, schedulable: ${updates.schedulable}`
   )
 
-  // 如果被限流，发送 Webhook 通知
+  // 濡傛灉琚檺娴侊紝鍙戦€?Webhook 閫氱煡
   if (isLimited) {
     try {
       const account = await getAccount(accountId)
@@ -1123,14 +1166,14 @@ async function setAccountRateLimited(accountId, isLimited, resetsInSeconds = nul
           : 'Account rate limited (429 error). Estimated reset in 1 hour',
         timestamp: new Date().toISOString()
       })
-      logger.info(`📢 Webhook notification sent for OpenAI account ${account.name} rate limit`)
+      logger.info(`馃摙 Webhook notification sent for OpenAI account ${account.name} rate limit`)
     } catch (webhookError) {
       logger.error('Failed to send rate limit webhook notification:', webhookError)
     }
   }
 }
 
-// 🚫 标记账户为未授权状态（401错误）
+// 馃毇 鏍囪璐︽埛涓烘湭鎺堟潈鐘舵€侊紙401閿欒锛?
 async function markAccountUnauthorized(accountId, reason = 'OpenAI账号认证失败（401错误）') {
   const account = await getAccount(accountId)
   if (!account) {
@@ -1156,7 +1199,7 @@ async function markAccountUnauthorized(accountId, reason = 'OpenAI账号认证�
 
   await updateAccount(accountId, updates)
   logger.warn(
-    `🚫 Marked OpenAI account ${account.name || accountId} as unauthorized due to 401 error`
+    `馃毇 Marked OpenAI account ${account.name || accountId} as unauthorized due to 401 error`
   )
 
   try {
@@ -1171,14 +1214,14 @@ async function markAccountUnauthorized(accountId, reason = 'OpenAI账号认证�
       timestamp: now
     })
     logger.info(
-      `📢 Webhook notification sent for OpenAI account ${account.name} unauthorized state`
+      `馃摙 Webhook notification sent for OpenAI account ${account.name} unauthorized state`
     )
   } catch (webhookError) {
     logger.error('Failed to send unauthorized webhook notification:', webhookError)
   }
 }
 
-// 🔄 重置账户所有异常状态
+// 馃攧 閲嶇疆璐︽埛鎵€鏈夊紓甯哥姸鎬?
 async function resetAccountStatus(accountId) {
   const account = await getAccount(accountId)
   if (!account) {
@@ -1186,11 +1229,11 @@ async function resetAccountStatus(accountId) {
   }
 
   const updates = {
-    // 根据是否有有效的 accessToken 来设置 status
+    // 鏍规嵁鏄惁鏈夋湁鏁堢殑 accessToken 鏉ヨ缃?status
     status: account.accessToken ? 'active' : 'created',
-    // 恢复可调度状态
+    // 鎭㈠鍙皟搴︾姸鎬?
     schedulable: 'true',
-    // 清除错误相关字段
+    // 娓呴櫎閿欒鐩稿叧瀛楁
     errorMessage: null,
     rateLimitedAt: null,
     rateLimitStatus: 'normal',
@@ -1198,9 +1241,9 @@ async function resetAccountStatus(accountId) {
   }
 
   await updateAccount(accountId, updates)
-  logger.info(`✅ Reset all error status for OpenAI account ${accountId}`)
+  logger.info(`鉁?Reset all error status for OpenAI account ${accountId}`)
 
-  // 发送 Webhook 通知
+  // 鍙戦€?Webhook 閫氱煡
   try {
     const webhookNotifier = require('../utils/webhookNotifier')
     await webhookNotifier.sendAccountAnomalyNotification({
@@ -1212,7 +1255,7 @@ async function resetAccountStatus(accountId) {
       reason: 'Account status manually reset',
       timestamp: new Date().toISOString()
     })
-    logger.info(`📢 Webhook notification sent for OpenAI account ${account.name} status reset`)
+    logger.info(`馃摙 Webhook notification sent for OpenAI account ${account.name} status reset`)
   } catch (webhookError) {
     logger.error('Failed to send status reset webhook notification:', webhookError)
   }
@@ -1220,14 +1263,14 @@ async function resetAccountStatus(accountId) {
   return { success: true, message: 'Account status reset successfully' }
 }
 
-// 切换账户调度状态
+// 鍒囨崲璐︽埛璋冨害鐘舵€?
 async function toggleSchedulable(accountId) {
   const account = await getAccount(accountId)
   if (!account) {
     throw new Error('Account not found')
   }
 
-  // 切换调度状态
+  // 鍒囨崲璋冨害鐘舵€?
   const newSchedulable = account.schedulable === 'false' ? 'true' : 'false'
 
   await updateAccount(accountId, {
@@ -1242,7 +1285,7 @@ async function toggleSchedulable(accountId) {
   }
 }
 
-// 获取账户限流信息
+// 鑾峰彇璐︽埛闄愭祦淇℃伅
 async function getAccountRateLimitInfo(accountId) {
   const account = await getAccount(accountId)
   if (!account) {
@@ -1262,7 +1305,7 @@ async function getAccountRateLimitInfo(accountId) {
       remainingTime = Math.max(0, resetAt - now)
     } else if (rateLimitedAt) {
       const limitedAt = new Date(rateLimitedAt).getTime()
-      const limitDuration = 60 * 60 * 1000 // 默认1小时
+      const limitDuration = 60 * 60 * 1000 // 榛樿1灏忔椂
       remainingTime = Math.max(0, limitedAt + limitDuration - now)
     }
 
@@ -1286,7 +1329,7 @@ async function getAccountRateLimitInfo(accountId) {
   }
 }
 
-// 更新账户使用统计（tokens参数可选，默认为0，仅更新最后使用时间）
+// 鏇存柊璐︽埛浣跨敤缁熻锛坱okens鍙傛暟鍙€夛紝榛樿涓?锛屼粎鏇存柊鏈€鍚庝娇鐢ㄦ椂闂达級
 async function updateAccountUsage(accountId, tokens = 0) {
   const account = await getAccount(accountId)
   if (!account) {
@@ -1297,7 +1340,7 @@ async function updateAccountUsage(accountId, tokens = 0) {
     lastUsedAt: new Date().toISOString()
   }
 
-  // 如果有 tokens 参数且大于0，同时更新使用统计
+  // 濡傛灉鏈?tokens 鍙傛暟涓斿ぇ浜?锛屽悓鏃舵洿鏂颁娇鐢ㄧ粺璁?
   if (tokens > 0) {
     const totalUsage = parseInt(account.totalUsage || 0) + tokens
     updates.totalUsage = totalUsage.toString()
@@ -1306,7 +1349,7 @@ async function updateAccountUsage(accountId, tokens = 0) {
   await updateAccount(accountId, updates)
 }
 
-// 为了兼容性，保留recordUsage作为updateAccountUsage的别名
+// 涓轰簡鍏煎鎬э紝淇濈暀recordUsage浣滀负updateAccountUsage鐨勫埆鍚?
 const recordUsage = updateAccountUsage
 
 async function updateCodexUsageSnapshot(accountId, usageSnapshot) {
@@ -1360,10 +1403,11 @@ module.exports = {
   toggleSchedulable,
   getAccountRateLimitInfo,
   updateAccountUsage,
-  recordUsage, // 别名，指向updateAccountUsage
+  recordUsage, // 鍒悕锛屾寚鍚憉pdateAccountUsage
   updateCodexUsageSnapshot,
   encrypt,
   decrypt,
   generateEncryptionKey,
-  decryptCache // 暴露缓存对象以便测试和监控
+  decryptCache // 鏆撮湶缂撳瓨瀵硅薄浠ヤ究娴嬭瘯鍜岀洃鎺?
 }
+
