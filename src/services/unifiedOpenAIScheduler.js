@@ -6,6 +6,9 @@ const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
 
+const OPENAI_STICKY_TTL_MIN_HOURS = 6
+const OPENAI_STICKY_TTL_MAX_HOURS = 24
+
 class UnifiedOpenAIScheduler {
   constructor() {
     this.SESSION_MAPPING_PREFIX = 'unified_openai_session_mapping:'
@@ -21,6 +24,30 @@ class UnifiedOpenAIScheduler {
 
   _canParticipateInScheduling(account) {
     return !!account && this._isAccountActive(account.isActive) && !this._isUnavailableStatus(account.status)
+  }
+
+  _normalizeOpenAIStickyTtlHours(rawValue) {
+    const parsed = Number(rawValue)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return OPENAI_STICKY_TTL_MIN_HOURS
+    }
+    return Math.min(OPENAI_STICKY_TTL_MAX_HOURS, Math.max(OPENAI_STICKY_TTL_MIN_HOURS, parsed))
+  }
+
+  _isSessionMappingOwnedByApiKey(mappedAccount, apiKeyId) {
+    const normalizedApiKeyId = typeof apiKeyId === 'string' ? apiKeyId.trim() : ''
+    if (!normalizedApiKeyId) {
+      return true
+    }
+
+    const mappedApiKeyId =
+      mappedAccount && typeof mappedAccount.apiKeyId === 'string' ? mappedAccount.apiKeyId.trim() : ''
+
+    if (!mappedApiKeyId) {
+      return false
+    }
+
+    return mappedApiKeyId === normalizedApiKeyId
   }
 
   // 🔢 按优先级和最后使用时间排序账户（与 Claude/Gemini 调度保持一致）
@@ -310,6 +337,12 @@ class UnifiedOpenAIScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
+          if (!this._isSessionMappingOwnedByApiKey(mappedAccount, apiKeyData?.id)) {
+            logger.info(
+              `Sticky session mapping apiKey mismatch, clearing stale mapping for session ${sessionHash}`
+            )
+            await this._deleteSessionMapping(sessionHash)
+          } else {
           // 验证映射的账户是否仍然可用
           const isAvailable = await this._isAccountAvailable(
             mappedAccount.accountId,
@@ -329,6 +362,7 @@ class UnifiedOpenAIScheduler {
               `⚠️ Mapped account ${mappedAccount.accountId} is no longer available, selecting new account`
             )
             await this._deleteSessionMapping(sessionHash)
+          }
           }
         }
       }
@@ -592,17 +626,29 @@ class UnifiedOpenAIScheduler {
   async _resolveStickyPolicy() {
     const appConfig = require('../../config/config')
     let autoRenewEnabledOverride
+    let stickyTtlHoursOverride
 
     try {
       const runtimeConfig = await claudeRelayConfigService.getConfig()
       if (typeof runtimeConfig?.stickySessionAutoRenewalEnabled === 'boolean') {
         autoRenewEnabledOverride = runtimeConfig.stickySessionAutoRenewalEnabled
       }
+      if (runtimeConfig?.openaiStickySessionTtlHours !== undefined) {
+        stickyTtlHoursOverride = runtimeConfig.openaiStickySessionTtlHours
+      }
     } catch (error) {
       logger.debug('Failed to load runtime sticky policy override for OpenAI scheduler:', error)
     }
 
-    return resolveStickySessionPolicy(appConfig.session, {
+    const sessionConfig = { ...(appConfig.session || {}) }
+    if (stickyTtlHoursOverride !== undefined) {
+      sessionConfig.stickyTtlHours = stickyTtlHoursOverride
+    }
+    sessionConfig.stickyTtlHours = this._normalizeOpenAIStickyTtlHours(
+      sessionConfig.stickyTtlHours
+    )
+
+    return resolveStickySessionPolicy(sessionConfig, {
       autoRenewEnabledOverride
     })
   }
@@ -825,6 +871,12 @@ class UnifiedOpenAIScheduler {
       if (sessionHash) {
         const mappedAccount = await this._getSessionMapping(sessionHash)
         if (mappedAccount) {
+          if (!this._isSessionMappingOwnedByApiKey(mappedAccount, apiKeyData?.id)) {
+            logger.info(
+              `Sticky group mapping apiKey mismatch, clearing stale mapping for session ${sessionHash}`
+            )
+            await this._deleteSessionMapping(sessionHash)
+          } else {
           // 验证映射的账户是否仍然可用并且在分组中
           const isInGroup = await this._isAccountInGroup(mappedAccount.accountId, groupId)
           if (isInGroup) {
@@ -845,6 +897,7 @@ class UnifiedOpenAIScheduler {
           }
           // 如果账户不可用或不在分组中，删除映射
           await this._deleteSessionMapping(sessionHash)
+          }
         }
       }
 

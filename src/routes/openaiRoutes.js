@@ -13,6 +13,7 @@ const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const redis = require('../models/redis')
 const crypto = require('crypto')
 const ProxyHelper = require('../utils/proxyHelper')
+const { extractOpenAIStickySession } = require('../utils/openaiSessionResolver')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const {
   STREAM_INTERRUPTION_REASONS,
@@ -756,6 +757,21 @@ function parseJsonSafely(payload) {
   }
 }
 
+function buildScopedOpenAIStickySessionSeed(sessionId, apiKeyId) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : ''
+  if (!normalizedSessionId) {
+    return null
+  }
+
+  const normalizedApiKeyId = typeof apiKeyId === 'string' ? apiKeyId.trim() : ''
+  if (!normalizedApiKeyId) {
+    return normalizedSessionId
+  }
+
+  // Scope sticky mapping per CRS API key so different downstream channels do not share one mapping.
+  return `${normalizedApiKeyId}:${normalizedSessionId}`
+}
+
 async function readStreamBodyToString(stream, timeoutMs = 15000) {
   if (!stream || typeof stream.on !== 'function') {
     return ''
@@ -1039,14 +1055,18 @@ const handleResponses = async (req, res) => {
     }
 
     // 从请求头或请求体中提取会话 ID
-    const sessionId =
-      req.headers['session_id'] ||
-      req.headers['x-session-id'] ||
-      req.body?.session_id ||
-      req.body?.conversation_id ||
-      null
+    const stickySession = extractOpenAIStickySession(req)
+    const sessionId = stickySession?.value || null
 
-    sessionHash = sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : null
+    const stickySessionSeed = buildScopedOpenAIStickySessionSeed(sessionId, apiKeyData.id)
+    sessionHash = stickySessionSeed
+      ? crypto.createHash('sha256').update(stickySessionSeed).digest('hex')
+      : null
+    if (sessionHash && stickySession?.source) {
+      logger.debug(
+        `OpenAI sticky session resolved from ${stickySession.source} (apiKeyScoped=${!!apiKeyData.id}): ${sessionHash.substring(0, 12)}...`
+      )
+    }
 
     const isChatCompletionsCompat = isChatCompletionsCompatMode(req)
     const originalRequestBody =

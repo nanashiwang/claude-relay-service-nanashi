@@ -34,8 +34,8 @@ const config = {
 
   // 🔗 会话管理配置
   session: {
-    // Sticky session TTL in hours.
-    stickyTtlHours: parseFloat(process.env.STICKY_SESSION_TTL_HOURS) || 1,
+    // Sticky session TTL in hours (recommended 6-24 to reduce account drift).
+    stickyTtlHours: parseFloat(process.env.STICKY_SESSION_TTL_HOURS) || 6,
     // Renewal threshold in minutes. 0 enables auto threshold (~TTL/3, min 5, max 60).
     renewalThresholdMinutes: parseInt(process.env.STICKY_SESSION_RENEWAL_THRESHOLD_MINUTES) || 0,
     // Explicitly disable auto renewal (default: false).
