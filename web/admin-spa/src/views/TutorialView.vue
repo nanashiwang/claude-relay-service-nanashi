@@ -53,55 +53,6 @@
     </div>
 
     <div class="tutorial-content">
-      <!-- 入群二维码 -->
-      <div class="mb-6 sm:mb-10">
-        <h4
-          class="mb-3 flex items-center text-lg font-semibold text-gray-800 dark:text-gray-300 sm:mb-4 sm:text-xl"
-        >
-          <i class="fas fa-qrcode mr-2 text-blue-600 sm:mr-3" />
-          扫码入群 / 获取帮助
-        </h4>
-
-        <div
-          class="rounded-xl border border-blue-100 bg-gradient-to-r from-blue-50 to-indigo-50 p-4 dark:border-blue-500/40 dark:from-blue-950/30 dark:to-indigo-950/30 sm:p-6"
-        >
-          <div class="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-            <div class="w-full max-w-[220px] flex-shrink-0">
-              <img
-                v-if="!joinGroupQrLoadFailed"
-                :src="joinGroupQrUrl"
-                alt="入群二维码"
-                class="w-full rounded-lg border border-gray-200 bg-white p-2 shadow-sm dark:border-gray-700 dark:bg-gray-900"
-                loading="lazy"
-                @error="joinGroupQrLoadFailed = true"
-              />
-              <div
-                v-else
-                class="rounded-lg border border-yellow-200 bg-yellow-50 p-3 text-xs text-yellow-800 dark:border-yellow-500/40 dark:bg-yellow-950/30 dark:text-yellow-200"
-              >
-                未找到二维码图片。请将二维码文件放到
-                <code class="rounded bg-yellow-100 px-1 dark:bg-yellow-900/40"
-                  >web/admin-spa/public/join-group-qr.png</code
-                >
-                并重新构建/部署，或直接上传覆盖服务器上的
-                <code class="rounded bg-yellow-100 px-1 dark:bg-yellow-900/40">dist/join-group-qr.png</code
-                >。
-              </div>
-            </div>
-
-            <div class="w-full">
-              <p class="mb-2 text-sm text-gray-700 dark:text-gray-300 sm:text-base">
-                如需获取密钥、排障支持或功能反馈，建议扫码加入交流群。
-              </p>
-              <ul class="list-inside list-disc space-y-1 text-xs text-gray-600 dark:text-gray-400 sm:text-sm">
-                <li>入群后建议备注：用户名/用途/系统环境</li>
-                <li>遇到问题请提供：系统版本、Node.js 版本（node -v）、报错日志</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- 章节 1：环境准备 -->
       <div class="mb-6 sm:mb-10">
         <h4
@@ -926,10 +877,6 @@ import { computed, ref } from 'vue'
 
 const activeTutorialClient = ref('codex')
 const activeTutorialSystem = ref('windows')
-
-const joinGroupQrFileName = 'join-group-qr.png'
-const joinGroupQrUrl = computed(() => `${import.meta.env.BASE_URL}${joinGroupQrFileName}`)
-const joinGroupQrLoadFailed = ref(false)
 
 const ideToolSetupFileName = 'ide-tool-setup.png'
 const ideToolSetupUrl = computed(() => `${import.meta.env.BASE_URL}${ideToolSetupFileName}`)
