@@ -19,6 +19,9 @@ DEFAULT_REDIS_HOST="localhost"
 DEFAULT_REDIS_PORT="6379"
 DEFAULT_REDIS_PASSWORD=""
 DEFAULT_APP_PORT="3000"
+DEFAULT_CLUSTER_MODE="true"
+DEFAULT_CLUSTER_WORKERS="auto"
+DEFAULT_ENABLE_BACKGROUND_TASKS="true"
 # 默认仓库配置（用于 install / update 拉取）
 DEFAULT_REPO_URL="https://github.com/nanashi-hub/claude-relay-service-nanashi.git"
 DEFAULT_REPO_BRANCH="main"
@@ -28,6 +31,9 @@ DEFAULT_WEB_DIST_BRANCH="web-dist"
 #   CRS_REPO_URL：仓库地址（HTTPS/SSH 均可）
 #   CRS_REPO_BRANCH：主分支名（默认 main）
 #   CRS_WEB_DIST_BRANCH：前端预构建分支名（默认 web-dist）
+#   CRS_CLUSTER_MODE：cluster 模式（默认 true）
+#   CRS_CLUSTER_WORKERS：worker 数量（默认 auto）
+#   CRS_ENABLE_BACKGROUND_TASKS：是否启用后台清理任务（默认 true）
 
 # 全局变量
 INSTALL_DIR=""
@@ -67,6 +73,18 @@ get_repo_branch() {
 
 get_web_dist_branch() {
     echo "${CRS_WEB_DIST_BRANCH:-${DEFAULT_WEB_DIST_BRANCH}}"
+}
+
+get_cluster_mode() {
+    echo "${CRS_CLUSTER_MODE:-${DEFAULT_CLUSTER_MODE}}"
+}
+
+get_cluster_workers() {
+    echo "${CRS_CLUSTER_WORKERS:-${DEFAULT_CLUSTER_WORKERS}}"
+}
+
+get_background_tasks_enabled() {
+    echo "${CRS_ENABLE_BACKGROUND_TASKS:-${DEFAULT_ENABLE_BACKGROUND_TASKS}}"
 }
 
 # 确保 origin 指向期望仓库（避免从上游误更新）
@@ -536,6 +554,13 @@ install_service() {
     if [ -f "config/config.example.js" ]; then
         cp config/config.example.js config/config.js
     fi
+
+    local cluster_mode
+    cluster_mode="$(get_cluster_mode)"
+    local cluster_workers
+    cluster_workers="$(get_cluster_workers)"
+    local background_tasks_enabled
+    background_tasks_enabled="$(get_background_tasks_enabled)"
     
     # 创建.env文件
     cat > .env << EOF
@@ -556,6 +581,11 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 
 # 日志配置
 LOG_LEVEL=info
+
+# Cluster 配置
+CLUSTER_MODE=$cluster_mode
+CLUSTER_WORKERS=$cluster_workers
+ENABLE_BACKGROUND_TASKS=$background_tasks_enabled
 EOF
     
     # 运行setup命令
