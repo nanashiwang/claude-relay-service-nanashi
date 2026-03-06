@@ -1915,6 +1915,18 @@ const isPlatformFormValid = computed(() => {
   }
 })
 
+// 统一提取接口错误信息，避免仅提示“保存失败”而丢失后端原因
+const getApiErrorMessage = (error, fallbackMessage) => {
+  const candidates = [error?.response?.data?.message, error?.response?.data?.error, error?.message]
+  const detailMessage = candidates.find((item) => typeof item === 'string' && item.trim())
+
+  if (!detailMessage || detailMessage === fallbackMessage) {
+    return fallbackMessage
+  }
+
+  return `${fallbackMessage}：${detailMessage}`
+}
+
 // 页面加载时获取设置
 onMounted(async () => {
   try {
@@ -2039,7 +2051,7 @@ const loadClaudeConfig = async () => {
   } catch (error) {
     if (error.name === 'AbortError') return
     if (!isMounted.value) return
-    showToast('获取 Claude 转发配置失败', 'error')
+    showToast(getApiErrorMessage(error, '获取 Claude 转发配置失败'), 'error')
     console.error(error)
   } finally {
     if (isMounted.value) {
@@ -2083,7 +2095,7 @@ const saveClaudeConfig = async () => {
   } catch (error) {
     if (error.name === 'AbortError') return
     if (!isMounted.value) return
-    showToast('保存 Claude 转发配置失败', 'error')
+    showToast(getApiErrorMessage(error, '保存 Claude 转发配置失败'), 'error')
     console.error(error)
   }
 }
