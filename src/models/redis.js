@@ -1,6 +1,7 @@
 const Redis = require('ioredis')
 const config = require('../../config/config')
 const logger = require('../utils/logger')
+const { buildCacheMetrics } = require('../utils/cacheMetrics')
 const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
 
 // 时区辅助函数
@@ -603,6 +604,8 @@ class RedisClient {
     const finalOutputTokens = outputTokens || (finalInputTokens > 0 ? 0 : tokens)
     const finalCacheCreateTokens = cacheCreateTokens || 0
     const finalCacheReadTokens = cacheReadTokens || 0
+    const cacheCreateRequests = finalCacheCreateTokens > 0 ? 1 : 0
+    const cacheReadRequests = finalCacheReadTokens > 0 ? 1 : 0
 
     // 重新计算真实的总token数（包括缓存token）
     const totalTokens =
@@ -621,6 +624,8 @@ class RedisClient {
     // 缓存token统计（新增）
     pipeline.hincrby(key, 'totalCacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(key, 'totalCacheReadTokens', finalCacheReadTokens)
+    pipeline.hincrby(key, 'totalCacheCreateRequests', cacheCreateRequests)
+    pipeline.hincrby(key, 'totalCacheReadRequests', cacheReadRequests)
     pipeline.hincrby(key, 'totalAllTokens', totalTokens) // 包含所有类型的总token
     // 详细缓存类型统计（新增）
     pipeline.hincrby(key, 'totalEphemeral5mTokens', ephemeral5mTokens)
@@ -640,6 +645,8 @@ class RedisClient {
     pipeline.hincrby(daily, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(daily, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(daily, 'cacheReadTokens', finalCacheReadTokens)
+    pipeline.hincrby(daily, 'cacheCreateRequests', cacheCreateRequests)
+    pipeline.hincrby(daily, 'cacheReadRequests', cacheReadRequests)
     pipeline.hincrby(daily, 'allTokens', totalTokens)
     pipeline.hincrby(daily, 'requests', 1)
     // 详细缓存类型统计
@@ -658,6 +665,8 @@ class RedisClient {
     pipeline.hincrby(monthly, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(monthly, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(monthly, 'cacheReadTokens', finalCacheReadTokens)
+    pipeline.hincrby(monthly, 'cacheCreateRequests', cacheCreateRequests)
+    pipeline.hincrby(monthly, 'cacheReadRequests', cacheReadRequests)
     pipeline.hincrby(monthly, 'allTokens', totalTokens)
     pipeline.hincrby(monthly, 'requests', 1)
     // 详细缓存类型统计
@@ -708,6 +717,8 @@ class RedisClient {
     pipeline.hincrby(hourly, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(hourly, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(hourly, 'cacheReadTokens', finalCacheReadTokens)
+    pipeline.hincrby(hourly, 'cacheCreateRequests', cacheCreateRequests)
+    pipeline.hincrby(hourly, 'cacheReadRequests', cacheReadRequests)
     pipeline.hincrby(hourly, 'allTokens', totalTokens)
     pipeline.hincrby(hourly, 'requests', 1)
 
@@ -734,6 +745,8 @@ class RedisClient {
     pipeline.hincrby(systemMinuteKey, 'outputTokens', finalOutputTokens)
     pipeline.hincrby(systemMinuteKey, 'cacheCreateTokens', finalCacheCreateTokens)
     pipeline.hincrby(systemMinuteKey, 'cacheReadTokens', finalCacheReadTokens)
+    pipeline.hincrby(systemMinuteKey, 'cacheCreateRequests', cacheCreateRequests)
+    pipeline.hincrby(systemMinuteKey, 'cacheReadRequests', cacheReadRequests)
 
     // 设置过期时间
     pipeline.expire(daily, 86400 * 32) // 32天过期
@@ -794,6 +807,8 @@ class RedisClient {
     const finalOutputTokens = outputTokens || 0
     const finalCacheCreateTokens = cacheCreateTokens || 0
     const finalCacheReadTokens = cacheReadTokens || 0
+    const cacheCreateRequests = finalCacheCreateTokens > 0 ? 1 : 0
+    const cacheReadRequests = finalCacheReadTokens > 0 ? 1 : 0
     const actualTotalTokens =
       finalInputTokens + finalOutputTokens + finalCacheCreateTokens + finalCacheReadTokens
     const coreTokens = finalInputTokens + finalOutputTokens
@@ -806,6 +821,8 @@ class RedisClient {
       this.client.hincrby(accountKey, 'totalOutputTokens', finalOutputTokens),
       this.client.hincrby(accountKey, 'totalCacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountKey, 'totalCacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountKey, 'totalCacheCreateRequests', cacheCreateRequests),
+      this.client.hincrby(accountKey, 'totalCacheReadRequests', cacheReadRequests),
       this.client.hincrby(accountKey, 'totalAllTokens', actualTotalTokens),
       this.client.hincrby(accountKey, 'totalRequests', 1),
 
@@ -815,6 +832,8 @@ class RedisClient {
       this.client.hincrby(accountDaily, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountDaily, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountDaily, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountDaily, 'cacheCreateRequests', cacheCreateRequests),
+      this.client.hincrby(accountDaily, 'cacheReadRequests', cacheReadRequests),
       this.client.hincrby(accountDaily, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountDaily, 'requests', 1),
 
@@ -824,6 +843,8 @@ class RedisClient {
       this.client.hincrby(accountMonthly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountMonthly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountMonthly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountMonthly, 'cacheCreateRequests', cacheCreateRequests),
+      this.client.hincrby(accountMonthly, 'cacheReadRequests', cacheReadRequests),
       this.client.hincrby(accountMonthly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountMonthly, 'requests', 1),
 
@@ -833,6 +854,8 @@ class RedisClient {
       this.client.hincrby(accountHourly, 'outputTokens', finalOutputTokens),
       this.client.hincrby(accountHourly, 'cacheCreateTokens', finalCacheCreateTokens),
       this.client.hincrby(accountHourly, 'cacheReadTokens', finalCacheReadTokens),
+      this.client.hincrby(accountHourly, 'cacheCreateRequests', cacheCreateRequests),
+      this.client.hincrby(accountHourly, 'cacheReadRequests', cacheReadRequests),
       this.client.hincrby(accountHourly, 'allTokens', actualTotalTokens),
       this.client.hincrby(accountHourly, 'requests', 1),
 
@@ -1000,6 +1023,10 @@ class RedisClient {
         parseInt(data.totalCacheCreateTokens) || parseInt(data.cacheCreateTokens) || 0
       const cacheReadTokens =
         parseInt(data.totalCacheReadTokens) || parseInt(data.cacheReadTokens) || 0
+      const cacheCreateRequests =
+        parseInt(data.totalCacheCreateRequests) || parseInt(data.cacheCreateRequests) || 0
+      const cacheReadRequests =
+        parseInt(data.totalCacheReadRequests) || parseInt(data.cacheReadRequests) || 0
       const allTokens = parseInt(data.totalAllTokens) || parseInt(data.allTokens) || 0
 
       const totalFromSeparate = inputTokens + outputTokens
@@ -1008,6 +1035,14 @@ class RedisClient {
         allTokens || inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
 
       if (totalFromSeparate === 0 && tokens > 0) {
+        const cacheMetrics = buildCacheMetrics({
+          inputTokens: Math.round(tokens * 0.3),
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          requests,
+          cacheReadRequests: 0,
+          cacheCreateRequests: 0
+        })
         // 旧数据：没有输入输出分离
         return {
           tokens, // 保持兼容性，但统一使用allTokens
@@ -1015,10 +1050,21 @@ class RedisClient {
           outputTokens: Math.round(tokens * 0.7), // 假设70%为输出
           cacheCreateTokens: 0, // 旧数据没有缓存token
           cacheReadTokens: 0,
+          cacheCreateRequests: 0,
+          cacheReadRequests: 0,
           allTokens: tokens, // 对于旧数据，allTokens等于tokens
-          requests
+          requests,
+          cacheMetrics
         }
       } else {
+        const cacheMetrics = buildCacheMetrics({
+          inputTokens,
+          cacheReadTokens,
+          cacheCreateTokens,
+          requests,
+          cacheReadRequests,
+          cacheCreateRequests
+        })
         // 新数据或无数据 - 统一使用allTokens作为tokens的值
         return {
           tokens: actualAllTokens, // 统一使用allTokens作为总数
@@ -1026,8 +1072,11 @@ class RedisClient {
           outputTokens,
           cacheCreateTokens,
           cacheReadTokens,
+          cacheCreateRequests,
+          cacheReadRequests,
           allTokens: actualAllTokens,
-          requests
+          requests,
+          cacheMetrics
         }
       }
     }
@@ -1837,6 +1886,8 @@ class RedisClient {
       let totalOutputTokensToday = 0
       let totalCacheCreateTokensToday = 0
       let totalCacheReadTokensToday = 0
+      let totalCacheCreateRequestsToday = 0
+      let totalCacheReadRequestsToday = 0
 
       // 批量获取所有今日数据，提高性能
       if (dailyKeys.length > 0) {
@@ -1858,6 +1909,8 @@ class RedisClient {
           const outputTokens = parseInt(dailyData.outputTokens) || 0
           const cacheCreateTokens = parseInt(dailyData.cacheCreateTokens) || 0
           const cacheReadTokens = parseInt(dailyData.cacheReadTokens) || 0
+          const cacheCreateRequests = parseInt(dailyData.cacheCreateRequests) || 0
+          const cacheReadRequests = parseInt(dailyData.cacheReadRequests) || 0
           const totalTokensFromSeparate = inputTokens + outputTokens
 
           if (totalTokensFromSeparate === 0 && currentDayTokens > 0) {
@@ -1873,6 +1926,8 @@ class RedisClient {
           // 添加cache token统计
           totalCacheCreateTokensToday += cacheCreateTokens
           totalCacheReadTokensToday += cacheReadTokens
+          totalCacheCreateRequestsToday += cacheCreateRequests
+          totalCacheReadRequestsToday += cacheReadRequests
         }
       }
 
@@ -1892,6 +1947,15 @@ class RedisClient {
         }
       }
 
+      const cacheMetrics = buildCacheMetrics({
+        inputTokens: totalInputTokensToday,
+        cacheReadTokens: totalCacheReadTokensToday,
+        cacheCreateTokens: totalCacheCreateTokensToday,
+        requests: totalRequestsToday,
+        cacheReadRequests: totalCacheReadRequestsToday,
+        cacheCreateRequests: totalCacheCreateRequestsToday
+      })
+
       return {
         requestsToday: totalRequestsToday,
         tokensToday: totalTokensToday,
@@ -1899,6 +1963,9 @@ class RedisClient {
         outputTokensToday: totalOutputTokensToday,
         cacheCreateTokensToday: totalCacheCreateTokensToday,
         cacheReadTokensToday: totalCacheReadTokensToday,
+        cacheCreateRequestsToday: totalCacheCreateRequestsToday,
+        cacheReadRequestsToday: totalCacheReadRequestsToday,
+        cacheMetrics,
         apiKeysCreatedToday
       }
     } catch (error) {
@@ -1910,6 +1977,9 @@ class RedisClient {
         outputTokensToday: 0,
         cacheCreateTokensToday: 0,
         cacheReadTokensToday: 0,
+        cacheCreateRequestsToday: 0,
+        cacheReadRequestsToday: 0,
+        cacheMetrics: buildCacheMetrics(),
         apiKeysCreatedToday: 0
       }
     }
@@ -1923,6 +1993,10 @@ class RedisClient {
       let totalTokens = 0
       let totalInputTokens = 0
       let totalOutputTokens = 0
+      let totalCacheCreateTokens = 0
+      let totalCacheReadTokens = 0
+      let totalCacheCreateRequests = 0
+      let totalCacheReadRequests = 0
       let oldestCreatedAt = new Date()
 
       // 批量获取所有usage数据和key数据，提高性能
@@ -1946,6 +2020,10 @@ class RedisClient {
         totalTokens += parseInt(totalData.totalTokens) || 0
         totalInputTokens += parseInt(totalData.totalInputTokens) || 0
         totalOutputTokens += parseInt(totalData.totalOutputTokens) || 0
+        totalCacheCreateTokens += parseInt(totalData.totalCacheCreateTokens) || 0
+        totalCacheReadTokens += parseInt(totalData.totalCacheReadTokens) || 0
+        totalCacheCreateRequests += parseInt(totalData.totalCacheCreateRequests) || 0
+        totalCacheReadRequests += parseInt(totalData.totalCacheReadRequests) || 0
 
         const createdAt = keyData.createdAt ? new Date(keyData.createdAt) : new Date()
         if (createdAt < oldestCreatedAt) {
@@ -1961,12 +2039,26 @@ class RedisClient {
       )
       const totalMinutes = daysSinceOldest * 24 * 60
 
+      const cacheMetrics = buildCacheMetrics({
+        inputTokens: totalInputTokens,
+        cacheReadTokens: totalCacheReadTokens,
+        cacheCreateTokens: totalCacheCreateTokens,
+        requests: totalRequests,
+        cacheReadRequests: totalCacheReadRequests,
+        cacheCreateRequests: totalCacheCreateRequests
+      })
+
       return {
         systemRPM: Math.round((totalRequests / totalMinutes) * 100) / 100,
         systemTPM: Math.round((totalTokens / totalMinutes) * 100) / 100,
         totalInputTokens,
         totalOutputTokens,
-        totalTokens
+        totalTokens,
+        totalCacheCreateTokens,
+        totalCacheReadTokens,
+        totalCacheCreateRequests,
+        totalCacheReadRequests,
+        cacheMetrics
       }
     } catch (error) {
       console.error('Error getting system averages:', error)
@@ -1975,7 +2067,12 @@ class RedisClient {
         systemTPM: 0,
         totalInputTokens: 0,
         totalOutputTokens: 0,
-        totalTokens: 0
+        totalTokens: 0,
+        totalCacheCreateTokens: 0,
+        totalCacheReadTokens: 0,
+        totalCacheCreateRequests: 0,
+        totalCacheReadRequests: 0,
+        cacheMetrics: buildCacheMetrics()
       }
     }
   }
@@ -2014,6 +2111,8 @@ class RedisClient {
       let totalOutputTokens = 0
       let totalCacheCreateTokens = 0
       let totalCacheReadTokens = 0
+      let totalCacheCreateRequests = 0
+      let totalCacheReadRequests = 0
       let validDataCount = 0
 
       results.forEach(([err, data], index) => {
@@ -2025,6 +2124,8 @@ class RedisClient {
           totalOutputTokens += parseInt(data.outputTokens || 0)
           totalCacheCreateTokens += parseInt(data.cacheCreateTokens || 0)
           totalCacheReadTokens += parseInt(data.cacheReadTokens || 0)
+          totalCacheCreateRequests += parseInt(data.cacheCreateRequests || 0)
+          totalCacheReadRequests += parseInt(data.cacheReadRequests || 0)
 
           logger.debug(`🔍 Realtime metrics - Key ${minuteKeys[index]} data:`, {
             requests: data.requests,
@@ -2043,6 +2144,15 @@ class RedisClient {
       const realtimeTPM =
         windowMinutes > 0 ? Math.round((totalTokens / windowMinutes) * 100) / 100 : 0
 
+      const cacheMetrics = buildCacheMetrics({
+        inputTokens: totalInputTokens,
+        cacheReadTokens: totalCacheReadTokens,
+        cacheCreateTokens: totalCacheCreateTokens,
+        requests: totalRequests,
+        cacheReadRequests: totalCacheReadRequests,
+        cacheCreateRequests: totalCacheCreateRequests
+      })
+
       const result = {
         realtimeRPM,
         realtimeTPM,
@@ -2052,7 +2162,10 @@ class RedisClient {
         totalInputTokens,
         totalOutputTokens,
         totalCacheCreateTokens,
-        totalCacheReadTokens
+        totalCacheReadTokens,
+        totalCacheCreateRequests,
+        totalCacheReadRequests,
+        cacheMetrics
       }
 
       logger.debug('🔍 Realtime metrics - Final result:', result)
@@ -2071,7 +2184,10 @@ class RedisClient {
         totalInputTokens: historicalMetrics.totalInputTokens,
         totalOutputTokens: historicalMetrics.totalOutputTokens,
         totalCacheCreateTokens: 0,
-        totalCacheReadTokens: 0
+        totalCacheReadTokens: 0,
+        totalCacheCreateRequests: 0,
+        totalCacheReadRequests: 0,
+        cacheMetrics: buildCacheMetrics()
       }
     }
   }

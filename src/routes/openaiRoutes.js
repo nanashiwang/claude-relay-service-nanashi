@@ -11,9 +11,8 @@ const openaiResponsesRelayService = require('../services/openaiResponsesRelaySer
 const apiKeyService = require('../services/apiKeyService')
 const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const redis = require('../models/redis')
-const crypto = require('crypto')
 const ProxyHelper = require('../utils/proxyHelper')
-const { extractOpenAIStickySession } = require('../utils/openaiSessionResolver')
+const { resolveOpenAIStickySessionContext } = require('../utils/openaiSessionResolver')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const {
   STREAM_INTERRUPTION_REASONS,
@@ -757,21 +756,6 @@ function parseJsonSafely(payload) {
   }
 }
 
-function buildScopedOpenAIStickySessionSeed(sessionId, apiKeyId) {
-  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : ''
-  if (!normalizedSessionId) {
-    return null
-  }
-
-  const normalizedApiKeyId = typeof apiKeyId === 'string' ? apiKeyId.trim() : ''
-  if (!normalizedApiKeyId) {
-    return normalizedSessionId
-  }
-
-  // Scope sticky mapping per CRS API key so different downstream channels do not share one mapping.
-  return `${normalizedApiKeyId}:${normalizedSessionId}`
-}
-
 async function readStreamBodyToString(stream, timeoutMs = 15000) {
   if (!stream || typeof stream.on !== 'function') {
     return ''
@@ -903,13 +887,8 @@ async function collectResponsesStreamResult(stream) {
   return { completedResponse, text, usageData, model }
 }
 
-async function getOpenAIAuthToken(apiKeyData, sessionId = null, requestedModel = null) {
+async function getOpenAIAuthToken(apiKeyData, sessionHash = null, requestedModel = null) {
   try {
-    // 生成会话哈希（如果有会话ID）
-    const sessionHash = sessionId
-      ? crypto.createHash('sha256').update(sessionId).digest('hex')
-      : null
-
     // 使用统一调度器选择账户
     const result = await unifiedOpenAIScheduler.selectAccountForApiKey(
       apiKeyData,
@@ -1055,14 +1034,11 @@ const handleResponses = async (req, res) => {
     }
 
     // 从请求头或请求体中提取会话 ID
-    const stickySession = extractOpenAIStickySession(req)
-    const sessionId = stickySession?.value || null
+    const stickySession = resolveOpenAIStickySessionContext(req, apiKeyData.id)
+    const sessionId = stickySession.sessionId
+    sessionHash = stickySession.sessionHash
 
-    const stickySessionSeed = buildScopedOpenAIStickySessionSeed(sessionId, apiKeyData.id)
-    sessionHash = stickySessionSeed
-      ? crypto.createHash('sha256').update(stickySessionSeed).digest('hex')
-      : null
-    if (sessionHash && stickySession?.source) {
+    if (sessionHash && stickySession.source) {
       logger.debug(
         `OpenAI sticky session resolved from ${stickySession.source} (apiKeyScoped=${!!apiKeyData.id}): ${sessionHash.substring(0, 12)}...`
       )
@@ -1134,7 +1110,7 @@ const handleResponses = async (req, res) => {
 
     ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
       apiKeyData,
-      sessionId,
+      sessionHash,
       requestedModel
     ))
 
@@ -1159,6 +1135,9 @@ const handleResponses = async (req, res) => {
       if (incoming[key] !== undefined) {
         headers[key] = incoming[key]
       }
+    }
+    if (sessionId) {
+      headers['session_id'] = sessionId
     }
 
     // 判断是否访问 compact 端点

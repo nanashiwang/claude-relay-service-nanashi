@@ -1,7 +1,10 @@
-const { extractOpenAIStickySession } = require('../src/utils/openaiSessionResolver')
+const {
+  extractOpenAIStickySession,
+  resolveOpenAIStickySessionContext
+} = require('../src/utils/openaiSessionResolver')
 
 describe('openaiSessionResolver', () => {
-  it('prefers session_id header when present', () => {
+  it('prefers prompt_cache_key over session_id header when both are present', () => {
     const result = extractOpenAIStickySession({
       headers: {
         session_id: '  header-session  '
@@ -12,8 +15,8 @@ describe('openaiSessionResolver', () => {
     })
 
     expect(result).toEqual({
-      value: 'header-session',
-      source: 'header:session_id'
+      value: 'body-key',
+      source: 'body:prompt_cache_key'
     })
   })
 
@@ -39,6 +42,20 @@ describe('openaiSessionResolver', () => {
 
     expect(result).toEqual({
       value: 'cache-key-1',
+      source: 'body:prompt_cache_key'
+    })
+  })
+
+  it('prefers prompt_cache_key over previous_response_id for stable cache affinity', () => {
+    const result = extractOpenAIStickySession({
+      body: {
+        previous_response_id: 'resp_123',
+        prompt_cache_key: 'cache-key-stable'
+      }
+    })
+
+    expect(result).toEqual({
+      value: 'cache-key-stable',
       source: 'body:prompt_cache_key'
     })
   })
@@ -106,5 +123,39 @@ describe('openaiSessionResolver', () => {
     })
 
     expect(result).toBeNull()
+  })
+
+  it('scopes sticky hash by api key while keeping session id stable', () => {
+    const req = {
+      body: {
+        prompt_cache_key: 'cache-key-1'
+      }
+    }
+
+    const scopedA = resolveOpenAIStickySessionContext(req, 'key-a')
+    const scopedB = resolveOpenAIStickySessionContext(req, 'key-b')
+    const scopedARepeat = resolveOpenAIStickySessionContext(req, 'key-a')
+
+    expect(scopedA.sessionId).toBe('cache-key-1')
+    expect(scopedA.source).toBe('body:prompt_cache_key')
+    expect(scopedA.sessionHash).toBe(scopedARepeat.sessionHash)
+    expect(scopedA.sessionHash).not.toBe(scopedB.sessionHash)
+  })
+
+  it('uses prompt_cache_key as the canonical session id even when header session_id conflicts', () => {
+    const scoped = resolveOpenAIStickySessionContext(
+      {
+        headers: {
+          session_id: 'header-session'
+        },
+        body: {
+          prompt_cache_key: 'body-cache-key'
+        }
+      },
+      'key-a'
+    )
+
+    expect(scoped.sessionId).toBe('body-cache-key')
+    expect(scoped.source).toBe('body:prompt_cache_key')
   })
 })

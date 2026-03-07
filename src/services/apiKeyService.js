@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid')
 const config = require('../../config/config')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
+const { buildRequestCacheMetrics } = require('../utils/cacheMetrics')
 
 const ACCOUNT_TYPE_CONFIG = {
   claude: { prefix: 'claude:account:' },
@@ -1479,6 +1480,11 @@ class ApiKeyService {
 
       // 记录单次请求的使用详情
       const usageCost = costInfo && costInfo.costs ? costInfo.costs.total || 0 : 0
+      const requestCacheMetrics = buildRequestCacheMetrics({
+        inputTokens,
+        cacheReadTokens,
+        cacheCreateTokens
+      })
       await redis.addUsageRecord(keyId, {
         timestamp: new Date().toISOString(),
         model,
@@ -1488,6 +1494,10 @@ class ApiKeyService {
         cacheCreateTokens,
         cacheReadTokens,
         totalTokens,
+        cacheStatus: requestCacheMetrics.cacheStatus,
+        cacheHitRate: requestCacheMetrics.cacheHitRate,
+        cacheCreateRate: requestCacheMetrics.cacheCreateRate,
+        effectiveInputTokens: requestCacheMetrics.effectiveInputTokens,
         cost: Number(usageCost.toFixed(6)),
         costBreakdown: costInfo && costInfo.costs ? costInfo.costs : undefined
       })
@@ -1499,6 +1509,8 @@ class ApiKeyService {
       if (cacheReadTokens > 0) {
         logParts.push(`Cache Read: ${cacheReadTokens}`)
       }
+      logParts.push(`Cache Status: ${requestCacheMetrics.cacheStatus}`)
+      logParts.push(`Cache Hit Rate: ${(requestCacheMetrics.cacheHitRate * 100).toFixed(2)}%`)
       logParts.push(`Total: ${totalTokens} tokens`)
 
       logger.database(`📊 Recorded usage: ${keyId} - ${logParts.join(', ')}`)
@@ -1746,6 +1758,12 @@ class ApiKeyService {
 
       await this._disableKeyIfTotalCostLimitReached(keyData, costTotals?.total)
 
+      const requestCacheMetrics = buildRequestCacheMetrics({
+        inputTokens,
+        cacheReadTokens,
+        cacheCreateTokens
+      })
+
       const usageRecord = {
         timestamp: new Date().toISOString(),
         model,
@@ -1758,6 +1776,10 @@ class ApiKeyService {
         ephemeral5mTokens,
         ephemeral1hTokens,
         totalTokens,
+        cacheStatus: requestCacheMetrics.cacheStatus,
+        cacheHitRate: requestCacheMetrics.cacheHitRate,
+        cacheCreateRate: requestCacheMetrics.cacheCreateRate,
+        effectiveInputTokens: requestCacheMetrics.effectiveInputTokens,
         cost: Number((costInfo.totalCost || 0).toFixed(6)),
         costBreakdown: {
           input: costInfo.inputCost || 0,
@@ -1791,6 +1813,8 @@ class ApiKeyService {
       if (cacheReadTokens > 0) {
         logParts.push(`Cache Read: ${cacheReadTokens}`)
       }
+      logParts.push(`Cache Status: ${requestCacheMetrics.cacheStatus}`)
+      logParts.push(`Cache Hit Rate: ${(requestCacheMetrics.cacheHitRate * 100).toFixed(2)}%`)
       logParts.push(`Total: ${totalTokens} tokens`)
 
       logger.database(`📊 Recorded usage: ${keyId} - ${logParts.join(', ')}`)

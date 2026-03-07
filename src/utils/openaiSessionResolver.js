@@ -1,5 +1,7 @@
+const crypto = require('crypto')
+
 const SESSION_HEADER_KEYS = ['session_id', 'x-session-id', 'x-session_id']
-const SESSION_BODY_KEYS = ['session_id', 'conversation_id', 'previous_response_id', 'prompt_cache_key']
+const SESSION_BODY_KEYS = ['prompt_cache_key', 'session_id', 'conversation_id', 'previous_response_id']
 const METADATA_SESSION_KEYS = ['conversation_id', 'session_id', 'thread_id', 'chat_id', 'user_id']
 const OBJECT_ID_KEYS = ['id', 'key', 'value', 'prompt_cache_key', 'cache_key']
 const MAX_SESSION_VALUE_LENGTH = 2048
@@ -138,6 +140,22 @@ function extractFromHeaders(headers = {}) {
   return null
 }
 
+function extractFromPromptCacheKey(body = {}) {
+  if (!body || typeof body !== 'object') {
+    return null
+  }
+
+  const normalized = normalizeSessionValue(body.prompt_cache_key)
+  if (!normalized) {
+    return null
+  }
+
+  return {
+    value: normalized,
+    source: 'body:prompt_cache_key'
+  }
+}
+
 function extractFromBody(body = {}) {
   if (!body || typeof body !== 'object') {
     return null
@@ -209,12 +227,17 @@ function extractFromConversation(body = {}) {
 }
 
 function extractOpenAIStickySession(req = {}) {
+  const body = req.body && typeof req.body === 'object' ? req.body : {}
+
+  const fromPromptCacheKey = extractFromPromptCacheKey(body)
+  if (fromPromptCacheKey) {
+    return fromPromptCacheKey
+  }
+
   const fromHeaders = extractFromHeaders(req.headers || {})
   if (fromHeaders) {
     return fromHeaders
   }
-
-  const body = req.body && typeof req.body === 'object' ? req.body : {}
 
   const fromBody = extractFromBody(body)
   if (fromBody) {
@@ -242,6 +265,38 @@ function extractOpenAIStickySession(req = {}) {
   return null
 }
 
+function buildScopedOpenAIStickySessionSeed(sessionId, apiKeyId) {
+  const normalizedSessionId = typeof sessionId === 'string' ? sessionId.trim() : ''
+  if (!normalizedSessionId) {
+    return null
+  }
+
+  const normalizedApiKeyId = typeof apiKeyId === 'string' ? apiKeyId.trim() : ''
+  if (!normalizedApiKeyId) {
+    return normalizedSessionId
+  }
+
+  return `${normalizedApiKeyId}:${normalizedSessionId}`
+}
+
+function resolveOpenAIStickySessionContext(req = {}, apiKeyId = null) {
+  const stickySession = extractOpenAIStickySession(req)
+  const sessionId = stickySession?.value || null
+  const sessionSeed = buildScopedOpenAIStickySessionSeed(sessionId, apiKeyId)
+  const sessionHash = sessionSeed
+    ? crypto.createHash('sha256').update(sessionSeed).digest('hex')
+    : null
+
+  return {
+    sessionId,
+    sessionSeed,
+    sessionHash,
+    source: stickySession?.source || null
+  }
+}
+
 module.exports = {
-  extractOpenAIStickySession
+  extractOpenAIStickySession,
+  buildScopedOpenAIStickySessionSeed,
+  resolveOpenAIStickySessionContext
 }

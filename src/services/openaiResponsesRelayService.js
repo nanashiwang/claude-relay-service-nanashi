@@ -8,7 +8,7 @@ const unifiedOpenAIScheduler = require('./unifiedOpenAIScheduler')
 const claudeRelayConfigService = require('./claudeRelayConfigService')
 const redis = require('../models/redis')
 const config = require('../../config/config')
-const crypto = require('crypto')
+const { resolveOpenAIStickySessionContext } = require('../utils/openaiSessionResolver')
 const {
   STREAM_INTERRUPTION_REASONS,
   resolveStreamInterruptionReasonFromError,
@@ -606,11 +606,14 @@ class OpenAIResponsesRelayService {
   // 处理请求转发
   async handleRequest(req, res, account, apiKeyData) {
     let abortController = null
-    // 获取会话哈希（如果有的话）
-    const sessionId = req.headers['session_id'] || req.body?.session_id
-    const sessionHash = sessionId
-      ? crypto.createHash('sha256').update(sessionId).digest('hex')
-      : null
+    const stickySession = resolveOpenAIStickySessionContext(req, apiKeyData?.id || null)
+    const sessionHash = stickySession.sessionHash
+
+    if (sessionHash && stickySession.source) {
+      logger.debug(
+        `OpenAI-Responses sticky session resolved from ${stickySession.source} (apiKeyScoped=${!!apiKeyData?.id}): ${sessionHash.substring(0, 12)}...`
+      )
+    }
 
     try {
       // 获取完整的账户信息（包含解密的 API Key）
@@ -654,6 +657,9 @@ class OpenAIResponsesRelayService {
         ...filterForOpenAI(req.headers),
         Authorization: `Bearer ${fullAccount.apiKey}`,
         'Content-Type': 'application/json'
+      }
+      if (stickySession.sessionId) {
+        headers['session_id'] = stickySession.sessionId
       }
       delete headers['content-length']
       delete headers['Content-Length']
@@ -854,7 +860,8 @@ class OpenAIResponsesRelayService {
             apiKeyData,
             upstreamBody?.model || req.body?.model,
             handleClientDisconnect,
-            req
+            req,
+            sessionHash
           )
         }
 
@@ -864,7 +871,8 @@ class OpenAIResponsesRelayService {
           account,
           apiKeyData,
           upstreamBody?.model || req.body?.model,
-          true
+          true,
+          sessionHash
         )
       }
 
@@ -877,7 +885,8 @@ class OpenAIResponsesRelayService {
             account,
             apiKeyData,
             upstreamBody?.model || req.body?.model,
-            false
+            false,
+            sessionHash
           )
         }
 
@@ -888,7 +897,8 @@ class OpenAIResponsesRelayService {
           apiKeyData,
           upstreamBody?.model || req.body?.model,
           handleClientDisconnect,
-          req
+          req,
+          sessionHash
         )
       }
 
@@ -1027,7 +1037,8 @@ class OpenAIResponsesRelayService {
     apiKeyData,
     requestedModel,
     handleClientDisconnect,
-    req
+    req,
+    sessionHash = null
   ) {
     // 设置 SSE 响应头
     res.setHeader('Content-Type', 'text/event-stream')
@@ -1231,12 +1242,6 @@ class OpenAIResponsesRelayService {
 
       // 如果在流式响应中检测到限流
       if (rateLimitDetected) {
-        // 使用统一调度器处理限流（与非流式响应保持一致）
-        const sessionId = req.headers['session_id'] || req.body?.session_id
-        const sessionHash = sessionId
-          ? crypto.createHash('sha256').update(sessionId).digest('hex')
-          : null
-
         await unifiedOpenAIScheduler.markAccountRateLimited(
           account.id,
           'openai-responses',
@@ -1316,7 +1321,8 @@ class OpenAIResponsesRelayService {
     account,
     apiKeyData,
     requestedModel,
-    asChatCompletion = false
+    asChatCompletion = false,
+    sessionHash = null
   ) {
     try {
       const { completedResponse, text, usageData, model, errorData } = await collectResponsesStreamResult(
@@ -1331,6 +1337,19 @@ class OpenAIResponsesRelayService {
         const errorType = errorPayload.error?.type || ''
         const status =
           errorType.includes('rate_limit') || errorType.includes('usage_limit') ? 429 : 502
+
+        if (status === 429) {
+          const resetsInSeconds = Number(
+            errorPayload.error?.resets_in_seconds ?? errorPayload.error?.resets_in ?? 0
+          )
+          await unifiedOpenAIScheduler.markAccountRateLimited(
+            account.id,
+            'openai-responses',
+            sessionHash,
+            Number.isFinite(resetsInSeconds) && resetsInSeconds > 0 ? resetsInSeconds : null
+          )
+        }
+
         return res.status(status).json(errorPayload)
       }
 
@@ -1383,7 +1402,8 @@ class OpenAIResponsesRelayService {
     apiKeyData,
     requestedModel,
     handleClientDisconnect,
-    req
+    req,
+    sessionHash = null
   ) {
     res.setHeader('Content-Type', 'text/event-stream')
     res.setHeader('Cache-Control', 'no-cache')
@@ -1512,11 +1532,6 @@ class OpenAIResponsesRelayService {
       if (!rateLimitDetected) {
         return
       }
-
-      const sessionId = req.headers['session_id'] || req.body?.session_id
-      const sessionHash = sessionId
-        ? crypto.createHash('sha256').update(sessionId).digest('hex')
-        : null
 
       await unifiedOpenAIScheduler.markAccountRateLimited(
         account.id,

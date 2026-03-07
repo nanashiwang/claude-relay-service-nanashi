@@ -3,6 +3,7 @@ const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const apiKeyService = require('../services/apiKeyService')
 const CostCalculator = require('../utils/costCalculator')
+const { buildCacheMetrics } = require('../utils/cacheMetrics')
 const claudeAccountService = require('../services/claudeAccountService')
 const openaiAccountService = require('../services/openaiAccountService')
 const claudeRelayConfigService = require('../services/claudeRelayConfigService')
@@ -818,6 +819,8 @@ router.post('/api/batch-stats', async (req, res) => {
         outputTokens: 0,
         cacheCreateTokens: 0,
         cacheReadTokens: 0,
+        cacheCreateRequests: 0,
+        cacheReadRequests: 0,
         allTokens: 0,
         cost: 0,
         formattedCost: '$0.000000'
@@ -828,6 +831,8 @@ router.post('/api/batch-stats', async (req, res) => {
         outputTokens: 0,
         cacheCreateTokens: 0,
         cacheReadTokens: 0,
+        cacheCreateRequests: 0,
+        cacheReadRequests: 0,
         allTokens: 0,
         cost: 0,
         formattedCost: '$0.000000'
@@ -838,6 +843,8 @@ router.post('/api/batch-stats', async (req, res) => {
         outputTokens: 0,
         cacheCreateTokens: 0,
         cacheReadTokens: 0,
+        cacheCreateRequests: 0,
+        cacheReadRequests: 0,
         allTokens: 0,
         cost: 0,
         formattedCost: '$0.000000'
@@ -902,6 +909,8 @@ router.post('/api/batch-stats', async (req, res) => {
           aggregated.usage.outputTokens += stats.usage.outputTokens || 0
           aggregated.usage.cacheCreateTokens += stats.usage.cacheCreateTokens || 0
           aggregated.usage.cacheReadTokens += stats.usage.cacheReadTokens || 0
+          aggregated.usage.cacheCreateRequests += stats.usage.cacheCreateRequests || 0
+          aggregated.usage.cacheReadRequests += stats.usage.cacheReadRequests || 0
           aggregated.usage.allTokens += stats.usage.allTokens || 0
         }
 
@@ -914,6 +923,8 @@ router.post('/api/batch-stats', async (req, res) => {
         aggregated.dailyUsage.outputTokens += stats.dailyStats.outputTokens || 0
         aggregated.dailyUsage.cacheCreateTokens += stats.dailyStats.cacheCreateTokens || 0
         aggregated.dailyUsage.cacheReadTokens += stats.dailyStats.cacheReadTokens || 0
+        aggregated.dailyUsage.cacheCreateRequests += stats.dailyStats.cacheCreateRequests || 0
+        aggregated.dailyUsage.cacheReadRequests += stats.dailyStats.cacheReadRequests || 0
         aggregated.dailyUsage.allTokens += stats.dailyStats.allTokens || 0
         aggregated.dailyUsage.cost += stats.dailyStats.cost || 0
 
@@ -923,6 +934,8 @@ router.post('/api/batch-stats', async (req, res) => {
         aggregated.monthlyUsage.outputTokens += stats.monthlyStats.outputTokens || 0
         aggregated.monthlyUsage.cacheCreateTokens += stats.monthlyStats.cacheCreateTokens || 0
         aggregated.monthlyUsage.cacheReadTokens += stats.monthlyStats.cacheReadTokens || 0
+        aggregated.monthlyUsage.cacheCreateRequests += stats.monthlyStats.cacheCreateRequests || 0
+        aggregated.monthlyUsage.cacheReadRequests += stats.monthlyStats.cacheReadRequests || 0
         aggregated.monthlyUsage.allTokens += stats.monthlyStats.allTokens || 0
         aggregated.monthlyUsage.cost += stats.monthlyStats.cost || 0
 
@@ -948,6 +961,9 @@ router.post('/api/batch-stats', async (req, res) => {
     aggregated.usage.formattedCost = CostCalculator.formatCost(aggregated.usage.cost)
     aggregated.dailyUsage.formattedCost = CostCalculator.formatCost(aggregated.dailyUsage.cost)
     aggregated.monthlyUsage.formattedCost = CostCalculator.formatCost(aggregated.monthlyUsage.cost)
+    aggregated.usage.cacheMetrics = buildCacheMetrics(aggregated.usage)
+    aggregated.dailyUsage.cacheMetrics = buildCacheMetrics(aggregated.dailyUsage)
+    aggregated.monthlyUsage.cacheMetrics = buildCacheMetrics(aggregated.monthlyUsage)
 
     logger.api(`📊 Batch stats query for ${apiIds.length} keys from ${req.ip || 'unknown'}`)
 

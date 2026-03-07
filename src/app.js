@@ -392,9 +392,17 @@ class Application {
       // 📊 指标端点
       this.app.get('/metrics', async (req, res) => {
         try {
-          const stats = await redis.getSystemStats()
+          const [stats, today, averages, realtime] = await Promise.all([
+            redis.getSystemStats(),
+            redis.getTodayStats(),
+            redis.getSystemAverages(),
+            redis.getRealtimeSystemMetrics()
+          ])
           const metrics = {
             ...stats,
+            today,
+            averages,
+            realtime,
             uptime: process.uptime(),
             memory: process.memoryUsage(),
             timestamp: new Date().toISOString()

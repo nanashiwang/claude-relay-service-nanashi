@@ -12,6 +12,7 @@ const redis = require('../../models/redis')
 const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const CostCalculator = require('../../utils/costCalculator')
+const { buildCacheMetrics, buildRequestCacheMetrics } = require('../../utils/cacheMetrics')
 const pricingService = require('../../services/pricingService')
 
 const router = express.Router()
@@ -100,7 +101,7 @@ router.get('/accounts/usage-stats', authenticateAdmin, async (req, res) => {
       timestamp: new Date().toISOString()
     })
   } catch (error) {
-    logger.error('❌ Failed to get accounts usage stats:', error)
+    logger.error('�?Failed to get accounts usage stats:', error)
     return res.status(500).json({
       success: false,
       error: 'Failed to get accounts usage stats',
@@ -109,7 +110,7 @@ router.get('/accounts/usage-stats', authenticateAdmin, async (req, res) => {
   }
 })
 
-// 获取单个账户的使用统计
+// 获取单个账户的使用统�?
 router.get('/accounts/:accountId/usage-stats', authenticateAdmin, async (req, res) => {
   try {
     const { accountId } = req.params
@@ -139,7 +140,7 @@ router.get('/accounts/:accountId/usage-stats', authenticateAdmin, async (req, re
       timestamp: new Date().toISOString()
     })
   } catch (error) {
-    logger.error('❌ Failed to get account usage stats:', error)
+    logger.error('�?Failed to get account usage stats:', error)
     return res.status(500).json({
       success: false,
       error: 'Failed to get account usage stats',
@@ -148,7 +149,7 @@ router.get('/accounts/:accountId/usage-stats', authenticateAdmin, async (req, re
   }
 })
 
-// 获取账号近30天使用历史
+// 获取账号�?0天使用历�?
 router.get('/accounts/:accountId/usage-history', authenticateAdmin, async (req, res) => {
   try {
     const { accountId } = req.params
@@ -187,7 +188,7 @@ router.get('/accounts/:accountId/usage-history', authenticateAdmin, async (req, 
       droid: 'unknown'
     }
 
-    // 获取账户信息以获取创建时间
+    // 获取账户信息以获取创建时�?
     let accountData = null
     let accountCreatedAt = null
 
@@ -351,11 +352,11 @@ router.get('/accounts/:accountId/usage-history', authenticateAdmin, async (req, 
       const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
       // 使用实际使用天数，但不超过请求的天数范围
       actualDaysForAvg = Math.min(diffDays, daysCount)
-      // 至少为1天，避免除零
+      // 至少�?天，避免除零
       actualDaysForAvg = Math.max(actualDaysForAvg, 1)
     }
 
-    // 使用实际天数计算日均值
+    // 使用实际天数计算日均�?
     const avgDailyCost = actualDaysForAvg > 0 ? totalCost / actualDaysForAvg : 0
     const avgDailyRequests = actualDaysForAvg > 0 ? totalRequests / actualDaysForAvg : 0
     const avgDailyTokens = actualDaysForAvg > 0 ? totalTokens / actualDaysForAvg : 0
@@ -395,7 +396,7 @@ router.get('/accounts/:accountId/usage-history', authenticateAdmin, async (req, 
       }
     })
   } catch (error) {
-    logger.error('❌ Failed to get account usage history:', error)
+    logger.error('�?Failed to get account usage history:', error)
     return res.status(500).json({
       success: false,
       error: 'Failed to get account usage history',
@@ -404,7 +405,7 @@ router.get('/accounts/:accountId/usage-history', authenticateAdmin, async (req, 
   }
 })
 
-// 📊 使用趋势和成本分析
+// 📊 使用趋势和成本分�?
 
 // 获取使用趋势数据
 router.get('/usage-trend', authenticateAdmin, async (req, res) => {
@@ -419,7 +420,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
       let startTime, endTime
 
       if (startDate && endDate) {
-        // 使用自定义时间范围
+        // 使用自定义时间范�?
         startTime = new Date(startDate)
         endTime = new Date(endDate)
 
@@ -433,12 +434,12 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
           `  System timezone offset: ${require('../../../config/config').system.timezoneOffset || 8}`
         )
       } else {
-        // 默认最近24小时
+        // 默认最�?4小时
         endTime = new Date()
         startTime = new Date(endTime.getTime() - 24 * 60 * 60 * 1000)
       }
 
-      // 确保时间范围不超过24小时
+      // 确保时间范围不超�?4小时
       const timeDiff = endTime - startTime
       if (timeDiff > 24 * 60 * 60 * 1000) {
         return res.status(400).json({
@@ -446,19 +447,19 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
         })
       }
 
-      // 按小时遍历
+      // 按小时遍�?
       const currentHour = new Date(startTime)
       currentHour.setMinutes(0, 0, 0)
 
       while (currentHour <= endTime) {
-        // 注意：前端发送的时间已经是UTC时间，不需要再次转换
+        // 注意：前端发送的时间已经是UTC时间，不需要再次转�?
         // 直接从currentHour生成对应系统时区的日期和小时
         const tzCurrentHour = redis.getDateInTimezone(currentHour)
         const dateStr = redis.getDateStringInTimezone(currentHour)
         const hour = String(tzCurrentHour.getUTCHours()).padStart(2, '0')
         const hourKey = `${dateStr}:${hour}`
 
-        // 获取当前小时的模型统计数据
+        // 获取当前小时的模型统计数�?
         const modelPattern = `usage:model:hourly:*:${hourKey}`
         const modelKeys = await client.keys(modelPattern)
 
@@ -502,7 +503,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
           }
         }
 
-        // 如果没有模型级别的数据，尝试API Key级别的数据
+        // 如果没有模型级别的数据，尝试API Key级别的数�?
         if (modelKeys.length === 0) {
           const pattern = `usage:hourly:*:${hourKey}`
           const keys = await client.keys(pattern)
@@ -528,7 +529,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
           hourCost = costResult.costs.total
         }
 
-        // 格式化时间标签 - 使用系统时区的显示
+        // 格式化时间标�?- 使用系统时区的显�?
         const tzDateForLabel = redis.getDateInTimezone(currentHour)
         const month = String(tzDateForLabel.getUTCMonth() + 1).padStart(2, '0')
         const day = String(tzDateForLabel.getUTCDate()).padStart(2, '0')
@@ -548,11 +549,11 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
           cost: hourCost
         })
 
-        // 移到下一个小时
+        // 移到下一个小�?
         currentHour.setHours(currentHour.getHours() + 1)
       }
     } else {
-      // 天粒度统计（保持原有逻辑）
+      // 天粒度统计（保持原有逻辑�?
       const daysCount = parseInt(days) || 7
       const today = new Date()
 
@@ -562,7 +563,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
         date.setDate(date.getDate() - i)
         const dateStr = redis.getDateStringInTimezone(date)
 
-        // 汇总当天所有API Key的使用数据
+        // 汇总当天所有API Key的使用数�?
         const pattern = `usage:daily:*:${dateStr}`
         const keys = await client.keys(pattern)
 
@@ -604,7 +605,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
             dayCacheReadTokens += modelCacheReadTokens
             dayRequests += modelRequests
 
-            // 按模型计算费用
+            // 按模型计算费�?
             const modelUsage = {
               input_tokens: modelInputTokens,
               output_tokens: modelOutputTokens,
@@ -616,7 +617,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
           }
         }
 
-        // 如果没有模型级别的数据，回退到原始方法
+        // 如果没有模型级别的数据，回退到原始方�?
         if (modelKeys.length === 0 && keys.length > 0) {
           for (const key of keys) {
             const data = await client.hgetall(key)
@@ -654,7 +655,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
       }
     }
 
-    // 按日期正序排列
+    // 按日期正序排�?
     if (granularity === 'hour') {
       trendData.sort((a, b) => new Date(a.hour) - new Date(b.hour))
     } else {
@@ -663,12 +664,12 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
 
     return res.json({ success: true, data: trendData, granularity })
   } catch (error) {
-    logger.error('❌ Failed to get usage trend:', error)
+    logger.error('�?Failed to get usage trend:', error)
     return res.status(500).json({ error: 'Failed to get usage trend', message: error.message })
   }
 })
 
-// 获取单个API Key的模型统计
+// 获取单个API Key的模型统�?
 router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) => {
   try {
     const { keyId } = req.params
@@ -689,7 +690,7 @@ router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) =
     let searchPatterns = []
 
     if (period === 'custom' && startDate && endDate) {
-      // 自定义日期范围，生成多个日期的搜索模式
+      // 自定义日期范围，生成多个日期的搜索模�?
       const start = new Date(startDate)
       const end = new Date(endDate)
 
@@ -698,7 +699,7 @@ router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) =
         return res.status(400).json({ error: 'Start date must be before or equal to end date' })
       }
 
-      // 限制最大范围为365天
+      // 限制最大范围为365�?
       const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24)) + 1
       if (daysDiff > 365) {
         return res.status(400).json({ error: 'Date range cannot exceed 365 days' })
@@ -745,7 +746,7 @@ router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) =
         const data = await client.hgetall(key)
 
         if (data && Object.keys(data).length > 0) {
-          // 累加同一模型的数据
+          // 累加同一模型的数�?
           if (!modelStatsMap.has(model)) {
             modelStatsMap.set(model, {
               requests: 0,
@@ -768,7 +769,7 @@ router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) =
       }
     }
 
-    // 将汇总的数据转换为最终结果
+    // 将汇总的数据转换为最终结�?
     for (const [model, stats] of modelStatsMap) {
       logger.info(`📊 Model ${model} aggregated data:`, stats)
 
@@ -804,7 +805,7 @@ router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) =
         `📊 No detailed model stats found, trying to get aggregate data for API key ${keyId}`
       )
 
-      // 尝试从API Keys列表中获取usage数据作为备选方案
+      // 尝试从API Keys列表中获取usage数据作为备选方�?
       try {
         const apiKeys = await apiKeyService.getAllApiKeys()
         const targetApiKey = apiKeys.find((key) => key.id === keyId)
@@ -815,7 +816,7 @@ router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) =
             targetApiKey.usage
           )
 
-          // 从汇总数据创建展示条目
+          // 从汇总数据创建展示条�?
           let usageData
           if (period === 'custom' || period === 'daily') {
             // 对于自定义或日统计，使用daily数据或total数据
@@ -859,18 +860,18 @@ router.get('/api-keys/:keyId/model-stats', authenticateAdmin, async (req, res) =
           logger.info(`📊 API key ${keyId} not found or has no usage data`)
         }
       } catch (error) {
-        logger.error('❌ Error fetching API key usage data:', error)
+        logger.error('�?Error fetching API key usage data:', error)
       }
     }
 
-    // 按总token数降序排列
+    // 按总token数降序排�?
     modelStats.sort((a, b) => b.allTokens - a.allTokens)
 
     logger.info(`📊 Returning ${modelStats.length} model stats for API key ${keyId}:`, modelStats)
 
     return res.json({ success: true, data: modelStats })
   } catch (error) {
-    logger.error('❌ Failed to get API key model stats:', error)
+    logger.error('�?Failed to get API key model stats:', error)
     return res
       .status(500)
       .json({ error: 'Failed to get API key model stats', message: error.message })
@@ -897,7 +898,7 @@ router.get('/account-usage-trend', authenticateAdmin, async (req, res) => {
       droid: 'Droid账户'
     }
 
-    // 拉取各平台账号列表
+    // 拉取各平台账号列�?
     let accounts = []
     if (group === 'claude') {
       const [claudeAccounts, claudeConsoleAccounts] = await Promise.all([
@@ -1236,14 +1237,14 @@ router.get('/account-usage-trend', authenticateAdmin, async (req, res) => {
       totalAccounts: accountCostTotals.size
     })
   } catch (error) {
-    logger.error('❌ Failed to get account usage trend:', error)
+    logger.error('�?Failed to get account usage trend:', error)
     return res
       .status(500)
       .json({ error: 'Failed to get account usage trend', message: error.message })
   }
 })
 
-// 获取按API Key分组的使用趋势
+// 获取按API Key分组的使用趋�?
 router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
   try {
     const { granularity = 'day', days = 7, startDate, endDate } = req.query
@@ -1262,16 +1263,16 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
       let endTime, startTime
 
       if (startDate && endDate) {
-        // 自定义时间范围
+        // 自定义时间范�?
         startTime = new Date(startDate)
         endTime = new Date(endDate)
       } else {
-        // 默认近24小时
+        // 默认�?4小时
         endTime = new Date()
         startTime = new Date(endTime.getTime() - 24 * 60 * 60 * 1000)
       }
 
-      // 按小时遍历
+      // 按小时遍�?
       const currentHour = new Date(startTime)
       currentHour.setMinutes(0, 0, 0)
 
@@ -1282,11 +1283,11 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
         const hour = String(tzCurrentHour.getUTCHours()).padStart(2, '0')
         const hourKey = `${dateStr}:${hour}`
 
-        // 获取这个小时所有API Key的数据
+        // 获取这个小时所有API Key的数�?
         const pattern = `usage:hourly:*:${hourKey}`
         const keys = await client.keys(pattern)
 
-        // 格式化时间标签
+        // 格式化时间标�?
         const tzDateForLabel = redis.getDateInTimezone(currentHour)
         const monthLabel = String(tzDateForLabel.getUTCMonth() + 1).padStart(2, '0')
         const dayLabel = String(tzDateForLabel.getUTCDate()).padStart(2, '0')
@@ -1328,7 +1329,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
           }
         }
 
-        // 获取该小时的模型级别数据来计算准确费用
+        // 获取该小时的模型级别数据来计算准确费�?
         const modelPattern = `usage:*:model:hourly:*:${hourKey}`
         const modelKeys = await client.keys(modelPattern)
         const apiKeyCostMap = new Map()
@@ -1361,7 +1362,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
         for (const [apiKeyId, data] of apiKeyDataMap) {
           const cost = apiKeyCostMap.get(apiKeyId) || 0
 
-          // 如果没有模型级别数据，使用默认模型计算（降级方案）
+          // 如果没有模型级别数据，使用默认模型计算（降级方案�?
           let finalCost = cost
           let formattedCost = CostCalculator.formatCost(cost)
 
@@ -1390,7 +1391,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
         currentHour.setHours(currentHour.getHours() + 1)
       }
     } else {
-      // 天粒度统计
+      // 天粒度统�?
       const daysCount = parseInt(days) || 7
       const today = new Date()
 
@@ -1400,7 +1401,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
         date.setDate(date.getDate() - i)
         const dateStr = redis.getDateStringInTimezone(date)
 
-        // 获取这一天所有API Key的数据
+        // 获取这一天所有API Key的数�?
         const pattern = `usage:daily:*:${dateStr}`
         const keys = await client.keys(pattern)
 
@@ -1472,7 +1473,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
         for (const [apiKeyId, data] of apiKeyDataMap) {
           const cost = apiKeyCostMap.get(apiKeyId) || 0
 
-          // 如果没有模型级别数据，使用默认模型计算（降级方案）
+          // 如果没有模型级别数据，使用默认模型计算（降级方案�?
           let finalCost = cost
           let formattedCost = CostCalculator.formatCost(cost)
 
@@ -1501,7 +1502,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
       }
     }
 
-    // 按时间正序排列
+    // 按时间正序排�?
     if (granularity === 'hour') {
       trendData.sort((a, b) => new Date(a.hour) - new Date(b.hour))
     } else {
@@ -1516,7 +1517,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
       }
     }
 
-    // 获取前10个使用量最多的API Key
+    // 获取�?0个使用量最多的API Key
     const topApiKeys = Array.from(apiKeyTotals.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
@@ -1530,7 +1531,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
       totalApiKeys: apiKeyTotals.size
     })
   } catch (error) {
-    logger.error('❌ Failed to get API keys usage trend:', error)
+    logger.error('�?Failed to get API keys usage trend:', error)
     return res
       .status(500)
       .json({ error: 'Failed to get API keys usage trend', message: error.message })
@@ -1553,8 +1554,8 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
       // 对于Bedrock模型，去掉区域前缀进行统一
       if (model.includes('.anthropic.') || model.includes('.claude')) {
         // 匹配所有AWS区域格式：region.anthropic.model-name-v1:0 -> claude-model-name
-        // 支持所有AWS区域格式，如：us-east-1, eu-west-1, ap-southeast-1, ca-central-1等
-        let normalized = model.replace(/^[a-z0-9-]+\./, '') // 去掉任何区域前缀（更通用）
+        // 支持所有AWS区域格式，如：us-east-1, eu-west-1, ap-southeast-1, ca-central-1�?
+        let normalized = model.replace(/^[a-z0-9-]+\./, '') // 去掉任何区域前缀（更通用�?
         normalized = normalized.replace('anthropic.', '') // 去掉anthropic前缀
         normalized = normalized.replace(/-v\d+:\d+$/, '') // 去掉版本后缀（如-v1:0, -v2:1等）
         return normalized
@@ -1564,7 +1565,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
       return model.replace(/-v\d+:\d+$|:latest$/, '')
     }
 
-    // 获取所有API Keys的使用统计
+    // 获取所有API Keys的使用统�?
     const apiKeys = await apiKeyService.getAllApiKeys()
 
     const totalCosts = {
@@ -1577,7 +1578,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
 
     const modelCosts = {}
 
-    // 按模型统计费用
+    // 按模型统计费�?
     const client = redis.getClientSafe()
     const today = redis.getDateStringInTimezone()
     const tzDate = redis.getDateInTimezone()
@@ -1592,10 +1593,10 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
     } else if (period === 'monthly') {
       pattern = `usage:model:monthly:*:${currentMonth}`
     } else if (period === '7days') {
-      // 最近7天：汇总daily数据
+      // 最�?天：汇总daily数据
       const modelUsageMap = new Map()
 
-      // 获取最近7天的所有daily统计数据
+      // 获取最�?天的所有daily统计数据
       for (let i = 0; i < 7; i++) {
         const date = new Date()
         date.setDate(date.getDate() - i)
@@ -1671,7 +1672,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
         }
       }
 
-      // 返回7天统计结果
+      // 返回7天统计结�?
       return res.json({
         success: true,
         data: {
@@ -1690,7 +1691,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
         }
       })
     } else {
-      // 全部时间，先尝试从Redis获取所有历史模型统计数据（只使用monthly数据避免重复计算）
+      // 全部时间，先尝试从Redis获取所有历史模型统计数据（只使用monthly数据避免重复计算�?
       const allModelKeys = await client.keys('usage:model:monthly:*:*')
       logger.info(`💰 Total period calculation: found ${allModelKeys.length} monthly model keys`)
 
@@ -1699,7 +1700,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
         const modelUsageMap = new Map()
 
         for (const key of allModelKeys) {
-          // 解析模型名称（只处理monthly数据）
+          // 解析模型名称（只处理monthly数据�?
           const modelMatch = key.match(/usage:model:monthly:(.+):(\d{4}-\d{2})$/)
           if (!modelMatch) {
             continue
@@ -1726,7 +1727,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
           }
         }
 
-        // 使用模型级别的数据计算费用
+        // 使用模型级别的数据计算费�?
         logger.info(`💰 Processing ${modelUsageMap.size} unique models for total cost calculation`)
 
         for (const [model, usage] of modelUsageMap) {
@@ -1764,7 +1765,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
           }
         }
       } else {
-        // 如果没有详细的模型统计数据，回退到API Key汇总数据
+        // 如果没有详细的模型统计数据，回退到API Key汇总数�?
         logger.warn('No detailed model statistics found, falling back to API Key aggregated data')
 
         for (const apiKey of apiKeys) {
@@ -1776,7 +1777,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
               cache_read_input_tokens: apiKey.usage.total.cacheReadTokens || 0
             }
 
-            // 使用加权平均价格计算（基于当前活跃模型的价格分布）
+            // 使用加权平均价格计算（基于当前活跃模型的价格分布�?
             const costResult = CostCalculator.calculateCost(usage, 'claude-3-5-haiku-20241022')
             totalCosts.inputCost += costResult.costs.input
             totalCosts.outputCost += costResult.costs.output
@@ -1807,7 +1808,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
       })
     }
 
-    // 对于今日或本月，从Redis获取详细的模型统计
+    // 对于今日或本月，从Redis获取详细的模型统�?
     const keys = await client.keys(pattern)
 
     for (const key of keys) {
@@ -1834,7 +1835,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
 
         const costResult = CostCalculator.calculateCost(usage, model)
 
-        // 累加总费用
+        // 累加总费�?
         totalCosts.inputCost += costResult.costs.input
         totalCosts.outputCost += costResult.costs.output
         totalCosts.cacheCreateCost += costResult.costs.cacheWrite
@@ -1872,7 +1873,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
       }
     })
   } catch (error) {
-    logger.error('❌ Failed to calculate usage costs:', error)
+    logger.error('�?Failed to calculate usage costs:', error)
     return res
       .status(500)
       .json({ error: 'Failed to calculate usage costs', message: error.message })
@@ -2026,6 +2027,8 @@ router.get('/api-keys/:keyId/usage-records', authenticateAdmin, async (req, res)
       outputTokens: 0,
       cacheCreateTokens: 0,
       cacheReadTokens: 0,
+      cacheCreateRequests: 0,
+      cacheReadRequests: 0,
       totalTokens: 0,
       totalCost: 0
     }
@@ -2046,12 +2049,19 @@ router.get('/api-keys/:keyId/usage-records', authenticateAdmin, async (req, res)
           usage.output_tokens +
           usage.cache_creation_input_tokens +
           usage.cache_read_input_tokens
+      const recordCacheMetrics = buildRequestCacheMetrics({
+        inputTokens: usage.input_tokens,
+        cacheReadTokens: usage.cache_read_input_tokens,
+        cacheCreateTokens: usage.cache_creation_input_tokens
+      })
 
       summary.totalRequests += 1
       summary.inputTokens += usage.input_tokens
       summary.outputTokens += usage.output_tokens
       summary.cacheCreateTokens += usage.cache_creation_input_tokens
       summary.cacheReadTokens += usage.cache_read_input_tokens
+      summary.cacheCreateRequests += recordCacheMetrics.cacheCreateRequests
+      summary.cacheReadRequests += recordCacheMetrics.cacheReadRequests
       summary.totalTokens += totalTokens
       summary.totalCost += computedCost
 
@@ -2103,6 +2113,11 @@ router.get('/api-keys/:keyId/usage-records', authenticateAdmin, async (req, res)
           usage.output_tokens +
           usage.cache_creation_input_tokens +
           usage.cache_read_input_tokens
+      const requestCacheMetrics = buildRequestCacheMetrics({
+        inputTokens: usage.input_tokens,
+        cacheReadTokens: usage.cache_read_input_tokens,
+        cacheCreateTokens: usage.cache_creation_input_tokens
+      })
 
       const accountInfo = await resolveAccountInfo(record.accountId, record.accountType)
       const resolvedAccountType = accountInfo?.type || record.accountType || 'unknown'
@@ -2119,6 +2134,17 @@ router.get('/api-keys/:keyId/usage-records', authenticateAdmin, async (req, res)
         outputTokens: usage.output_tokens,
         cacheCreateTokens: usage.cache_creation_input_tokens,
         cacheReadTokens: usage.cache_read_input_tokens,
+        cacheStatus: record.cacheStatus || requestCacheMetrics.cacheStatus,
+        cacheHitRate:
+          typeof record.cacheHitRate === 'number'
+            ? record.cacheHitRate
+            : requestCacheMetrics.cacheHitRate,
+        cacheCreateRate:
+          typeof record.cacheCreateRate === 'number'
+            ? record.cacheCreateRate
+            : requestCacheMetrics.cacheCreateRate,
+        effectiveInputTokens:
+          record.effectiveInputTokens || requestCacheMetrics.effectiveInputTokens,
         ephemeral5mTokens: record.ephemeral5mTokens || 0,
         ephemeral1hTokens: record.ephemeral1hTokens || 0,
         totalTokens,
@@ -2200,7 +2226,15 @@ router.get('/api-keys/:keyId/usage-records', authenticateAdmin, async (req, res)
           avgCost:
             summary.totalRequests > 0
               ? Number((summary.totalCost / summary.totalRequests).toFixed(6))
-              : 0
+              : 0,
+          cacheMetrics: buildCacheMetrics({
+            inputTokens: summary.inputTokens,
+            cacheReadTokens: summary.cacheReadTokens,
+            cacheCreateTokens: summary.cacheCreateTokens,
+            requests: summary.totalRequests,
+            cacheReadRequests: summary.cacheReadRequests,
+            cacheCreateRequests: summary.cacheCreateRequests
+          })
         },
         availableFilters: {
           models: Array.from(modelSet),
@@ -2213,7 +2247,7 @@ router.get('/api-keys/:keyId/usage-records', authenticateAdmin, async (req, res)
       }
     })
   } catch (error) {
-    logger.error('❌ Failed to get API key usage records:', error)
+    logger.error('�?Failed to get API key usage records:', error)
     return res
       .status(500)
       .json({ error: 'Failed to get API key usage records', message: error.message })
@@ -2373,6 +2407,8 @@ router.get('/accounts/:accountId/usage-records', authenticateAdmin, async (req, 
       outputTokens: 0,
       cacheCreateTokens: 0,
       cacheReadTokens: 0,
+      cacheCreateRequests: 0,
+      cacheReadRequests: 0,
       totalTokens: 0,
       totalCost: 0
     }
@@ -2388,12 +2424,19 @@ router.get('/accounts/:accountId/usage-records', authenticateAdmin, async (req, 
           usage.output_tokens +
           usage.cache_creation_input_tokens +
           usage.cache_read_input_tokens
+      const recordCacheMetrics = buildRequestCacheMetrics({
+        inputTokens: usage.input_tokens,
+        cacheReadTokens: usage.cache_read_input_tokens,
+        cacheCreateTokens: usage.cache_creation_input_tokens
+      })
 
       summary.totalRequests += 1
       summary.inputTokens += usage.input_tokens
       summary.outputTokens += usage.output_tokens
       summary.cacheCreateTokens += usage.cache_creation_input_tokens
       summary.cacheReadTokens += usage.cache_read_input_tokens
+      summary.cacheCreateRequests += recordCacheMetrics.cacheCreateRequests
+      summary.cacheReadRequests += recordCacheMetrics.cacheReadRequests
       summary.totalTokens += totalTokens
       summary.totalCost += computedCost
     }
@@ -2417,6 +2460,11 @@ router.get('/accounts/:accountId/usage-records', authenticateAdmin, async (req, 
           usage.output_tokens +
           usage.cache_creation_input_tokens +
           usage.cache_read_input_tokens
+      const requestCacheMetrics = buildRequestCacheMetrics({
+        inputTokens: usage.input_tokens,
+        cacheReadTokens: usage.cache_read_input_tokens,
+        cacheCreateTokens: usage.cache_creation_input_tokens
+      })
 
       enrichedRecords.push({
         timestamp: record.timestamp,
@@ -2431,6 +2479,17 @@ router.get('/accounts/:accountId/usage-records', authenticateAdmin, async (req, 
         outputTokens: usage.output_tokens,
         cacheCreateTokens: usage.cache_creation_input_tokens,
         cacheReadTokens: usage.cache_read_input_tokens,
+        cacheStatus: record.cacheStatus || requestCacheMetrics.cacheStatus,
+        cacheHitRate:
+          typeof record.cacheHitRate === 'number'
+            ? record.cacheHitRate
+            : requestCacheMetrics.cacheHitRate,
+        cacheCreateRate:
+          typeof record.cacheCreateRate === 'number'
+            ? record.cacheCreateRate
+            : requestCacheMetrics.cacheCreateRate,
+        effectiveInputTokens:
+          record.effectiveInputTokens || requestCacheMetrics.effectiveInputTokens,
         ephemeral5mTokens: record.ephemeral5mTokens || 0,
         ephemeral1hTokens: record.ephemeral1hTokens || 0,
         totalTokens,
@@ -2483,7 +2542,15 @@ router.get('/accounts/:accountId/usage-records', authenticateAdmin, async (req, 
           avgCost:
             summary.totalRequests > 0
               ? Number((summary.totalCost / summary.totalRequests).toFixed(6))
-              : 0
+              : 0,
+          cacheMetrics: buildCacheMetrics({
+            inputTokens: summary.inputTokens,
+            cacheReadTokens: summary.cacheReadTokens,
+            cacheCreateTokens: summary.cacheCreateTokens,
+            requests: summary.totalRequests,
+            cacheReadRequests: summary.cacheReadRequests,
+            cacheCreateRequests: summary.cacheCreateRequests
+          })
         },
         availableFilters: {
           models: Array.from(modelSet),
@@ -2496,7 +2563,7 @@ router.get('/accounts/:accountId/usage-records', authenticateAdmin, async (req, 
       }
     })
   } catch (error) {
-    logger.error('❌ Failed to get account usage records:', error)
+    logger.error('�?Failed to get account usage records:', error)
     return res
       .status(500)
       .json({ error: 'Failed to get account usage records', message: error.message })
