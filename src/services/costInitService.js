@@ -2,6 +2,7 @@ const redis = require('../models/redis')
 const apiKeyService = require('./apiKeyService')
 const CostCalculator = require('../utils/costCalculator')
 const logger = require('../utils/logger')
+const { filterApiKeyUsageModelStatsKeys } = require('../utils/redisKeyFilter')
 
 class CostInitService {
   /**
@@ -187,7 +188,10 @@ class CostInitService {
       }
 
       // 检查是否有使用数据但没有对应的费用数据
-      const sampleKeys = await client.keys('usage:*:model:daily:*:*')
+      const sampleKeys = await filterApiKeyUsageModelStatsKeys(
+        await client.keys('usage:*:model:daily:*:*'),
+        'daily'
+      )
       if (sampleKeys.length > 10) {
         // 抽样检查
         const sampleSize = Math.min(10, sampleKeys.length)

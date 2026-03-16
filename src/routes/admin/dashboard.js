@@ -11,6 +11,7 @@ const redis = require('../../models/redis')
 const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const CostCalculator = require('../../utils/costCalculator')
+const { filterUsageModelStatsKeys } = require('../../utils/redisKeyFilter')
 const config = require('../../../config/config')
 
 const router = express.Router()
@@ -630,7 +631,10 @@ router.get('/model-stats', authenticateAdmin, async (req, res) => {
     // 获取所有匹配的keys
     const allKeys = []
     for (const pattern of searchPatterns) {
-      const keys = await client.keys(pattern)
+      const keys = filterUsageModelStatsKeys(
+        await client.keys(pattern),
+        startDate && endDate ? 'daily' : period
+      )
       allKeys.push(...keys)
     }
 
@@ -659,8 +663,15 @@ router.get('/model-stats', authenticateAdmin, async (req, res) => {
     // 聚合相同模型的数据
     const modelStatsMap = new Map()
 
+    const modelKeyPattern =
+      startDate && endDate
+        ? /usage:model:daily:(.+):\d{4}-\d{2}-\d{2}$/
+        : period === 'monthly'
+          ? /usage:model:monthly:(.+):\d{4}-\d{2}$/
+          : /usage:model:daily:(.+):\d{4}-\d{2}-\d{2}$/
+
     for (const key of allKeys) {
-      const match = key.match(/usage:model:daily:(.+):\d{4}-\d{2}-\d{2}$/)
+      const match = key.match(modelKeyPattern)
 
       if (!match) {
         logger.warn(`📊 Pattern mismatch for key: ${key}`)

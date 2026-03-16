@@ -12,6 +12,7 @@ const {
   createGeminiTestPayload,
   createCodexTestPayload
 } = require('../utils/testPayloadHelper')
+const { filterApiKeyUsageModelStatsKeys } = require('../utils/redisKeyFilter')
 const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
 
 const router = express.Router()
@@ -511,7 +512,10 @@ router.post('/api/user-stats', async (req, res) => {
         logger.debug(`📊 使用 allTimeCost 计算用户统计: ${allTimeCost}`)
       } else {
         // Fallback: 如果 allTimeCost 为空（旧键），尝试月度键
-        const allModelKeys = await client.keys(`usage:${keyId}:model:monthly:*:*`)
+        const allModelKeys = await filterApiKeyUsageModelStatsKeys(
+          await client.keys(`usage:${keyId}:model:monthly:*:*`),
+          'monthly'
+        )
         const modelUsageMap = new Map()
 
         for (const key of allModelKeys) {
@@ -1019,7 +1023,7 @@ router.post('/api/batch-model-stats', async (req, res) => {
             ? `usage:${apiId}:model:daily:*:${today}`
             : `usage:${apiId}:model:monthly:*:${currentMonth}`
 
-        const keys = await client.keys(pattern)
+        const keys = await filterApiKeyUsageModelStatsKeys(await client.keys(pattern), period)
 
         for (const key of keys) {
           const match = key.match(
@@ -1415,7 +1419,7 @@ router.post('/api/user-model-stats', async (req, res) => {
         ? `usage:${keyId}:model:daily:*:${today}`
         : `usage:${keyId}:model:monthly:*:${currentMonth}`
 
-    const keys = await client.keys(pattern)
+    const keys = await filterApiKeyUsageModelStatsKeys(await client.keys(pattern), period)
     const modelStats = []
 
     for (const key of keys) {

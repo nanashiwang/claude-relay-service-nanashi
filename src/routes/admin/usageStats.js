@@ -13,6 +13,11 @@ const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const CostCalculator = require('../../utils/costCalculator')
 const { buildCacheMetrics, buildRequestCacheMetrics } = require('../../utils/cacheMetrics')
+const {
+  filterUsageModelStatsKeys,
+  filterApiKeyUsageModelStatsKeys,
+  filterAccountUsageModelStatsKeys
+} = require('../../utils/redisKeyFilter')
 const pricingService = require('../../services/pricingService')
 
 const router = express.Router()
@@ -245,7 +250,7 @@ router.get('/accounts/:accountId/usage-history', authenticateAdmin, async (req, 
 
     const sumModelCostsForDay = async (dateKey) => {
       const modelPattern = `account_usage:model:daily:${accountId}:*:${dateKey}`
-      const modelKeys = await client.keys(modelPattern)
+      const modelKeys = await filterAccountUsageModelStatsKeys(await client.keys(modelPattern), 'daily')
       let summedCost = 0
 
       if (modelKeys.length === 0) {
@@ -461,7 +466,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
 
         // 获取当前小时的模型统计数�?
         const modelPattern = `usage:model:hourly:*:${hourKey}`
-        const modelKeys = await client.keys(modelPattern)
+        const modelKeys = await filterUsageModelStatsKeys(await client.keys(modelPattern), 'hourly')
 
         let hourInputTokens = 0
         let hourOutputTokens = 0
@@ -579,7 +584,7 @@ router.get('/usage-trend', authenticateAdmin, async (req, res) => {
 
         // 获取当天所有模型的使用数据
         const modelPattern = `usage:model:daily:*:${dateStr}`
-        const modelKeys = await client.keys(modelPattern)
+        const modelKeys = await filterUsageModelStatsKeys(await client.keys(modelPattern), 'daily')
 
         for (const modelKey of modelKeys) {
           // 解析模型名称
@@ -1026,7 +1031,7 @@ router.get('/account-usage-trend', authenticateAdmin, async (req, res) => {
 
     const sumModelCosts = async (accountId, period, timeKey) => {
       const modelPattern = `account_usage:model:${period}:${accountId}:*:${timeKey}`
-      const modelKeys = await client.keys(modelPattern)
+      const modelKeys = await filterAccountUsageModelStatsKeys(await client.keys(modelPattern), period)
       let totalCost = 0
 
       for (const modelKey of modelKeys) {
@@ -1331,7 +1336,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
 
         // 获取该小时的模型级别数据来计算准确费�?
         const modelPattern = `usage:*:model:hourly:*:${hourKey}`
-        const modelKeys = await client.keys(modelPattern)
+        const modelKeys = await filterApiKeyUsageModelStatsKeys(await client.keys(modelPattern), 'hourly')
         const apiKeyCostMap = new Map()
 
         for (const modelKey of modelKeys) {
@@ -1442,7 +1447,7 @@ router.get('/api-keys-usage-trend', authenticateAdmin, async (req, res) => {
 
         // 获取该天的模型级别数据来计算准确费用
         const modelPattern = `usage:*:model:daily:*:${dateStr}`
-        const modelKeys = await client.keys(modelPattern)
+        const modelKeys = await filterApiKeyUsageModelStatsKeys(await client.keys(modelPattern), 'daily')
         const apiKeyCostMap = new Map()
 
         for (const modelKey of modelKeys) {
@@ -1606,7 +1611,7 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
         ).padStart(2, '0')}-${String(currentTzDate.getUTCDate()).padStart(2, '0')}`
         const dayPattern = `usage:model:daily:*:${dateStr}`
 
-        const dayKeys = await client.keys(dayPattern)
+        const dayKeys = await filterUsageModelStatsKeys(await client.keys(dayPattern), 'daily')
 
         for (const key of dayKeys) {
           const modelMatch = key.match(/usage:model:daily:(.+):\d{4}-\d{2}-\d{2}$/)
@@ -1692,7 +1697,10 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
       })
     } else {
       // 全部时间，先尝试从Redis获取所有历史模型统计数据（只使用monthly数据避免重复计算�?
-      const allModelKeys = await client.keys('usage:model:monthly:*:*')
+      const allModelKeys = await filterUsageModelStatsKeys(
+        await client.keys('usage:model:monthly:*:*'),
+        'monthly'
+      )
       logger.info(`💰 Total period calculation: found ${allModelKeys.length} monthly model keys`)
 
       if (allModelKeys.length > 0) {
@@ -1809,7 +1817,10 @@ router.get('/usage-costs', authenticateAdmin, async (req, res) => {
     }
 
     // 对于今日或本月，从Redis获取详细的模型统�?
-    const keys = await client.keys(pattern)
+    const keys = await filterUsageModelStatsKeys(
+      await client.keys(pattern),
+      period === 'today' ? 'daily' : 'monthly'
+    )
 
     for (const key of keys) {
       const match = key.match(

@@ -3,6 +3,7 @@ const config = require('../../config/config')
 const logger = require('../utils/logger')
 const { buildCacheMetrics } = require('../utils/cacheMetrics')
 const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
+const { filterAccountUsageModelStatsKeys } = require('../utils/redisKeyFilter')
 
 // 时区辅助函数
 // 注意：这个函数的目的是获取某个时间点在目标时区的"本地"表示
@@ -1294,7 +1295,7 @@ class RedisClient {
 
     // 获取账户今日所有模型的使用数据
     const pattern = `account_usage:model:daily:${accountId}:*:${today}`
-    const modelKeys = await this.client.keys(pattern)
+    const modelKeys = await filterAccountUsageModelStatsKeys(await this.client.keys(pattern), 'daily')
 
     if (!modelKeys || modelKeys.length === 0) {
       return 0

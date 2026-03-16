@@ -3,6 +3,7 @@ const balanceScriptService = require('./balanceScriptService')
 const logger = require('../utils/logger')
 const CostCalculator = require('../utils/costCalculator')
 const { isBalanceScriptEnabled } = require('../utils/featureFlags')
+const { filterAccountUsageModelStatsKeys } = require('../utils/redisKeyFilter')
 
 class AccountBalanceService {
   constructor(options = {}) {
@@ -558,12 +559,13 @@ class AccountBalanceService {
         cursor = nextCursor
         iterations += 1
 
-        if (!keys || keys.length === 0) {
+        const filteredKeys = filterAccountUsageModelStatsKeys(keys, 'monthly')
+        if (filteredKeys.length === 0) {
           continue
         }
 
         const pipeline = client.pipeline()
-        keys.forEach((key) => pipeline.hgetall(key))
+        filteredKeys.forEach((key) => pipeline.hgetall(key))
         const results = await pipeline.exec()
 
         for (let i = 0; i < results.length; i += 1) {
@@ -572,7 +574,7 @@ class AccountBalanceService {
             continue
           }
 
-          const parts = String(keys[i]).split(':')
+          const parts = String(filteredKeys[i]).split(':')
           const model = parts[4] || 'unknown'
 
           const usage = {
