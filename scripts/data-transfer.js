@@ -311,14 +311,10 @@ async function exportData() {
     // 导出 API Keys
     if (types.includes('all') || types.includes('apikeys')) {
       logger.info('📤 Exporting API Keys...')
-      const keys = await redis.client.keys('apikey:*')
+      const keys = await redis.getAllApiKeyRedisKeys()
       const apiKeys = []
 
       for (const key of keys) {
-        if (key === 'apikey:hash_map') {
-          continue
-        }
-
         // 使用 hgetall 而不是 get，因为数据存储在哈希表中
         const data = await redis.client.hgetall(key)
 

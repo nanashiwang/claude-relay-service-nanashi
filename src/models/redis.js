@@ -148,6 +148,41 @@ class RedisClient {
     return this.client
   }
 
+  _isApiKeyDataRedisKey(key) {
+    if (typeof key !== 'string' || !key.startsWith('apikey:')) {
+      return false
+    }
+
+    if (key === 'apikey:hash_map' || key === 'apikey:tags:all') {
+      return false
+    }
+
+    if (
+      key.startsWith('apikey:tag:') ||
+      key.startsWith('apikey:set:') ||
+      key.startsWith('apikey:idx:') ||
+      key.startsWith('apikey:index:')
+    ) {
+      return false
+    }
+
+    const parts = key.split(':')
+    return parts.length === 2 && parts[1].length > 0
+  }
+
+  _extractApiKeyIdFromRedisKey(key) {
+    if (!this._isApiKeyDataRedisKey(key)) {
+      return null
+    }
+
+    return key.slice('apikey:'.length)
+  }
+
+  async getAllApiKeyRedisKeys() {
+    const keys = await this.client.keys('apikey:*')
+    return keys.filter((key) => this._isApiKeyDataRedisKey(key))
+  }
+
   // 🔑 API Key 相关操作
   async setApiKey(keyId, keyData, hashedKey = null) {
     const key = `apikey:${keyId}`
@@ -182,17 +217,12 @@ class RedisClient {
   }
 
   async getAllApiKeys() {
-    const keys = await this.client.keys('apikey:*')
+    const keys = await this.getAllApiKeyRedisKeys()
     const apiKeys = []
     for (const key of keys) {
-      // 过滤掉hash_map，它不是真正的API Key
-      if (key === 'apikey:hash_map') {
-        continue
-      }
-
       const keyData = await this.client.hgetall(key)
       if (keyData && Object.keys(keyData).length > 0) {
-        apiKeys.push({ id: key.replace('apikey:', ''), ...keyData })
+        apiKeys.push({ id: this._extractApiKeyIdFromRedisKey(key), ...keyData })
       }
     }
     return apiKeys
@@ -211,8 +241,9 @@ class RedisClient {
       cursor = newCursor
 
       for (const key of keys) {
-        if (key !== 'apikey:hash_map') {
-          keyIds.push(key.replace('apikey:', ''))
+        const keyId = this._extractApiKeyIdFromRedisKey(key)
+        if (keyId) {
+          keyIds.push(keyId)
         }
       }
     } while (cursor !== '0')
@@ -1453,16 +1484,7 @@ class RedisClient {
 
     try {
       // 获取所有API Key ID
-      const apiKeyIds = []
-      const apiKeyKeys = await client.keys('apikey:*')
-
-      for (const key of apiKeyKeys) {
-        if (key === 'apikey:hash_map') {
-          continue
-        } // 跳过哈希映射表
-        const keyId = key.replace('apikey:', '')
-        apiKeyIds.push(keyId)
-      }
+      const apiKeyIds = await this.scanApiKeyIds()
 
       // 清空每个API Key的使用统计
       for (const keyId of apiKeyIds) {
@@ -1862,7 +1884,7 @@ class RedisClient {
   // 📈 系统统计
   async getSystemStats() {
     const keys = await Promise.all([
-      this.client.keys('apikey:*'),
+      this.getAllApiKeyRedisKeys(),
       this.client.keys('claude:account:*'),
       this.client.keys('usage:*')
     ])
@@ -1932,12 +1954,12 @@ class RedisClient {
       }
 
       // 获取今日创建的API Key数量（批量优化）
-      const allApiKeys = await this.client.keys('apikey:*')
+      const apiKeyIds = await this.scanApiKeyIds()
       let apiKeysCreatedToday = 0
 
-      if (allApiKeys.length > 0) {
+      if (apiKeyIds.length > 0) {
         const pipeline = this.client.pipeline()
-        allApiKeys.forEach((key) => pipeline.hget(key, 'createdAt'))
+        apiKeyIds.forEach((keyId) => pipeline.hget(`apikey:${keyId}`, 'createdAt'))
         const results = await pipeline.exec()
 
         for (const [error, createdAt] of results) {
@@ -1988,7 +2010,7 @@ class RedisClient {
   // 📈 获取系统总的平均RPM和TPM
   async getSystemAverages() {
     try {
-      const allApiKeys = await this.client.keys('apikey:*')
+      const apiKeyIds = await this.scanApiKeyIds()
       let totalRequests = 0
       let totalTokens = 0
       let totalInputTokens = 0
@@ -2000,19 +2022,19 @@ class RedisClient {
       let oldestCreatedAt = new Date()
 
       // 批量获取所有usage数据和key数据，提高性能
-      const usageKeys = allApiKeys.map((key) => `usage:${key.replace('apikey:', '')}`)
+      const usageKeys = apiKeyIds.map((keyId) => `usage:${keyId}`)
       const pipeline = this.client.pipeline()
 
       // 添加所有usage查询
       usageKeys.forEach((key) => pipeline.hgetall(key))
       // 添加所有key数据查询
-      allApiKeys.forEach((key) => pipeline.hgetall(key))
+      apiKeyIds.forEach((keyId) => pipeline.hgetall(`apikey:${keyId}`))
 
       const results = await pipeline.exec()
       const usageResults = results.slice(0, usageKeys.length)
       const keyResults = results.slice(usageKeys.length)
 
-      for (let i = 0; i < allApiKeys.length; i++) {
+      for (let i = 0; i < apiKeyIds.length; i++) {
         const totalData = usageResults[i][1] || {}
         const keyData = keyResults[i][1] || {}
 

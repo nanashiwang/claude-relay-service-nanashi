@@ -416,14 +416,10 @@ async function exportData() {
     // 导出 API Keys
     if (types.includes('all') || types.includes('apikeys')) {
       logger.info('📤 Exporting API Keys...')
-      const keys = await redis.client.keys('apikey:*')
+      const keys = await redis.getAllApiKeyRedisKeys()
       const apiKeys = []
 
       for (const key of keys) {
-        if (key === 'apikey:hash_map') {
-          continue
-        }
-
         const data = await redis.client.hgetall(key)
         if (data && Object.keys(data).length > 0) {
           // 获取该 API Key 的 ID

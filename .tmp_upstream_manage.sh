@@ -1,41 +1,26 @@
 #!/bin/bash
 
-# Claude Relay Service ç®¡ç†è„šæœ¬
-# ç”¨äºå®‰è£…ã€æ›´æ–°ã€å¸è½½ã€å¯åŠ¨ã€åœæ­¢ã€é‡å¯æœåŠ¡
-# å¯ä»¥ä½¿ç”¨ crs å¿«æ·å‘½ä»¤è°ƒç”¨
+# Claude Relay Service ¹ÜÀí½Å±¾
+# ÓÃÓÚ°²×°¡¢¸üĞÂ¡¢Ğ¶ÔØ¡¢Æô¶¯¡¢Í£Ö¹¡¢ÖØÆô·şÎñ
+# ¿ÉÒÔÊ¹ÓÃ crs ¿ì½İÃüÁîµ÷ÓÃ
 
-# é¢œè‰²å®šä¹‰
+# ÑÕÉ«¶¨Òå
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-BLUE='\033[0;36m'  # æ”¹ä¸ºé’è‰²ï¼ˆCyanï¼‰ï¼Œæ›´æ˜“è¯»
+BLUE='\033[0;36m'  # ¸ÄÎªÇàÉ«£¨Cyan£©£¬¸üÒ×¶Á
 MAGENTA='\033[0;35m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
-# é»˜è®¤é…ç½®
+# Ä¬ÈÏÅäÖÃ
 DEFAULT_INSTALL_DIR="$HOME/claude-relay-service"
 DEFAULT_REDIS_HOST="localhost"
 DEFAULT_REDIS_PORT="6379"
 DEFAULT_REDIS_PASSWORD=""
 DEFAULT_APP_PORT="3000"
-DEFAULT_CLUSTER_MODE="true"
-DEFAULT_CLUSTER_WORKERS="auto"
-DEFAULT_ENABLE_BACKGROUND_TASKS="true"
-# é»˜è®¤ä»“åº“é…ç½®ï¼ˆç”¨äº install / update æ‹‰å–ï¼‰
-DEFAULT_REPO_URL="https://github.com/nanashiwang/claude-relay-service-nanashi.git"
-DEFAULT_REPO_BRANCH="main"
-DEFAULT_WEB_DIST_BRANCH="web-dist"
 
-# å¯é€šè¿‡ç¯å¢ƒå˜é‡è¦†ç›–ï¼š
-#   CRS_REPO_URLï¼šä»“åº“åœ°å€ï¼ˆHTTPS/SSH å‡å¯ï¼‰
-#   CRS_REPO_BRANCHï¼šä¸»åˆ†æ”¯åï¼ˆé»˜è®¤ mainï¼‰
-#   CRS_WEB_DIST_BRANCHï¼šå‰ç«¯é¢„æ„å»ºåˆ†æ”¯åï¼ˆé»˜è®¤ web-distï¼‰
-#   CRS_CLUSTER_MODEï¼šcluster æ¨¡å¼ï¼ˆé»˜è®¤ trueï¼‰
-#   CRS_CLUSTER_WORKERSï¼šworker æ•°é‡ï¼ˆé»˜è®¤ autoï¼‰
-#   CRS_ENABLE_BACKGROUND_TASKSï¼šæ˜¯å¦å¯ç”¨åå°æ¸…ç†ä»»åŠ¡ï¼ˆé»˜è®¤ trueï¼‰
-
-# å…¨å±€å˜é‡
+# È«¾Ö±äÁ¿
 INSTALL_DIR=""
 APP_DIR=""
 REDIS_HOST=""
@@ -43,9 +28,9 @@ REDIS_PORT=""
 REDIS_PASSWORD=""
 APP_PORT=""
 PUBLIC_IP_CACHE_FILE="/tmp/.crs_public_ip_cache"
-PUBLIC_IP_CACHE_DURATION=3600  # 1å°æ—¶ç¼“å­˜
+PUBLIC_IP_CACHE_DURATION=3600  # 1Ğ¡Ê±»º´æ
 
-# æ‰“å°å¸¦é¢œè‰²çš„æ¶ˆæ¯
+# ´òÓ¡´øÑÕÉ«µÄÏûÏ¢
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -62,55 +47,7 @@ print_warning() {
     echo -e "${YELLOW}[WARNING]${NC} $1"
 }
 
-# è·å–ä»“åº“é…ç½®ï¼ˆå…è®¸é€šè¿‡ç¯å¢ƒå˜é‡è¦†ç›–ï¼‰
-get_repo_url() {
-    echo "${CRS_REPO_URL:-${DEFAULT_REPO_URL}}"
-}
-
-get_repo_branch() {
-    echo "${CRS_REPO_BRANCH:-${DEFAULT_REPO_BRANCH}}"
-}
-
-get_web_dist_branch() {
-    echo "${CRS_WEB_DIST_BRANCH:-${DEFAULT_WEB_DIST_BRANCH}}"
-}
-
-get_cluster_mode() {
-    echo "${CRS_CLUSTER_MODE:-${DEFAULT_CLUSTER_MODE}}"
-}
-
-get_cluster_workers() {
-    echo "${CRS_CLUSTER_WORKERS:-${DEFAULT_CLUSTER_WORKERS}}"
-}
-
-get_background_tasks_enabled() {
-    echo "${CRS_ENABLE_BACKGROUND_TASKS:-${DEFAULT_ENABLE_BACKGROUND_TASKS}}"
-}
-
-# ç¡®ä¿ origin æŒ‡å‘æœŸæœ›ä»“åº“ï¼ˆé¿å…ä»ä¸Šæ¸¸è¯¯æ›´æ–°ï¼‰
-ensure_origin_remote() {
-    local repo_url
-    repo_url="$(get_repo_url)"
-
-    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
-
-    local current_url
-    current_url="$(git remote get-url origin 2>/dev/null || true)"
-
-    if [ -z "$current_url" ]; then
-        git remote add origin "$repo_url" >/dev/null 2>&1 || true
-        return 0
-    fi
-
-    if [ "$current_url" != "$repo_url" ]; then
-        print_info "åŒæ­¥è¿œç¨‹ä»“åº“åœ°å€: $current_url -> $repo_url"
-        git remote set-url origin "$repo_url" >/dev/null 2>&1 || return 1
-    fi
-
-    return 0
-}
-
-# æ£€æµ‹æ“ä½œç³»ç»Ÿ
+# ¼ì²â²Ù×÷ÏµÍ³
 detect_os() {
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
         if [ -f /etc/debian_version ]; then
@@ -133,46 +70,12 @@ detect_os() {
     fi
 }
 
-# æ£€æŸ¥å‘½ä»¤æ˜¯å¦å­˜åœ¨
+# ¼ì²éÃüÁîÊÇ·ñ´æÔÚ
 command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# åˆ¤æ–­ systemd æ˜¯å¦å¯ç”¨ï¼ˆé¿å…å®¹å™¨/WSL ç¯å¢ƒä¸‹è°ƒç”¨ systemctl å¤±è´¥ï¼‰
-is_systemd_ready() {
-    command_exists systemctl && [ -d /run/systemd/system ]
-}
-
-# å¯åŠ¨ Redis æœåŠ¡ï¼ˆå…¼å®¹ systemd / service / ç›´æ¥è¿›ç¨‹ï¼‰
-start_redis_service() {
-    local started=false
-
-    if is_systemd_ready; then
-        if sudo systemctl start redis-server >/dev/null 2>&1 || sudo systemctl start redis >/dev/null 2>&1; then
-            started=true
-        fi
-        sudo systemctl enable redis-server >/dev/null 2>&1 || sudo systemctl enable redis >/dev/null 2>&1 || true
-    elif command_exists service; then
-        if sudo service redis-server start >/dev/null 2>&1 || sudo service redis start >/dev/null 2>&1; then
-            started=true
-        fi
-    fi
-
-    if [ "$started" = false ] && command_exists redis-server; then
-        if redis-server --daemonize yes >/dev/null 2>&1; then
-            started=true
-        elif [ -f /etc/redis/redis.conf ]; then
-            redis-server /etc/redis/redis.conf --daemonize yes >/dev/null 2>&1 && started=true
-        fi
-    fi
-
-    if [ "$started" = true ]; then
-        return 0
-    fi
-    return 1
-}
-
-# æ£€æŸ¥ç«¯å£æ˜¯å¦è¢«å ç”¨
+# ¼ì²é¶Ë¿ÚÊÇ·ñ±»Õ¼ÓÃ
 check_port() {
     local port=$1
     if command_exists lsof; then
@@ -186,7 +89,7 @@ check_port() {
     fi
 }
 
-# ç”Ÿæˆéšæœºå­—ç¬¦ä¸²
+# Éú³ÉËæ»ú×Ö·û´®
 generate_random_string() {
     local length=$1
     if command_exists openssl; then
@@ -196,12 +99,12 @@ generate_random_string() {
     fi
 }
 
-# è·å–å…¬ç½‘IP
+# »ñÈ¡¹«ÍøIP
 get_public_ip() {
     local cached_ip=""
     local cache_age=0
     
-    # æ£€æŸ¥ç¼“å­˜
+    # ¼ì²é»º´æ
     if [ -f "$PUBLIC_IP_CACHE_FILE" ]; then
         local current_time=$(date +%s)
         local cache_time=$(stat -c %Y "$PUBLIC_IP_CACHE_FILE" 2>/dev/null || stat -f %m "$PUBLIC_IP_CACHE_FILE" 2>/dev/null || echo 0)
@@ -216,7 +119,7 @@ get_public_ip() {
         fi
     fi
     
-    # è·å–æ–°çš„å…¬ç½‘IP
+    # »ñÈ¡ĞÂµÄ¹«ÍøIP
     local public_ip=""
     if command_exists curl; then
         public_ip=$(curl -s --connect-timeout 5 https://ipinfo.io/json | grep -o '"ip":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
@@ -224,7 +127,7 @@ get_public_ip() {
         public_ip=$(wget -qO- --timeout=5 https://ipinfo.io/json | grep -o '"ip":"[^"]*"' | cut -d'"' -f4 2>/dev/null)
     fi
     
-    # å¦‚æœè·å–å¤±è´¥ï¼Œå°è¯•å¤‡ç”¨API
+    # Èç¹û»ñÈ¡Ê§°Ü£¬³¢ÊÔ±¸ÓÃAPI
     if [ -z "$public_ip" ]; then
         if command_exists curl; then
             public_ip=$(curl -s --connect-timeout 5 https://api.ipify.org 2>/dev/null)
@@ -233,7 +136,7 @@ get_public_ip() {
         fi
     fi
     
-    # ä¿å­˜åˆ°ç¼“å­˜
+    # ±£´æµ½»º´æ
     if [ -n "$public_ip" ]; then
         echo "$public_ip" > "$PUBLIC_IP_CACHE_FILE"
         echo "$public_ip"
@@ -242,7 +145,7 @@ get_public_ip() {
     fi
 }
 
-# æ£€æŸ¥Node.jsç‰ˆæœ¬
+# ¼ì²éNode.js°æ±¾
 check_node_version() {
     if ! command_exists node; then
         return 1
@@ -258,13 +161,13 @@ check_node_version() {
     return 0
 }
 
-# å®‰è£…Node.js 18+
+# °²×°Node.js 18+
 install_nodejs() {
-    print_info "å¼€å§‹å®‰è£… Node.js 18+"
+    print_info "¿ªÊ¼°²×° Node.js 18+"
     
     case $OS in
         "debian")
-            # ä½¿ç”¨ NodeSource ä»“åº“
+            # Ê¹ÓÃ NodeSource ²Ö¿â
             curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
             sudo $PACKAGE_MANAGER install -y nodejs
             ;;
@@ -277,39 +180,39 @@ install_nodejs() {
             ;;
         "macos")
             if ! command_exists brew; then
-                print_error "è¯·å…ˆå®‰è£… Homebrew: https://brew.sh"
+                print_error "ÇëÏÈ°²×° Homebrew: https://brew.sh"
                 return 1
             fi
             brew install node@18
             ;;
         *)
-            print_error "ä¸æ”¯æŒçš„æ“ä½œç³»ç»Ÿï¼Œè¯·æ‰‹åŠ¨å®‰è£… Node.js 18+"
+            print_error "²»Ö§³ÖµÄ²Ù×÷ÏµÍ³£¬ÇëÊÖ¶¯°²×° Node.js 18+"
             return 1
             ;;
     esac
     
-    # éªŒè¯å®‰è£…
+    # ÑéÖ¤°²×°
     if check_node_version; then
-        print_success "Node.js å®‰è£…æˆåŠŸ: $(node -v)"
+        print_success "Node.js °²×°³É¹¦: $(node -v)"
         return 0
     else
-        print_error "Node.js å®‰è£…å¤±è´¥æˆ–ç‰ˆæœ¬ä¸ç¬¦åˆè¦æ±‚"
+        print_error "Node.js °²×°Ê§°Ü»ò°æ±¾²»·ûºÏÒªÇó"
         return 1
     fi
 }
 
-# å®‰è£…åŸºç¡€ä¾èµ–
+# °²×°»ù´¡ÒÀÀµ
 install_dependencies() {
-    print_info "æ£€æŸ¥å¹¶å®‰è£…åŸºç¡€ä¾èµ–..."
+    print_info "¼ì²é²¢°²×°»ù´¡ÒÀÀµ..."
     
     local deps_to_install=()
     
-    # æ£€æŸ¥ git
+    # ¼ì²é git
     if ! command_exists git; then
         deps_to_install+=("git")
     fi
     
-    # æ£€æŸ¥å…¶ä»–åŸºç¡€å·¥å…·
+    # ¼ì²éÆäËû»ù´¡¹¤¾ß
     case $OS in
         "debian"|"redhat")
             if ! command_exists curl; then
@@ -324,9 +227,9 @@ install_dependencies() {
             ;;
     esac
     
-    # å®‰è£…ç¼ºå¤±çš„ä¾èµ–
+    # °²×°È±Ê§µÄÒÀÀµ
     if [ ${#deps_to_install[@]} -gt 0 ]; then
-        print_info "éœ€è¦å®‰è£…: ${deps_to_install[*]}"
+        print_info "ĞèÒª°²×°: ${deps_to_install[*]}"
         case $OS in
             "debian")
                 sudo $PACKAGE_MANAGER update
@@ -344,46 +247,46 @@ install_dependencies() {
         esac
     fi
     
-    # æ£€æŸ¥ Node.js
+    # ¼ì²é Node.js
     if ! check_node_version; then
-        print_warning "æœªæ£€æµ‹åˆ° Node.js 18+ ç‰ˆæœ¬"
+        print_warning "Î´¼ì²âµ½ Node.js 18+ °æ±¾"
         install_nodejs || return 1
     else
-        print_success "Node.js ç‰ˆæœ¬æ£€æŸ¥é€šè¿‡: $(node -v)"
+        print_success "Node.js °æ±¾¼ì²éÍ¨¹ı: $(node -v)"
     fi
     
-    # æ£€æŸ¥ npm
+    # ¼ì²é npm
     if ! command_exists npm; then
-        print_error "npm æœªå®‰è£…"
+        print_error "npm Î´°²×°"
         return 1
     else
-        print_success "npm ç‰ˆæœ¬: $(npm -v)"
+        print_success "npm °æ±¾: $(npm -v)"
     fi
     
     return 0
 }
 
-# æ£€æŸ¥Redis
+# ¼ì²éRedis
 check_redis() {
-    print_info "æ£€æŸ¥ Redis é…ç½®..."
+    print_info "¼ì²é Redis ÅäÖÃ..."
     
-    # äº¤äº’å¼è¯¢é—®Redisé…ç½®
-    echo -e "\n${BLUE}Redis é…ç½®${NC}"
-    echo -n "Redis åœ°å€ (é»˜è®¤: $DEFAULT_REDIS_HOST): "
+    # ½»»¥Ê½Ñ¯ÎÊRedisÅäÖÃ
+    echo -e "\n${BLUE}Redis ÅäÖÃ${NC}"
+    echo -n "Redis µØÖ· (Ä¬ÈÏ: $DEFAULT_REDIS_HOST): "
     read input
     REDIS_HOST=${input:-$DEFAULT_REDIS_HOST}
     
-    echo -n "Redis ç«¯å£ (é»˜è®¤: $DEFAULT_REDIS_PORT): "
+    echo -n "Redis ¶Ë¿Ú (Ä¬ÈÏ: $DEFAULT_REDIS_PORT): "
     read input
     REDIS_PORT=${input:-$DEFAULT_REDIS_PORT}
     
-    echo -n "Redis å¯†ç  (é»˜è®¤: æ— å¯†ç ): "
+    echo -n "Redis ÃÜÂë (Ä¬ÈÏ: ÎŞÃÜÂë): "
     read -s input
     echo
     REDIS_PASSWORD=${input:-$DEFAULT_REDIS_PASSWORD}
     
-    # æµ‹è¯•Redisè¿æ¥
-    print_info "æµ‹è¯• Redis è¿æ¥..."
+    # ²âÊÔRedisÁ¬½Ó
+    print_info "²âÊÔ Redis Á¬½Ó..."
     if command_exists redis-cli; then
         local redis_args=(-h "$REDIS_HOST" -p "$REDIS_PORT")
         if [ -n "$REDIS_PASSWORD" ]; then
@@ -391,28 +294,28 @@ check_redis() {
         fi
 
         if redis-cli "${redis_args[@]}" ping 2>/dev/null | grep -q "PONG"; then
-            print_success "Redis è¿æ¥æˆåŠŸ"
+            print_success "Redis Á¬½Ó³É¹¦"
             return 0
         else
-            print_error "Redis è¿æ¥å¤±è´¥"
+            print_error "Redis Á¬½ÓÊ§°Ü"
             return 1
         fi
     else
-        print_warning "redis-cli æœªå®‰è£…ï¼Œè·³è¿‡è¿æ¥æµ‹è¯•"
-        # ä»…æ£€æŸ¥ç«¯å£æ˜¯å¦å¼€æ”¾
+        print_warning "redis-cli Î´°²×°£¬Ìø¹ıÁ¬½Ó²âÊÔ"
+        # ½ö¼ì²é¶Ë¿ÚÊÇ·ñ¿ª·Å
         if check_port $REDIS_PORT; then
-            print_info "æ£€æµ‹åˆ°ç«¯å£ $REDIS_PORT å·²å¼€æ”¾"
+            print_info "¼ì²âµ½¶Ë¿Ú $REDIS_PORT ÒÑ¿ª·Å"
             return 0
         else
-            print_warning "ç«¯å£ $REDIS_PORT æœªå¼€æ”¾ï¼Œè¯·ç¡®ä¿ Redis æ­£åœ¨è¿è¡Œ"
+            print_warning "¶Ë¿Ú $REDIS_PORT Î´¿ª·Å£¬ÇëÈ·±£ Redis ÕıÔÚÔËĞĞ"
             return 1
         fi
     fi
 }
 
-# å®‰è£…æœ¬åœ°Redisï¼ˆå¯é€‰ï¼‰
+# °²×°±¾µØRedis£¨¿ÉÑ¡£©
 install_local_redis() {
-    print_info "æ˜¯å¦éœ€è¦åœ¨æœ¬åœ°å®‰è£… Redisï¼Ÿ(y/N): "
+    print_info "ÊÇ·ñĞèÒªÔÚ±¾µØ°²×° Redis£¿(y/N): "
     read -n 1 install_redis
     echo
     
@@ -424,38 +327,35 @@ install_local_redis() {
         "debian")
             sudo $PACKAGE_MANAGER update
             sudo $PACKAGE_MANAGER install -y redis-server
-            if ! start_redis_service; then
-                print_warning "Redis æœåŠ¡æœªèƒ½è‡ªåŠ¨å¯åŠ¨ï¼Œè¯·æ‰‹åŠ¨å¯åŠ¨ Redis åé‡è¯•"
-            fi
+            sudo systemctl start redis-server
+            sudo systemctl enable redis-server
             ;;
         "redhat")
             sudo $PACKAGE_MANAGER install -y redis
-            if ! start_redis_service; then
-                print_warning "Redis æœåŠ¡æœªèƒ½è‡ªåŠ¨å¯åŠ¨ï¼Œè¯·æ‰‹åŠ¨å¯åŠ¨ Redis åé‡è¯•"
-            fi
+            sudo systemctl start redis
+            sudo systemctl enable redis
             ;;
         "arch")
             sudo $PACKAGE_MANAGER -S --noconfirm redis
-            if ! start_redis_service; then
-                print_warning "Redis æœåŠ¡æœªèƒ½è‡ªåŠ¨å¯åŠ¨ï¼Œè¯·æ‰‹åŠ¨å¯åŠ¨ Redis åé‡è¯•"
-            fi
+            sudo systemctl start redis
+            sudo systemctl enable redis
             ;;
         "macos")
             brew install redis
             brew services start redis
             ;;
         *)
-            print_error "ä¸æ”¯æŒçš„æ“ä½œç³»ç»Ÿï¼Œè¯·æ‰‹åŠ¨å®‰è£… Redis"
+            print_error "²»Ö§³ÖµÄ²Ù×÷ÏµÍ³£¬ÇëÊÖ¶¯°²×° Redis"
             return 1
             ;;
     esac
     
-    print_success "Redis å®‰è£…å®Œæˆ"
+    print_success "Redis °²×°Íê³É"
     return 0
 }
 
 
-# æ£€æŸ¥æ˜¯å¦å·²å®‰è£…
+# ¼ì²éÊÇ·ñÒÑ°²×°
 check_installation() {
     if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/package.json" ]; then
         return 0
@@ -463,38 +363,38 @@ check_installation() {
     return 1
 }
 
-# å°†å®‰è£…è·¯å¾„æŒä¹…åŒ–åˆ°æœ¬åœ°ï¼ˆç”¨äºåç»­ update/status è‡ªåŠ¨è¯†åˆ«è‡ªå®šä¹‰å®‰è£…ç›®å½•ï¼‰
+# ½«°²×°Â·¾¶³Ö¾Ã»¯µ½±¾µØ£¨ÓÃÓÚºóĞø update/status ×Ô¶¯Ê¶±ğ×Ô¶¨Òå°²×°Ä¿Â¼£©
 persist_install_path() {
     local conf_dir="$HOME/.config/crs"
     local conf_file="$conf_dir/install.conf"
 
     mkdir -p "$conf_dir" 2>/dev/null || true
     if ! { echo "INSTALL_DIR=\"$INSTALL_DIR\"" > "$conf_file" && echo "APP_DIR=\"$APP_DIR\"" >> "$conf_file"; }; then
-        print_warning "æ— æ³•å†™å…¥ $conf_fileï¼Œåç»­ update å¯èƒ½æ‰¾ä¸åˆ°å®‰è£…ç›®å½•"
+        print_warning "ÎŞ·¨Ğ´Èë $conf_file£¬ºóĞø update ¿ÉÄÜÕÒ²»µ½°²×°Ä¿Â¼"
         return 1
     fi
     return 0
 }
 
-# å®‰è£…æœåŠ¡
+# °²×°·şÎñ
 install_service() {
-    print_info "å¼€å§‹å®‰è£… Claude Relay Service..."
+    print_info "¿ªÊ¼°²×° Claude Relay Service..."
     
-    # è¯¢é—®å®‰è£…ç›®å½•
-    echo -n "å®‰è£…ç›®å½• (é»˜è®¤: $DEFAULT_INSTALL_DIR): "
+    # Ñ¯ÎÊ°²×°Ä¿Â¼
+    echo -n "°²×°Ä¿Â¼ (Ä¬ÈÏ: $DEFAULT_INSTALL_DIR): "
     read input
     INSTALL_DIR=${input:-$DEFAULT_INSTALL_DIR}
     APP_DIR="$INSTALL_DIR/app"
     
-    # è¯¢é—®æœåŠ¡ç«¯å£
-    echo -n "æœåŠ¡ç«¯å£ (é»˜è®¤: $DEFAULT_APP_PORT): "
+    # Ñ¯ÎÊ·şÎñ¶Ë¿Ú
+    echo -n "·şÎñ¶Ë¿Ú (Ä¬ÈÏ: $DEFAULT_APP_PORT): "
     read input
     APP_PORT=${input:-$DEFAULT_APP_PORT}
     
-    # æ£€æŸ¥ç«¯å£æ˜¯å¦è¢«å ç”¨
+    # ¼ì²é¶Ë¿ÚÊÇ·ñ±»Õ¼ÓÃ
     if check_port $APP_PORT; then
-        print_warning "ç«¯å£ $APP_PORT å·²è¢«å ç”¨"
-        echo -n "æ˜¯å¦ç»§ç»­ï¼Ÿ(y/N): "
+        print_warning "¶Ë¿Ú $APP_PORT ÒÑ±»Õ¼ÓÃ"
+        echo -n "ÊÇ·ñ¼ÌĞø£¿(y/N): "
         read -n 1 continue_install
         echo
         if [[ ! "$continue_install" =~ ^[Yy]$ ]]; then
@@ -502,10 +402,10 @@ install_service() {
         fi
     fi
     
-    # æ£€æŸ¥æ˜¯å¦å·²å®‰è£…
+    # ¼ì²éÊÇ·ñÒÑ°²×°
     if check_installation; then
-        print_warning "æ£€æµ‹åˆ°å·²å®‰è£…çš„æœåŠ¡"
-        echo -n "æ˜¯å¦è¦é‡æ–°å®‰è£…ï¼Ÿ(y/N): "
+        print_warning "¼ì²âµ½ÒÑ°²×°µÄ·şÎñ"
+        echo -n "ÊÇ·ñÒªÖØĞÂ°²×°£¿(y/N): "
         read -n 1 reinstall
         echo
         if [[ ! "$reinstall" =~ ^[Yy]$ ]]; then
@@ -513,432 +413,401 @@ install_service() {
         fi
     fi
     
-    # åˆ›å»ºå®‰è£…ç›®å½•
+    # ´´½¨°²×°Ä¿Â¼
     mkdir -p "$INSTALL_DIR"
     
-    # å…‹éš†é¡¹ç›®
-    print_info "å…‹éš†é¡¹ç›®ä»£ç ..."
+    # ¿ËÂ¡ÏîÄ¿
+    print_info "¿ËÂ¡ÏîÄ¿´úÂë..."
     if [ -d "$APP_DIR" ]; then
         rm -rf "$APP_DIR"
     fi
     
-    local repo_url
-    repo_url="$(get_repo_url)"
-    local repo_branch
-    repo_branch="$(get_repo_branch)"
-    local web_dist_branch
-    web_dist_branch="$(get_web_dist_branch)"
-
-    if ! git clone --branch "$repo_branch" "$repo_url" "$APP_DIR"; then
-        print_error "å…‹éš†é¡¹ç›®å¤±è´¥"
+    if ! git clone https://github.com/Wei-Shaw/claude-relay-service.git "$APP_DIR"; then
+        print_error "¿ËÂ¡ÏîÄ¿Ê§°Ü"
         return 1
     fi
     
-    # è¿›å…¥é¡¹ç›®ç›®å½•
+    # ½øÈëÏîÄ¿Ä¿Â¼
     cd "$APP_DIR"
     
-    # å®‰è£…npmä¾èµ–
-    print_info "å®‰è£…é¡¹ç›®ä¾èµ–..."
+    # °²×°npmÒÀÀµ
+    print_info "°²×°ÏîÄ¿ÒÀÀµ..."
     npm install
     
-    # ç¡®ä¿è„šæœ¬æœ‰æ‰§è¡Œæƒé™ï¼ˆä»…åœ¨æƒé™ä¸æ­£ç¡®æ—¶è®¾ç½®ï¼‰
+    # È·±£½Å±¾ÓĞÖ´ĞĞÈ¨ÏŞ£¨½öÔÚÈ¨ÏŞ²»ÕıÈ·Ê±ÉèÖÃ£©
     if [ -f "$APP_DIR/scripts/manage.sh" ] && [ ! -x "$APP_DIR/scripts/manage.sh" ]; then
         chmod +x "$APP_DIR/scripts/manage.sh"
-        print_success "å·²è®¾ç½®è„šæœ¬æ‰§è¡Œæƒé™"
+        print_success "ÒÑÉèÖÃ½Å±¾Ö´ĞĞÈ¨ÏŞ"
     fi
     
-    # åˆ›å»ºé…ç½®æ–‡ä»¶
-    print_info "åˆ›å»ºé…ç½®æ–‡ä»¶..."
+    # ´´½¨ÅäÖÃÎÄ¼ş
+    print_info "´´½¨ÅäÖÃÎÄ¼ş..."
     
-    # å¤åˆ¶ç¤ºä¾‹é…ç½®
+    # ¸´ÖÆÊ¾ÀıÅäÖÃ
     if [ -f "config/config.example.js" ]; then
         cp config/config.example.js config/config.js
     fi
-
-    local cluster_mode
-    cluster_mode="$(get_cluster_mode)"
-    local cluster_workers
-    cluster_workers="$(get_cluster_workers)"
-    local background_tasks_enabled
-    background_tasks_enabled="$(get_background_tasks_enabled)"
     
-    # åˆ›å»º.envæ–‡ä»¶
+    # ´´½¨.envÎÄ¼ş
     cat > .env << EOF
-# ç¯å¢ƒå˜é‡é…ç½®
+# »·¾³±äÁ¿ÅäÖÃ
 NODE_ENV=production
 PORT=$APP_PORT
 
-# JWTé…ç½®
+# JWTÅäÖÃ
 JWT_SECRET=$(generate_random_string 64)
 
-# åŠ å¯†é…ç½®
+# ¼ÓÃÜÅäÖÃ
 ENCRYPTION_KEY=$(generate_random_string 32)
 
-# Redisé…ç½®
+# RedisÅäÖÃ
 REDIS_HOST=$REDIS_HOST
 REDIS_PORT=$REDIS_PORT
 REDIS_PASSWORD=$REDIS_PASSWORD
 
-# æ—¥å¿—é…ç½®
+# ÈÕÖ¾ÅäÖÃ
 LOG_LEVEL=info
-
-# Cluster é…ç½®
-CLUSTER_MODE=$cluster_mode
-CLUSTER_WORKERS=$cluster_workers
-ENABLE_BACKGROUND_TASKS=$background_tasks_enabled
 EOF
     
-    # è¿è¡Œsetupå‘½ä»¤
-    print_info "è¿è¡Œåˆå§‹åŒ–è®¾ç½®..."
+    # ÔËĞĞsetupÃüÁî
+    print_info "ÔËĞĞ³õÊ¼»¯ÉèÖÃ..."
     npm run setup
     
-    # è·å–é¢„æ„å»ºçš„å‰ç«¯æ–‡ä»¶
-    print_info "è·å–é¢„æ„å»ºçš„å‰ç«¯æ–‡ä»¶..."
+    # »ñÈ¡Ô¤¹¹½¨µÄÇ°¶ËÎÄ¼ş
+    print_info "»ñÈ¡Ô¤¹¹½¨µÄÇ°¶ËÎÄ¼ş..."
     
-    # åˆ›å»ºç›®æ ‡ç›®å½•
+    # ´´½¨Ä¿±êÄ¿Â¼
     mkdir -p web/admin-spa/dist
     
-    # ä» web-dist åˆ†æ”¯è·å–æ„å»ºå¥½çš„æ–‡ä»¶
-    if git ls-remote --heads origin "$web_dist_branch" | grep -q "$web_dist_branch"; then
-        print_info "ä» web-dist åˆ†æ”¯ä¸‹è½½å‰ç«¯æ–‡ä»¶..."
+    # ´Ó web-dist ·ÖÖ§»ñÈ¡¹¹½¨ºÃµÄÎÄ¼ş
+    if git ls-remote --heads origin web-dist | grep -q web-dist; then
+        print_info "´Ó web-dist ·ÖÖ§ÏÂÔØÇ°¶ËÎÄ¼ş..."
         
-        # åˆ›å»ºä¸´æ—¶ç›®å½•ç”¨äº clone
+        # ´´½¨ÁÙÊ±Ä¿Â¼ÓÃÓÚ clone
         TEMP_CLONE_DIR=$(mktemp -d)
         
-        # ä½¿ç”¨ sparse-checkout æ¥åªè·å–éœ€è¦çš„æ–‡ä»¶
-        git clone --depth 1 --branch "$web_dist_branch" --single-branch \
-            "$repo_url" \
+        # Ê¹ÓÃ sparse-checkout À´Ö»»ñÈ¡ĞèÒªµÄÎÄ¼ş
+        git clone --depth 1 --branch web-dist --single-branch \
+            https://github.com/Wei-Shaw/claude-relay-service.git \
             "$TEMP_CLONE_DIR" 2>/dev/null || {
-            # å¦‚æœ HTTPS å¤±è´¥ï¼Œå°è¯•ä½¿ç”¨å½“å‰ä»“åº“çš„ remote URL
+            # Èç¹û HTTPS Ê§°Ü£¬³¢ÊÔÊ¹ÓÃµ±Ç°²Ö¿âµÄ remote URL
             REPO_URL=$(git config --get remote.origin.url)
-            git clone --depth 1 --branch "$web_dist_branch" --single-branch "$REPO_URL" "$TEMP_CLONE_DIR"
+            git clone --depth 1 --branch web-dist --single-branch "$REPO_URL" "$TEMP_CLONE_DIR"
         }
         
-        # å¤åˆ¶æ–‡ä»¶åˆ°ç›®æ ‡ç›®å½•ï¼ˆæ’é™¤ .git å’Œ README.mdï¼‰
+        # ¸´ÖÆÎÄ¼şµ½Ä¿±êÄ¿Â¼£¨ÅÅ³ı .git ºÍ README.md£©
         rsync -av --exclude='.git' --exclude='README.md' "$TEMP_CLONE_DIR/" web/admin-spa/dist/ 2>/dev/null || {
-            # å¦‚æœæ²¡æœ‰ rsyncï¼Œä½¿ç”¨ cp
+            # Èç¹ûÃ»ÓĞ rsync£¬Ê¹ÓÃ cp
             cp -r "$TEMP_CLONE_DIR"/* web/admin-spa/dist/ 2>/dev/null
             rm -rf web/admin-spa/dist/.git 2>/dev/null
             rm -f web/admin-spa/dist/README.md 2>/dev/null
         }
         
-        # æ¸…ç†ä¸´æ—¶ç›®å½•
+        # ÇåÀíÁÙÊ±Ä¿Â¼
         rm -rf "$TEMP_CLONE_DIR"
         
-        print_success "å‰ç«¯æ–‡ä»¶ä¸‹è½½å®Œæˆ"
+        print_success "Ç°¶ËÎÄ¼şÏÂÔØÍê³É"
     else
-        print_warning "web-dist åˆ†æ”¯ä¸å­˜åœ¨ï¼Œå°è¯•æœ¬åœ°æ„å»º..."
+        print_warning "web-dist ·ÖÖ§²»´æÔÚ£¬³¢ÊÔ±¾µØ¹¹½¨..."
         
-        # æ£€æŸ¥æ˜¯å¦æœ‰ Node.js å’Œ npm
+        # ¼ì²éÊÇ·ñÓĞ Node.js ºÍ npm
         if command_exists npm; then
-            # å›é€€åˆ°åŸå§‹æ„å»ºæ–¹å¼
+            # »ØÍËµ½Ô­Ê¼¹¹½¨·½Ê½
             if [ -f "web/admin-spa/package.json" ]; then
-                print_info "å¼€å§‹æœ¬åœ°æ„å»ºå‰ç«¯..."
+                print_info "¿ªÊ¼±¾µØ¹¹½¨Ç°¶Ë..."
                 cd web/admin-spa
                 npm install
                 npm run build
                 cd ../..
-                print_success "å‰ç«¯æœ¬åœ°æ„å»ºå®Œæˆ"
+                print_success "Ç°¶Ë±¾µØ¹¹½¨Íê³É"
             else
-                print_error "æ— æ³•æ‰¾åˆ°å‰ç«¯é¡¹ç›®æ–‡ä»¶"
+                print_error "ÎŞ·¨ÕÒµ½Ç°¶ËÏîÄ¿ÎÄ¼ş"
             fi
         else
-            print_error "æ— æ³•è·å–å‰ç«¯æ–‡ä»¶ï¼Œä¸”æœ¬åœ°ç¯å¢ƒä¸æ”¯æŒæ„å»º"
-            print_info "è¯·ç¡®ä¿ä»“åº“å·²æ­£ç¡®é…ç½® web-dist åˆ†æ”¯"
+            print_error "ÎŞ·¨»ñÈ¡Ç°¶ËÎÄ¼ş£¬ÇÒ±¾µØ»·¾³²»Ö§³Ö¹¹½¨"
+            print_info "ÇëÈ·±£²Ö¿âÒÑÕıÈ·ÅäÖÃ web-dist ·ÖÖ§"
         fi
     fi
     
-    # åˆ›å»ºè½¯é“¾æ¥
+    # ´´½¨ÈíÁ´½Ó
     create_symlink
     
-    print_success "å®‰è£…å®Œæˆï¼"
+    print_success "°²×°Íê³É£¡"
     
-    # è‡ªåŠ¨å¯åŠ¨æœåŠ¡
-    print_info "æ­£åœ¨å¯åŠ¨æœåŠ¡..."
+    # ×Ô¶¯Æô¶¯·şÎñ
+    print_info "ÕıÔÚÆô¶¯·şÎñ..."
     start_service
     
-    # ç­‰å¾…æœåŠ¡å¯åŠ¨
+    # µÈ´ı·şÎñÆô¶¯
     sleep 3
     
-    # æ˜¾ç¤ºçŠ¶æ€
+    # ÏÔÊ¾×´Ì¬
     show_status
     
-    # è·å–å…¬ç½‘IP
+    # »ñÈ¡¹«ÍøIP
     local public_ip=$(get_public_ip)
     
-    echo -e "\n${GREEN}æœåŠ¡å·²æˆåŠŸå®‰è£…å¹¶å¯åŠ¨ï¼${NC}"
-    echo -e "\n${YELLOW}è®¿é—®åœ°å€ï¼š${NC}"
-    echo -e "  æœ¬åœ° Web: ${GREEN}http://localhost:$APP_PORT/web${NC}"
-    echo -e "  æœ¬åœ° API: ${GREEN}http://localhost:$APP_PORT/api/v1${NC}"
+    echo -e "\n${GREEN}·şÎñÒÑ³É¹¦°²×°²¢Æô¶¯£¡${NC}"
+    echo -e "\n${YELLOW}·ÃÎÊµØÖ·£º${NC}"
+    echo -e "  ±¾µØ Web: ${GREEN}http://localhost:$APP_PORT/web${NC}"
+    echo -e "  ±¾µØ API: ${GREEN}http://localhost:$APP_PORT/api/v1${NC}"
     if [ "$public_ip" != "localhost" ]; then
-        echo -e "  å…¬ç½‘ Web: ${GREEN}http://$public_ip:$APP_PORT/web${NC}"
-        echo -e "  å…¬ç½‘ API: ${GREEN}http://$public_ip:$APP_PORT/api/v1${NC}"
+        echo -e "  ¹«Íø Web: ${GREEN}http://$public_ip:$APP_PORT/web${NC}"
+        echo -e "  ¹«Íø API: ${GREEN}http://$public_ip:$APP_PORT/api/v1${NC}"
     fi
-    echo -e "\n${YELLOW}ç®¡ç†å‘½ä»¤ï¼š${NC}"
-    echo "  æŸ¥çœ‹çŠ¶æ€: crs status"
-    echo "  åœæ­¢æœåŠ¡: crs stop"
-    echo "  é‡å¯æœåŠ¡: crs restart"
+    echo -e "\n${YELLOW}¹ÜÀíÃüÁî£º${NC}"
+    echo "  ²é¿´×´Ì¬: crs status"
+    echo "  Í£Ö¹·şÎñ: crs stop"
+    echo "  ÖØÆô·şÎñ: crs restart"
 }
 
 
-# æ›´æ–°æœåŠ¡
+# ¸üĞÂ·şÎñ
 update_service() {
     if ! check_installation; then
-        print_error "æœåŠ¡æœªå®‰è£…ï¼Œè¯·å…ˆè¿è¡Œ: $0 install"
+        print_error "·şÎñÎ´°²×°£¬ÇëÏÈÔËĞĞ: $0 install"
         return 1
     fi
     
-    print_info "æ›´æ–° Claude Relay Service..."
+    print_info "¸üĞÂ Claude Relay Service..."
     
     cd "$APP_DIR"
-
-    local repo_url
-    repo_url="$(get_repo_url)"
-    local repo_branch
-    repo_branch="$(get_repo_branch)"
-    local web_dist_branch
-    web_dist_branch="$(get_web_dist_branch)"
-
-    if ! ensure_origin_remote; then
-        print_error "æ— æ³•åŒæ­¥è¿œç¨‹ä»“åº“åœ°å€åˆ°: $repo_url"
-        return 1
-    fi
     
-    # ä¿å­˜å½“å‰è¿è¡ŒçŠ¶æ€
+    # ±£´æµ±Ç°ÔËĞĞ×´Ì¬
     local was_running=false
     if pgrep -f "node.*src/app.js" > /dev/null; then
         was_running=true
-        print_info "æ£€æµ‹åˆ°æœåŠ¡æ­£åœ¨è¿è¡Œï¼Œå°†åœ¨æ›´æ–°åè‡ªåŠ¨é‡å¯..."
+        print_info "¼ì²âµ½·şÎñÕıÔÚÔËĞĞ£¬½«ÔÚ¸üĞÂºó×Ô¶¯ÖØÆô..."
         stop_service
     fi
     
-    # å¤‡ä»½é…ç½®æ–‡ä»¶ï¼ˆåªå¤‡ä»½.envï¼Œconfig.jså¯ä»exampleæ¢å¤ï¼‰
-    print_info "å¤‡ä»½é…ç½®æ–‡ä»¶..."
+    # ±¸·İÅäÖÃÎÄ¼ş£¨Ö»±¸·İ.env£¬config.js¿É´Óexample»Ö¸´£©
+    print_info "±¸·İÅäÖÃÎÄ¼ş..."
     if [ -f ".env" ]; then
         cp .env .env.backup.$(date +%Y%m%d%H%M%S)
     fi
     
-    # æ£€æŸ¥æœ¬åœ°ä¿®æ”¹
-    print_info "æ£€æŸ¥æœ¬åœ°æ–‡ä»¶ä¿®æ”¹..."
+    # ¼ì²é±¾µØĞŞ¸Ä
+    print_info "¼ì²é±¾µØÎÄ¼şĞŞ¸Ä..."
     local has_changes=false
     if git status --porcelain | grep -v "^??" | grep -q .; then
         has_changes=true
-        print_warning "æ£€æµ‹åˆ°æœ¬åœ°æ–‡ä»¶å·²ä¿®æ”¹ï¼š"
+        print_warning "¼ì²âµ½±¾µØÎÄ¼şÒÑĞŞ¸Ä£º"
         git status --short | grep -v "^??"
         echo ""
-        echo -e "${YELLOW}è­¦å‘Šï¼šæ›´æ–°å°†ä½¿ç”¨è¿œç¨‹ç‰ˆæœ¬è¦†ç›–æœ¬åœ°ä¿®æ”¹ï¼${NC}"
+        echo -e "${YELLOW}¾¯¸æ£º¸üĞÂ½«Ê¹ÓÃÔ¶³Ì°æ±¾¸²¸Ç±¾µØĞŞ¸Ä£¡${NC}"
         
-        # åˆ›å»ºæœ¬åœ°ä¿®æ”¹çš„å¤‡ä»½
+        # ´´½¨±¾µØĞŞ¸ÄµÄ±¸·İ
         local backup_branch="backup-$(date +%Y%m%d-%H%M%S)"
-        print_info "åˆ›å»ºæœ¬åœ°ä¿®æ”¹å¤‡ä»½åˆ†æ”¯: $backup_branch"
+        print_info "´´½¨±¾µØĞŞ¸Ä±¸·İ·ÖÖ§: $backup_branch"
         git stash push -m "Backup before update $(date +%Y-%m-%d)" >/dev/null 2>&1
         git branch "$backup_branch" 2>/dev/null || true
         
-        echo -e "${GREEN}å·²åˆ›å»ºå¤‡ä»½åˆ†æ”¯: $backup_branch${NC}"
-        echo "å¦‚éœ€æ¢å¤ï¼Œå¯æ‰§è¡Œ: git checkout $backup_branch"
+        echo -e "${GREEN}ÒÑ´´½¨±¸·İ·ÖÖ§: $backup_branch${NC}"
+        echo "ÈçĞè»Ö¸´£¬¿ÉÖ´ĞĞ: git checkout $backup_branch"
         echo ""
         
-        echo -n "æ˜¯å¦ç»§ç»­æ›´æ–°ï¼Ÿ(y/N): "
+        echo -n "ÊÇ·ñ¼ÌĞø¸üĞÂ£¿(y/N): "
         read -n 1 confirm_update
         echo
         
         if [[ ! "$confirm_update" =~ ^[Yy]$ ]]; then
-            print_info "å·²å–æ¶ˆæ›´æ–°"
-            # æ¢å¤ stash çš„ä¿®æ”¹
+            print_info "ÒÑÈ¡Ïû¸üĞÂ"
+            # »Ö¸´ stash µÄĞŞ¸Ä
             git stash pop >/dev/null 2>&1 || true
-            # å¦‚æœä¹‹å‰åœ¨è¿è¡Œï¼Œé‡æ–°å¯åŠ¨æœåŠ¡
+            # Èç¹ûÖ®Ç°ÔÚÔËĞĞ£¬ÖØĞÂÆô¶¯·şÎñ
             if [ "$was_running" = true ]; then
-                print_info "é‡æ–°å¯åŠ¨æœåŠ¡..."
+                print_info "ÖØĞÂÆô¶¯·şÎñ..."
                 start_service
             fi
             return 0
         fi
     fi
     
-    # è·å–æœ€æ–°ä»£ç ï¼ˆå¼ºåˆ¶ä½¿ç”¨è¿œç¨‹ç‰ˆæœ¬ï¼‰
-    print_info "è·å–æœ€æ–°ä»£ç ..."
+    # »ñÈ¡×îĞÂ´úÂë£¨Ç¿ÖÆÊ¹ÓÃÔ¶³Ì°æ±¾£©
+    print_info "»ñÈ¡×îĞÂ´úÂë..."
     
-    # å…ˆè·å–è¿œç¨‹æ›´æ–°
-    if ! git fetch origin "$repo_branch"; then
-        print_error "è·å–è¿œç¨‹ä»£ç å¤±è´¥ï¼Œè¯·æ£€æŸ¥ç½‘ç»œè¿æ¥"
+    # ÏÈ»ñÈ¡Ô¶³Ì¸üĞÂ
+    if ! git fetch origin main; then
+        print_error "»ñÈ¡Ô¶³Ì´úÂëÊ§°Ü£¬Çë¼ì²éÍøÂçÁ¬½Ó"
         return 1
     fi
     
-    # å¼ºåˆ¶é‡ç½®åˆ°è¿œç¨‹ç‰ˆæœ¬
-    print_info "åº”ç”¨è¿œç¨‹æ›´æ–°..."
-    if ! git reset --hard "origin/$repo_branch"; then
-        print_error "é‡ç½®åˆ°è¿œç¨‹ç‰ˆæœ¬å¤±è´¥"
-        # å°è¯•æ¢å¤
-        print_info "å°è¯•æ¢å¤..."
+    # Ç¿ÖÆÖØÖÃµ½Ô¶³Ì°æ±¾
+    print_info "Ó¦ÓÃÔ¶³Ì¸üĞÂ..."
+    if ! git reset --hard origin/main; then
+        print_error "ÖØÖÃµ½Ô¶³Ì°æ±¾Ê§°Ü"
+        # ³¢ÊÔ»Ö¸´
+        print_info "³¢ÊÔ»Ö¸´..."
         git reset --hard HEAD
         return 1
     fi
     
-    # æ¸…ç†æœªè·Ÿè¸ªçš„æ–‡ä»¶ï¼ˆå¯é€‰ï¼Œä¿ç•™ç”¨æˆ·æ–°å»ºçš„æ–‡ä»¶ï¼‰
-    # git clean -fd  # æ³¨é‡Šæ‰ï¼Œé¿å…åˆ é™¤ç”¨æˆ·çš„æ–°æ–‡ä»¶
+    # ÇåÀíÎ´¸ú×ÙµÄÎÄ¼ş£¨¿ÉÑ¡£¬±£ÁôÓÃ»§ĞÂ½¨µÄÎÄ¼ş£©
+    # git clean -fd  # ×¢ÊÍµô£¬±ÜÃâÉ¾³ıÓÃ»§µÄĞÂÎÄ¼ş
     
-    print_success "ä»£ç å·²æ›´æ–°åˆ°æœ€æ–°ç‰ˆæœ¬"
+    print_success "´úÂëÒÑ¸üĞÂµ½×îĞÂ°æ±¾"
     
-    # æ›´æ–°ä¾èµ–
-    print_info "æ›´æ–°ä¾èµ–..."
+    # ¸üĞÂÒÀÀµ
+    print_info "¸üĞÂÒÀÀµ..."
     npm install
     
-    # ç¡®ä¿è„šæœ¬æœ‰æ‰§è¡Œæƒé™ï¼ˆä»…åœ¨æƒé™ä¸æ­£ç¡®æ—¶è®¾ç½®ï¼‰
+    # È·±£½Å±¾ÓĞÖ´ĞĞÈ¨ÏŞ£¨½öÔÚÈ¨ÏŞ²»ÕıÈ·Ê±ÉèÖÃ£©
     if [ -f "$APP_DIR/scripts/manage.sh" ] && [ ! -x "$APP_DIR/scripts/manage.sh" ]; then
         chmod +x "$APP_DIR/scripts/manage.sh"
     fi
     
-    # è·å–æœ€æ–°çš„é¢„æ„å»ºå‰ç«¯æ–‡ä»¶
-    print_info "æ›´æ–°å‰ç«¯æ–‡ä»¶..."
+    # »ñÈ¡×îĞÂµÄÔ¤¹¹½¨Ç°¶ËÎÄ¼ş
+    print_info "¸üĞÂÇ°¶ËÎÄ¼ş..."
     
-    # åˆ›å»ºç›®æ ‡ç›®å½•
+    # ´´½¨Ä¿±êÄ¿Â¼
     mkdir -p web/admin-spa/dist
     
-    # æ¸…ç†æ—§çš„å‰ç«¯æ–‡ä»¶ï¼ˆä¿ç•™ç”¨æˆ·è‡ªå®šä¹‰æ–‡ä»¶ï¼‰
+    # ÇåÀí¾ÉµÄÇ°¶ËÎÄ¼ş£¨±£ÁôÓÃ»§×Ô¶¨ÒåÎÄ¼ş£©
     if [ -d "web/admin-spa/dist" ]; then
-        print_info "æ¸…ç†æ—§çš„å‰ç«¯æ–‡ä»¶..."
-        # åªåˆ é™¤å·²çŸ¥çš„å‰ç«¯æ–‡ä»¶ï¼Œä¿ç•™ç”¨æˆ·å¯èƒ½æ·»åŠ çš„è‡ªå®šä¹‰æ–‡ä»¶
+        print_info "ÇåÀí¾ÉµÄÇ°¶ËÎÄ¼ş..."
+        # Ö»É¾³ıÒÑÖªµÄÇ°¶ËÎÄ¼ş£¬±£ÁôÓÃ»§¿ÉÄÜÌí¼ÓµÄ×Ô¶¨ÒåÎÄ¼ş
         rm -rf web/admin-spa/dist/assets 2>/dev/null
         rm -f web/admin-spa/dist/index.html 2>/dev/null
         rm -f web/admin-spa/dist/favicon.ico 2>/dev/null
     fi
     
-    # ä» web-dist åˆ†æ”¯è·å–æ„å»ºå¥½çš„æ–‡ä»¶
-    if git ls-remote --heads origin "$web_dist_branch" | grep -q "$web_dist_branch"; then
-        print_info "ä» web-dist åˆ†æ”¯ä¸‹è½½æœ€æ–°å‰ç«¯æ–‡ä»¶..."
+    # ´Ó web-dist ·ÖÖ§»ñÈ¡¹¹½¨ºÃµÄÎÄ¼ş
+    if git ls-remote --heads origin web-dist | grep -q web-dist; then
+        print_info "´Ó web-dist ·ÖÖ§ÏÂÔØ×îĞÂÇ°¶ËÎÄ¼ş..."
         
-        # åˆ›å»ºä¸´æ—¶ç›®å½•ç”¨äº clone
+        # ´´½¨ÁÙÊ±Ä¿Â¼ÓÃÓÚ clone
         TEMP_CLONE_DIR=$(mktemp -d)
         
-        # æ·»åŠ é”™è¯¯å¤„ç†
+        # Ìí¼Ó´íÎó´¦Àí
         if [ ! -d "$TEMP_CLONE_DIR" ]; then
-            print_error "æ— æ³•åˆ›å»ºä¸´æ—¶ç›®å½•"
+            print_error "ÎŞ·¨´´½¨ÁÙÊ±Ä¿Â¼"
             return 1
         fi
         
-        # ä½¿ç”¨ sparse-checkout æ¥åªè·å–éœ€è¦çš„æ–‡ä»¶ï¼Œæ·»åŠ é‡è¯•æœºåˆ¶
+        # Ê¹ÓÃ sparse-checkout À´Ö»»ñÈ¡ĞèÒªµÄÎÄ¼ş£¬Ìí¼ÓÖØÊÔ»úÖÆ
         local clone_success=false
         for attempt in 1 2 3; do
-            print_info "å°è¯•ä¸‹è½½å‰ç«¯æ–‡ä»¶ (ç¬¬ $attempt æ¬¡)..."
+            print_info "³¢ÊÔÏÂÔØÇ°¶ËÎÄ¼ş (µÚ $attempt ´Î)..."
             
-            if git clone --depth 1 --branch "$web_dist_branch" --single-branch \
-                "$repo_url" \
+            if git clone --depth 1 --branch web-dist --single-branch \
+                https://github.com/Wei-Shaw/claude-relay-service.git \
                 "$TEMP_CLONE_DIR" 2>/dev/null; then
                 clone_success=true
                 break
             fi
             
-            # å¦‚æœ HTTPS å¤±è´¥ï¼Œå°è¯•ä½¿ç”¨å½“å‰ä»“åº“çš„ remote URL
+            # Èç¹û HTTPS Ê§°Ü£¬³¢ÊÔÊ¹ÓÃµ±Ç°²Ö¿âµÄ remote URL
             REPO_URL=$(git config --get remote.origin.url)
-            if git clone --depth 1 --branch "$web_dist_branch" --single-branch "$REPO_URL" "$TEMP_CLONE_DIR" 2>/dev/null; then
+            if git clone --depth 1 --branch web-dist --single-branch "$REPO_URL" "$TEMP_CLONE_DIR" 2>/dev/null; then
                 clone_success=true
                 break
             fi
             
             if [ $attempt -lt 3 ]; then
-                print_warning "ä¸‹è½½å¤±è´¥ï¼Œç­‰å¾… 2 ç§’åé‡è¯•..."
+                print_warning "ÏÂÔØÊ§°Ü£¬µÈ´ı 2 ÃëºóÖØÊÔ..."
                 sleep 2
             fi
         done
         
         if [ "$clone_success" = false ]; then
-            print_error "æ— æ³•ä¸‹è½½å‰ç«¯æ–‡ä»¶"
+            print_error "ÎŞ·¨ÏÂÔØÇ°¶ËÎÄ¼ş"
             rm -rf "$TEMP_CLONE_DIR"
             return 1
         fi
         
-        # å¤åˆ¶æ–‡ä»¶åˆ°ç›®æ ‡ç›®å½•ï¼ˆæ’é™¤ .git å’Œ README.mdï¼‰
+        # ¸´ÖÆÎÄ¼şµ½Ä¿±êÄ¿Â¼£¨ÅÅ³ı .git ºÍ README.md£©
         rsync -av --exclude='.git' --exclude='README.md' "$TEMP_CLONE_DIR/" web/admin-spa/dist/ 2>/dev/null || {
-            # å¦‚æœæ²¡æœ‰ rsyncï¼Œä½¿ç”¨ cp
+            # Èç¹ûÃ»ÓĞ rsync£¬Ê¹ÓÃ cp
             cp -r "$TEMP_CLONE_DIR"/* web/admin-spa/dist/ 2>/dev/null
             rm -rf web/admin-spa/dist/.git 2>/dev/null
             rm -f web/admin-spa/dist/README.md 2>/dev/null
         }
         
-        # æ¸…ç†ä¸´æ—¶ç›®å½•
+        # ÇåÀíÁÙÊ±Ä¿Â¼
         rm -rf "$TEMP_CLONE_DIR"
         
-        print_success "å‰ç«¯æ–‡ä»¶æ›´æ–°å®Œæˆ"
+        print_success "Ç°¶ËÎÄ¼ş¸üĞÂÍê³É"
     else
-        print_warning "web-dist åˆ†æ”¯ä¸å­˜åœ¨ï¼Œå°è¯•æœ¬åœ°æ„å»º..."
+        print_warning "web-dist ·ÖÖ§²»´æÔÚ£¬³¢ÊÔ±¾µØ¹¹½¨..."
         
-        # æ£€æŸ¥æ˜¯å¦æœ‰ Node.js å’Œ npm
+        # ¼ì²éÊÇ·ñÓĞ Node.js ºÍ npm
         if command_exists npm; then
-            # å›é€€åˆ°åŸå§‹æ„å»ºæ–¹å¼
+            # »ØÍËµ½Ô­Ê¼¹¹½¨·½Ê½
             if [ -f "web/admin-spa/package.json" ]; then
-                print_info "å¼€å§‹æœ¬åœ°æ„å»ºå‰ç«¯..."
+                print_info "¿ªÊ¼±¾µØ¹¹½¨Ç°¶Ë..."
                 cd web/admin-spa
                 npm install
                 npm run build
                 cd ../..
-                print_success "å‰ç«¯æœ¬åœ°æ„å»ºå®Œæˆ"
+                print_success "Ç°¶Ë±¾µØ¹¹½¨Íê³É"
             else
-                print_error "æ— æ³•æ‰¾åˆ°å‰ç«¯é¡¹ç›®æ–‡ä»¶"
+                print_error "ÎŞ·¨ÕÒµ½Ç°¶ËÏîÄ¿ÎÄ¼ş"
             fi
         else
-            print_error "æ— æ³•è·å–å‰ç«¯æ–‡ä»¶ï¼Œä¸”æœ¬åœ°ç¯å¢ƒä¸æ”¯æŒæ„å»º"
-            print_info "è¯·ç¡®ä¿ä»“åº“å·²æ­£ç¡®é…ç½® web-dist åˆ†æ”¯"
+            print_error "ÎŞ·¨»ñÈ¡Ç°¶ËÎÄ¼ş£¬ÇÒ±¾µØ»·¾³²»Ö§³Ö¹¹½¨"
+            print_info "ÇëÈ·±£²Ö¿âÒÑÕıÈ·ÅäÖÃ web-dist ·ÖÖ§"
         fi
     fi
     
-    # æ›´æ–°è½¯é“¾æ¥åˆ°æœ€æ–°ç‰ˆæœ¬
+    # ¸üĞÂÈíÁ´½Óµ½×îĞÂ°æ±¾
     create_symlink
 
-    # æŒä¹…åŒ–å®‰è£…è·¯å¾„ï¼Œä¾¿äºåç»­ update/status è‡ªåŠ¨è¯†åˆ«
+    # ³Ö¾Ã»¯°²×°Â·¾¶£¬±ãÓÚºóĞø update/status ×Ô¶¯Ê¶±ğ
     persist_install_path || true
     
-    # å¦‚æœä¹‹å‰åœ¨è¿è¡Œï¼Œåˆ™é‡æ–°å¯åŠ¨æœåŠ¡
+    # Èç¹ûÖ®Ç°ÔÚÔËĞĞ£¬ÔòÖØĞÂÆô¶¯·şÎñ
     if [ "$was_running" = true ]; then
-        print_info "é‡æ–°å¯åŠ¨æœåŠ¡..."
+        print_info "ÖØĞÂÆô¶¯·şÎñ..."
         start_service
     fi
     
-    print_success "æ›´æ–°å®Œæˆï¼"
+    print_success "¸üĞÂÍê³É£¡"
     
-    # æ˜¾ç¤ºæ›´æ–°æ‘˜è¦
+    # ÏÔÊ¾¸üĞÂÕªÒª
     echo ""
-    echo -e "${BLUE}=== æ›´æ–°æ‘˜è¦ ===${NC}"
+    echo -e "${BLUE}=== ¸üĞÂÕªÒª ===${NC}"
     
-    # æ˜¾ç¤ºç‰ˆæœ¬ä¿¡æ¯
+    # ÏÔÊ¾°æ±¾ĞÅÏ¢
     if [ -f "$APP_DIR/VERSION" ]; then
-        echo -e "å½“å‰ç‰ˆæœ¬: ${GREEN}$(cat "$APP_DIR/VERSION")${NC}"
+        echo -e "µ±Ç°°æ±¾: ${GREEN}$(cat "$APP_DIR/VERSION")${NC}"
     fi
     
-    # æ˜¾ç¤ºæœ€æ–°çš„æäº¤ä¿¡æ¯
+    # ÏÔÊ¾×îĞÂµÄÌá½»ĞÅÏ¢
     local latest_commit=$(git log -1 --oneline 2>/dev/null)
     if [ -n "$latest_commit" ]; then
-        echo -e "æœ€æ–°æäº¤: ${GREEN}$latest_commit${NC}"
+        echo -e "×îĞÂÌá½»: ${GREEN}$latest_commit${NC}"
     fi
     
-    # æ˜¾ç¤ºå¤‡ä»½ä¿¡æ¯
-    echo -e "\n${YELLOW}é…ç½®æ–‡ä»¶å¤‡ä»½ï¼š${NC}"
-    ls -la .env.backup.* 2>/dev/null | tail -3 || echo "  æ— å¤‡ä»½æ–‡ä»¶"
+    # ÏÔÊ¾±¸·İĞÅÏ¢
+    echo -e "\n${YELLOW}ÅäÖÃÎÄ¼ş±¸·İ£º${NC}"
+    ls -la .env.backup.* 2>/dev/null | tail -3 || echo "  ÎŞ±¸·İÎÄ¼ş"
     
-    # æé†’ç”¨æˆ·æ£€æŸ¥é…ç½®
-    echo -e "\n${YELLOW}æç¤ºï¼š${NC}"
-    echo "  - é…ç½®æ–‡ä»¶å·²è‡ªåŠ¨å¤‡ä»½"
-    echo "  - å¦‚æœ‰æœ¬åœ°ä¿®æ”¹å·²ä¿å­˜åˆ°å¤‡ä»½åˆ†æ”¯"
-    echo "  - å»ºè®®æ£€æŸ¥ .env å’Œ config/config.js é…ç½®"
+    # ÌáĞÑÓÃ»§¼ì²éÅäÖÃ
+    echo -e "\n${YELLOW}ÌáÊ¾£º${NC}"
+    echo "  - ÅäÖÃÎÄ¼şÒÑ×Ô¶¯±¸·İ"
+    echo "  - ÈçÓĞ±¾µØĞŞ¸ÄÒÑ±£´æµ½±¸·İ·ÖÖ§"
+    echo "  - ½¨Òé¼ì²é .env ºÍ config/config.js ÅäÖÃ"
     
     echo -e "\n${BLUE}==================${NC}"
 }
 
-# å¸è½½æœåŠ¡
+# Ğ¶ÔØ·şÎñ
 uninstall_service() {
     if [ -z "$INSTALL_DIR" ]; then
-        echo -n "è¯·è¾“å…¥å®‰è£…ç›®å½• (é»˜è®¤: $DEFAULT_INSTALL_DIR): "
+        echo -n "ÇëÊäÈë°²×°Ä¿Â¼ (Ä¬ÈÏ: $DEFAULT_INSTALL_DIR): "
         read input
         INSTALL_DIR=${input:-$DEFAULT_INSTALL_DIR}
         APP_DIR="$INSTALL_DIR/app"
     fi
     
     if [ ! -d "$INSTALL_DIR" ]; then
-        print_error "å®‰è£…ç›®å½•ä¸å­˜åœ¨"
+        print_error "°²×°Ä¿Â¼²»´æÔÚ"
         return 1
     fi
     
-    print_warning "å³å°†å¸è½½ Claude Relay Service"
-    echo -n "ç¡®å®šè¦å¸è½½å—ï¼Ÿ(y/N): "
+    print_warning "¼´½«Ğ¶ÔØ Claude Relay Service"
+    echo -n "È·¶¨ÒªĞ¶ÔØÂğ£¿(y/N): "
     read -n 1 confirm
     echo
     
@@ -946,11 +815,11 @@ uninstall_service() {
         return 0
     fi
     
-    # åœæ­¢æœåŠ¡
+    # Í£Ö¹·şÎñ
     stop_service
     
-    # å¤‡ä»½æ•°æ®
-    echo -n "æ˜¯å¦å¤‡ä»½æ•°æ®ï¼Ÿ(y/N): "
+    # ±¸·İÊı¾İ
+    echo -n "ÊÇ·ñ±¸·İÊı¾İ£¿(y/N): "
     read -n 1 backup
     echo
     
@@ -958,9 +827,9 @@ uninstall_service() {
         local backup_dir="$HOME/claude-relay-backup-$(date +%Y%m%d%H%M%S)"
         mkdir -p "$backup_dir"
         
-        # Redisä½¿ç”¨ç³»ç»Ÿé»˜è®¤ä½ç½®ï¼Œä¸éœ€è¦å¤‡ä»½
+        # RedisÊ¹ÓÃÏµÍ³Ä¬ÈÏÎ»ÖÃ£¬²»ĞèÒª±¸·İ
         
-        # å¤‡ä»½é…ç½®æ–‡ä»¶
+        # ±¸·İÅäÖÃÎÄ¼ş
         if [ -f "$APP_DIR/.env" ]; then
             cp "$APP_DIR/.env" "$backup_dir/"
         fi
@@ -968,48 +837,48 @@ uninstall_service() {
             cp "$APP_DIR/config/config.js" "$backup_dir/"
         fi
         
-        print_success "æ•°æ®å·²å¤‡ä»½åˆ°: $backup_dir"
+        print_success "Êı¾İÒÑ±¸·İµ½: $backup_dir"
     fi
     
-    # åˆ é™¤å®‰è£…ç›®å½•
+    # É¾³ı°²×°Ä¿Â¼
     rm -rf "$INSTALL_DIR"
     
-    print_success "å¸è½½å®Œæˆï¼"
+    print_success "Ğ¶ÔØÍê³É£¡"
 }
 
-# å¯åŠ¨æœåŠ¡
+# Æô¶¯·şÎñ
 start_service() {
     if ! check_installation; then
-        print_error "æœåŠ¡æœªå®‰è£…ï¼Œè¯·å…ˆè¿è¡Œ: $0 install"
+        print_error "·şÎñÎ´°²×°£¬ÇëÏÈÔËĞĞ: $0 install"
         return 1
     fi
     
-    print_info "å¯åŠ¨æœåŠ¡..."
+    print_info "Æô¶¯·şÎñ..."
     
     cd "$APP_DIR"
     
-    # æ£€æŸ¥æ˜¯å¦å·²è¿è¡Œ
+    # ¼ì²éÊÇ·ñÒÑÔËĞĞ
     if pgrep -f "node.*src/app.js" > /dev/null; then
-        print_warning "æœåŠ¡å·²åœ¨è¿è¡Œ"
+        print_warning "·şÎñÒÑÔÚÔËĞĞ"
         return 0
     fi
     
-    # ç¡®ä¿æ—¥å¿—ç›®å½•å­˜åœ¨
+    # È·±£ÈÕÖ¾Ä¿Â¼´æÔÚ
     mkdir -p "$APP_DIR/logs"
     
-    # æ£€æŸ¥pm2æ˜¯å¦å¯ç”¨å¹¶ä¸”ä¸æ˜¯ä»package.jsonè„šæœ¬è°ƒç”¨çš„
+    # ¼ì²épm2ÊÇ·ñ¿ÉÓÃ²¢ÇÒ²»ÊÇ´Ópackage.json½Å±¾µ÷ÓÃµÄ
     if command_exists pm2 && [ "$1" != "--no-pm2" ]; then
-        print_info "ä½¿ç”¨ pm2 å¯åŠ¨æœåŠ¡..."
-        # ç›´æ¥ä½¿ç”¨pm2å¯åŠ¨ï¼Œé¿å…å¾ªç¯è°ƒç”¨
+        print_info "Ê¹ÓÃ pm2 Æô¶¯·şÎñ..."
+        # Ö±½ÓÊ¹ÓÃpm2Æô¶¯£¬±ÜÃâÑ­»·µ÷ÓÃ
         pm2 start "$APP_DIR/src/app.js" --name "claude-relay" --log "$APP_DIR/logs/pm2.log" 2>/dev/null
         sleep 2
         
-        # æ£€æŸ¥æ˜¯å¦å¯åŠ¨æˆåŠŸ
+        # ¼ì²éÊÇ·ñÆô¶¯³É¹¦
         if pm2 list 2>/dev/null | grep -q "claude-relay"; then
-            print_success "æœåŠ¡å·²é€šè¿‡ pm2 å¯åŠ¨"
+            print_success "·şÎñÒÑÍ¨¹ı pm2 Æô¶¯"
             pm2 save 2>/dev/null || true
         else
-            print_warning "pm2 å¯åŠ¨å¤±è´¥ï¼Œå°è¯•ç›´æ¥å¯åŠ¨..."
+            print_warning "pm2 Æô¶¯Ê§°Ü£¬³¢ÊÔÖ±½ÓÆô¶¯..."
             start_service_direct
         fi
     else
@@ -1018,61 +887,61 @@ start_service() {
     
     sleep 2
     
-    # éªŒè¯æœåŠ¡æ˜¯å¦æˆåŠŸå¯åŠ¨
+    # ÑéÖ¤·şÎñÊÇ·ñ³É¹¦Æô¶¯
     if pgrep -f "node.*src/app.js" > /dev/null; then
         show_status
     else
-        print_error "æœåŠ¡å¯åŠ¨å¤±è´¥ï¼Œè¯·æŸ¥çœ‹æ—¥å¿—: $APP_DIR/logs/service.log"
+        print_error "·şÎñÆô¶¯Ê§°Ü£¬Çë²é¿´ÈÕÖ¾: $APP_DIR/logs/service.log"
         if [ -f "$APP_DIR/logs/service.log" ]; then
-            echo "æœ€è¿‘çš„é”™è¯¯æ—¥å¿—ï¼š"
+            echo "×î½üµÄ´íÎóÈÕÖ¾£º"
             tail -n 20 "$APP_DIR/logs/service.log"
         fi
         return 1
     fi
 }
 
-# ç›´æ¥å¯åŠ¨æœåŠ¡ï¼ˆä¸ä½¿ç”¨pm2ï¼‰
+# Ö±½ÓÆô¶¯·şÎñ£¨²»Ê¹ÓÃpm2£©
 start_service_direct() {
-    print_info "ä½¿ç”¨åå°è¿›ç¨‹å¯åŠ¨æœåŠ¡..."
+    print_info "Ê¹ÓÃºóÌ¨½ø³ÌÆô¶¯·şÎñ..."
     
-    # ä½¿ç”¨setsidåˆ›å»ºæ–°ä¼šè¯ï¼Œç¡®ä¿è¿›ç¨‹å®Œå…¨è„±ç¦»ç»ˆç«¯
+    # Ê¹ÓÃsetsid´´½¨ĞÂ»á»°£¬È·±£½ø³ÌÍêÈ«ÍÑÀëÖÕ¶Ë
     if command_exists setsid; then
-        # setsidæ–¹å¼ï¼ˆæ¨èï¼‰
+        # setsid·½Ê½£¨ÍÆ¼ö£©
         setsid nohup node "$APP_DIR/src/app.js" > "$APP_DIR/logs/service.log" 2>&1 < /dev/null &
         local pid=$!
         sleep 1
         
-        # è·å–å®é™…çš„å­è¿›ç¨‹PID
+        # »ñÈ¡Êµ¼ÊµÄ×Ó½ø³ÌPID
         local real_pid=$(pgrep -f "node.*src/app.js" | head -1)
         if [ -n "$real_pid" ]; then
             echo $real_pid > "$APP_DIR/.pid"
-            print_success "æœåŠ¡å·²åœ¨åå°å¯åŠ¨ (PID: $real_pid)"
+            print_success "·şÎñÒÑÔÚºóÌ¨Æô¶¯ (PID: $real_pid)"
         else
             echo $pid > "$APP_DIR/.pid"
-            print_success "æœåŠ¡å·²åœ¨åå°å¯åŠ¨ (PID: $pid)"
+            print_success "·şÎñÒÑÔÚºóÌ¨Æô¶¯ (PID: $pid)"
         fi
     else
-        # å¤‡ç”¨æ–¹å¼ï¼šä½¿ç”¨nohupå’Œdisown
+        # ±¸ÓÃ·½Ê½£ºÊ¹ÓÃnohupºÍdisown
         nohup node "$APP_DIR/src/app.js" > "$APP_DIR/logs/service.log" 2>&1 < /dev/null &
         local pid=$!
         disown $pid 2>/dev/null || true
         echo $pid > "$APP_DIR/.pid"
-        print_success "æœåŠ¡å·²åœ¨åå°å¯åŠ¨ (PID: $pid)"
+        print_success "·şÎñÒÑÔÚºóÌ¨Æô¶¯ (PID: $pid)"
     fi
 }
 
-# åœæ­¢æœåŠ¡
+# Í£Ö¹·şÎñ
 stop_service() {
-    print_info "åœæ­¢æœåŠ¡..."
+    print_info "Í£Ö¹·şÎñ..."
     
-    # å°è¯•ä½¿ç”¨pm2åœæ­¢
+    # ³¢ÊÔÊ¹ÓÃpm2Í£Ö¹
     if command_exists pm2 && [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ]; then
         cd "$APP_DIR" 2>/dev/null
         pm2 stop claude-relay 2>/dev/null || true
         pm2 delete claude-relay 2>/dev/null || true
     fi
     
-    # ä½¿ç”¨PIDæ–‡ä»¶åœæ­¢
+    # Ê¹ÓÃPIDÎÄ¼şÍ£Ö¹
     if [ -f "$APP_DIR/.pid" ]; then
         local pid=$(cat "$APP_DIR/.pid")
         if kill -0 $pid 2>/dev/null; then
@@ -1081,14 +950,14 @@ stop_service() {
         fi
     fi
     
-    # å¼ºåˆ¶åœæ­¢æ‰€æœ‰ç›¸å…³è¿›ç¨‹
+    # Ç¿ÖÆÍ£Ö¹ËùÓĞÏà¹Ø½ø³Ì
     pkill -f "node.*src/app.js" 2>/dev/null || true
     
-    # ç­‰å¾…è¿›ç¨‹å®Œå…¨é€€å‡ºï¼ˆæœ€å¤šç­‰å¾…10ç§’ï¼‰
+    # µÈ´ı½ø³ÌÍêÈ«ÍË³ö£¨×î¶àµÈ´ı10Ãë£©
     local wait_count=0
     while pgrep -f "node.*src/app.js" > /dev/null; do
         if [ $wait_count -ge 10 ]; then
-            print_warning "è¿›ç¨‹åœæ­¢è¶…æ—¶ï¼Œå°è¯•å¼ºåˆ¶ç»ˆæ­¢..."
+            print_warning "½ø³ÌÍ£Ö¹³¬Ê±£¬³¢ÊÔÇ¿ÖÆÖÕÖ¹..."
             pkill -9 -f "node.*src/app.js" 2>/dev/null || true
             sleep 1
             break
@@ -1097,34 +966,34 @@ stop_service() {
         wait_count=$((wait_count + 1))
     done
     
-    # æœ€ç»ˆç¡®è®¤è¿›ç¨‹å·²åœæ­¢
+    # ×îÖÕÈ·ÈÏ½ø³ÌÒÑÍ£Ö¹
     if pgrep -f "node.*src/app.js" > /dev/null; then
-        print_error "æ— æ³•å®Œå…¨åœæ­¢æœåŠ¡è¿›ç¨‹"
+        print_error "ÎŞ·¨ÍêÈ«Í£Ö¹·şÎñ½ø³Ì"
         return 1
     fi
     
-    print_success "æœåŠ¡å·²åœæ­¢"
+    print_success "·şÎñÒÑÍ£Ö¹"
 }
 
-# é‡å¯æœåŠ¡
+# ÖØÆô·şÎñ
 restart_service() {
-    print_info "é‡å¯æœåŠ¡..."
+    print_info "ÖØÆô·şÎñ..."
     
-    # åœæ­¢æœåŠ¡å¹¶æ£€æŸ¥ç»“æœ
+    # Í£Ö¹·şÎñ²¢¼ì²é½á¹û
     if ! stop_service; then
-        print_error "åœæ­¢æœåŠ¡å¤±è´¥"
+        print_error "Í£Ö¹·şÎñÊ§°Ü"
         return 1
     fi
     
-    # çŸ­æš‚ç­‰å¾…ï¼Œç¡®ä¿ç«¯å£é‡Šæ”¾
+    # ¶ÌÔİµÈ´ı£¬È·±£¶Ë¿ÚÊÍ·Å
     sleep 1
     
-    # å¯åŠ¨æœåŠ¡ï¼Œå¦‚æœå¤±è´¥åˆ™é‡è¯•
+    # Æô¶¯·şÎñ£¬Èç¹ûÊ§°ÜÔòÖØÊÔ
     local retry_count=0
     while [ $retry_count -lt 3 ]; do
-        # æ¸…é™¤å¯èƒ½çš„åƒµå°¸è¿›ç¨‹æ£€æµ‹
+        # Çå³ı¿ÉÄÜµÄ½©Ê¬½ø³Ì¼ì²â
         if ! pgrep -f "node.*src/app.js" > /dev/null; then
-            # è¿›ç¨‹ç¡®å®å·²åœæ­¢ï¼Œå¯ä»¥å¯åŠ¨
+            # ½ø³ÌÈ·ÊµÒÑÍ£Ö¹£¬¿ÉÒÔÆô¶¯
             if start_service; then
                 return 0
             fi
@@ -1132,83 +1001,76 @@ restart_service() {
         
         retry_count=$((retry_count + 1))
         if [ $retry_count -lt 3 ]; then
-            print_warning "å¯åŠ¨å¤±è´¥ï¼Œç­‰å¾…2ç§’åé‡è¯•ï¼ˆç¬¬ $retry_count æ¬¡ï¼‰..."
+            print_warning "Æô¶¯Ê§°Ü£¬µÈ´ı2ÃëºóÖØÊÔ£¨µÚ $retry_count ´Î£©..."
             sleep 2
         fi
     done
     
-    print_error "é‡å¯æœåŠ¡å¤±è´¥"
+    print_error "ÖØÆô·şÎñÊ§°Ü"
     return 1
 }
 
-# æ›´æ–°æ¨¡å‹ä»·æ ¼
+# ¸üĞÂÄ£ĞÍ¼Û¸ñ
 update_model_pricing() {
     if ! check_installation; then
-        print_error "æœåŠ¡æœªå®‰è£…ï¼Œè¯·å…ˆè¿è¡Œ: $0 install"
+        print_error "·şÎñÎ´°²×°£¬ÇëÏÈÔËĞĞ: $0 install"
         return 1
     fi
     
-    print_info "æ›´æ–°æ¨¡å‹ä»·æ ¼æ•°æ®..."
+    print_info "¸üĞÂÄ£ĞÍ¼Û¸ñÊı¾İ..."
     
     cd "$APP_DIR"
     
-    # è¿è¡Œæ›´æ–°è„šæœ¬
+    # ÔËĞĞ¸üĞÂ½Å±¾
     if npm run update:pricing; then
-        print_success "æ¨¡å‹ä»·æ ¼æ•°æ®æ›´æ–°å®Œæˆ"
+        print_success "Ä£ĞÍ¼Û¸ñÊı¾İ¸üĞÂÍê³É"
         
-        # æ˜¾ç¤ºæ›´æ–°åçš„ä¿¡æ¯
+        # ÏÔÊ¾¸üĞÂºóµÄĞÅÏ¢
         if [ -f "data/model_pricing.json" ]; then
             local model_count=$(grep -o '"[^"]*"\s*:' data/model_pricing.json | wc -l)
             local file_size=$(du -h data/model_pricing.json | cut -f1)
-            echo -e "\næ›´æ–°ä¿¡æ¯:"
-            echo -e "  æ¨¡å‹æ•°é‡: ${GREEN}$model_count${NC}"
-            echo -e "  æ–‡ä»¶å¤§å°: ${GREEN}$file_size${NC}"
-            echo -e "  æ–‡ä»¶ä½ç½®: $APP_DIR/data/model_pricing.json"
+            echo -e "\n¸üĞÂĞÅÏ¢:"
+            echo -e "  Ä£ĞÍÊıÁ¿: ${GREEN}$model_count${NC}"
+            echo -e "  ÎÄ¼ş´óĞ¡: ${GREEN}$file_size${NC}"
+            echo -e "  ÎÄ¼şÎ»ÖÃ: $APP_DIR/data/model_pricing.json"
         fi
     else
-        print_error "æ¨¡å‹ä»·æ ¼æ•°æ®æ›´æ–°å¤±è´¥"
+        print_error "Ä£ĞÍ¼Û¸ñÊı¾İ¸üĞÂÊ§°Ü"
         return 1
     fi
 }
 
-# åˆ‡æ¢åˆ†æ”¯
+# ÇĞ»»·ÖÖ§
 switch_branch() {
     if ! check_installation; then
-        print_error "æœåŠ¡æœªå®‰è£…ï¼Œè¯·å…ˆè¿è¡Œ: $0 install"
+        print_error "·şÎñÎ´°²×°£¬ÇëÏÈÔËĞĞ: $0 install"
         return 1
     fi
     
     cd "$APP_DIR"
-
-    local repo_url
-    repo_url="$(get_repo_url)"
-    local web_dist_branch
-    web_dist_branch="$(get_web_dist_branch)"
-
-    ensure_origin_remote || print_warning "æ— æ³•åŒæ­¥ origin è¿œç¨‹åœ°å€ï¼Œå°†ç»§ç»­å°è¯•ä½¿ç”¨å½“å‰ origin"
     
-    # è·å–å½“å‰åˆ†æ”¯
+    # »ñÈ¡µ±Ç°·ÖÖ§
     local current_branch=$(git branch --show-current 2>/dev/null)
     if [ -z "$current_branch" ]; then
-        print_error "æ— æ³•è·å–å½“å‰åˆ†æ”¯ä¿¡æ¯"
+        print_error "ÎŞ·¨»ñÈ¡µ±Ç°·ÖÖ§ĞÅÏ¢"
         return 1
     fi
     
-    print_info "å½“å‰åˆ†æ”¯: ${GREEN}$current_branch${NC}"
+    print_info "µ±Ç°·ÖÖ§: ${GREEN}$current_branch${NC}"
     
-    # è·å–æ‰€æœ‰è¿œç¨‹åˆ†æ”¯
-    print_info "è·å–è¿œç¨‹åˆ†æ”¯åˆ—è¡¨..."
+    # »ñÈ¡ËùÓĞÔ¶³Ì·ÖÖ§
+    print_info "»ñÈ¡Ô¶³Ì·ÖÖ§ÁĞ±í..."
     git fetch origin --prune >/dev/null 2>&1
     
-    # æ˜¾ç¤ºå¯ç”¨åˆ†æ”¯
-    echo -e "\n${YELLOW}å¯ç”¨åˆ†æ”¯ï¼š${NC}"
+    # ÏÔÊ¾¿ÉÓÃ·ÖÖ§
+    echo -e "\n${YELLOW}¿ÉÓÃ·ÖÖ§£º${NC}"
     local branches=$(git branch -r | grep -v HEAD | sed 's/origin\///' | sed 's/^ *//')
     local branch_array=()
     local i=1
     
     while IFS= read -r branch; do
         if [ "$branch" = "$current_branch" ]; then
-            echo -e "  $i) $branch ${GREEN}(å½“å‰)${NC}"
+            echo -e "  $i) $branch ${GREEN}(µ±Ç°)${NC}"
         else
             echo "  $i) $branch"
         fi
@@ -1217,265 +1079,265 @@ switch_branch() {
     done <<< "$branches"
     
     echo ""
-    echo -n "è¯·é€‰æ‹©è¦åˆ‡æ¢çš„åˆ†æ”¯ (è¾“å…¥ç¼–å·æˆ–åˆ†æ”¯åï¼Œ0 å–æ¶ˆ): "
+    echo -n "ÇëÑ¡ÔñÒªÇĞ»»µÄ·ÖÖ§ (ÊäÈë±àºÅ»ò·ÖÖ§Ãû£¬0 È¡Ïû): "
     read branch_choice
     
-    # å¤„ç†ç”¨æˆ·è¾“å…¥
+    # ´¦ÀíÓÃ»§ÊäÈë
     local target_branch=""
     if [ "$branch_choice" = "0" ]; then
-        print_info "å·²å–æ¶ˆåˆ‡æ¢"
+        print_info "ÒÑÈ¡ÏûÇĞ»»"
         return 0
     elif [[ "$branch_choice" =~ ^[0-9]+$ ]]; then
-        # ç”¨æˆ·è¾“å…¥çš„æ˜¯ç¼–å·
+        # ÓÃ»§ÊäÈëµÄÊÇ±àºÅ
         local index=$((branch_choice - 1))
         if [ $index -ge 0 ] && [ $index -lt ${#branch_array[@]} ]; then
             target_branch="${branch_array[$index]}"
         else
-            print_error "æ— æ•ˆçš„ç¼–å·"
+            print_error "ÎŞĞ§µÄ±àºÅ"
             return 1
         fi
     else
-        # ç”¨æˆ·è¾“å…¥çš„æ˜¯åˆ†æ”¯å
+        # ÓÃ»§ÊäÈëµÄÊÇ·ÖÖ§Ãû
         target_branch="$branch_choice"
-        # éªŒè¯åˆ†æ”¯æ˜¯å¦å­˜åœ¨
+        # ÑéÖ¤·ÖÖ§ÊÇ·ñ´æÔÚ
         if ! echo "$branches" | grep -q "^$target_branch$"; then
-            print_error "åˆ†æ”¯ '$target_branch' ä¸å­˜åœ¨"
+            print_error "·ÖÖ§ '$target_branch' ²»´æÔÚ"
             return 1
         fi
     fi
     
-    # å¦‚æœæ˜¯åŒä¸€ä¸ªåˆ†æ”¯ï¼Œæ— éœ€åˆ‡æ¢
+    # Èç¹ûÊÇÍ¬Ò»¸ö·ÖÖ§£¬ÎŞĞèÇĞ»»
     if [ "$target_branch" = "$current_branch" ]; then
-        print_info "å·²ç»åœ¨åˆ†æ”¯ $target_branch ä¸Š"
+        print_info "ÒÑ¾­ÔÚ·ÖÖ§ $target_branch ÉÏ"
         return 0
     fi
     
-    print_info "å‡†å¤‡åˆ‡æ¢åˆ°åˆ†æ”¯: ${GREEN}$target_branch${NC}"
+    print_info "×¼±¸ÇĞ»»µ½·ÖÖ§: ${GREEN}$target_branch${NC}"
     
-    # ä¿å­˜å½“å‰è¿è¡ŒçŠ¶æ€
+    # ±£´æµ±Ç°ÔËĞĞ×´Ì¬
     local was_running=false
     if pgrep -f "node.*src/app.js" > /dev/null; then
         was_running=true
-        print_info "æ£€æµ‹åˆ°æœåŠ¡æ­£åœ¨è¿è¡Œï¼Œå°†åœ¨åˆ‡æ¢åè‡ªåŠ¨é‡å¯..."
+        print_info "¼ì²âµ½·şÎñÕıÔÚÔËĞĞ£¬½«ÔÚÇĞ»»ºó×Ô¶¯ÖØÆô..."
         stop_service
     fi
     
-    # å¤„ç†æœ¬åœ°ä¿®æ”¹ï¼ˆä¸»è¦æ˜¯æƒé™å˜æ›´å¯¼è‡´çš„ï¼‰
-    print_info "æ£€æŸ¥æœ¬åœ°ä¿®æ”¹..."
+    # ´¦Àí±¾µØĞŞ¸Ä£¨Ö÷ÒªÊÇÈ¨ÏŞ±ä¸üµ¼ÖÂµÄ£©
+    print_info "¼ì²é±¾µØĞŞ¸Ä..."
     
-    # å…ˆé‡ç½®æ‰€æœ‰æƒé™ç›¸å…³çš„ä¿®æ”¹ï¼ˆç‰¹åˆ«æ˜¯manage.shçš„æƒé™ï¼‰
+    # ÏÈÖØÖÃËùÓĞÈ¨ÏŞÏà¹ØµÄĞŞ¸Ä£¨ÌØ±ğÊÇmanage.shµÄÈ¨ÏŞ£©
     git status --porcelain | while read -r line; do
         local file=$(echo "$line" | awk '{print $2}')
         if [ -n "$file" ]; then
-            # æ£€æŸ¥æ˜¯å¦åªæ˜¯æƒé™å˜æ›´
+            # ¼ì²éÊÇ·ñÖ»ÊÇÈ¨ÏŞ±ä¸ü
             if git diff --summary "$file" 2>/dev/null | grep -q "mode change"; then
-                print_info "é‡ç½®æ–‡ä»¶æƒé™å˜æ›´: $file"
+                print_info "ÖØÖÃÎÄ¼şÈ¨ÏŞ±ä¸ü: $file"
                 git checkout HEAD -- "$file" 2>/dev/null || true
             fi
         fi
     done
     
-    # æ£€æŸ¥æ˜¯å¦è¿˜æœ‰å…¶ä»–å®è´¨æ€§ä¿®æ”¹
+    # ¼ì²éÊÇ·ñ»¹ÓĞÆäËûÊµÖÊĞÔĞŞ¸Ä
     if git status --porcelain | grep -v "^??" | grep -q .; then
-        print_warning "æ£€æµ‹åˆ°æœ¬åœ°æ–‡ä»¶ä¿®æ”¹ï¼š"
+        print_warning "¼ì²âµ½±¾µØÎÄ¼şĞŞ¸Ä£º"
         git status --short | grep -v "^??"
         echo ""
-        echo -n "æ˜¯å¦è¦ä¿å­˜è¿™äº›ä¿®æ”¹ï¼Ÿ(y/N): "
+        echo -n "ÊÇ·ñÒª±£´æÕâĞ©ĞŞ¸Ä£¿(y/N): "
         read -n 1 save_changes
         echo
         
         if [[ "$save_changes" =~ ^[Yy]$ ]]; then
-            # æš‚å­˜ä¿®æ”¹
-            print_info "æš‚å­˜æœ¬åœ°ä¿®æ”¹..."
+            # Ôİ´æĞŞ¸Ä
+            print_info "Ôİ´æ±¾µØĞŞ¸Ä..."
             git stash push -m "Branch switch from $current_branch to $target_branch $(date +%Y-%m-%d)" >/dev/null 2>&1
         else
-            # ä¸¢å¼ƒä¿®æ”¹
-            print_info "ä¸¢å¼ƒæœ¬åœ°ä¿®æ”¹..."
+            # ¶ªÆúĞŞ¸Ä
+            print_info "¶ªÆú±¾µØĞŞ¸Ä..."
             git reset --hard HEAD >/dev/null 2>&1
         fi
     fi
     
-    # åˆ‡æ¢åˆ†æ”¯
-    print_info "åˆ‡æ¢åˆ†æ”¯..."
+    # ÇĞ»»·ÖÖ§
+    print_info "ÇĞ»»·ÖÖ§..."
     
-    # æ£€æŸ¥æœ¬åœ°æ˜¯å¦å·²æœ‰è¯¥åˆ†æ”¯
+    # ¼ì²é±¾µØÊÇ·ñÒÑÓĞ¸Ã·ÖÖ§
     if git show-ref --verify --quiet "refs/heads/$target_branch"; then
-        # æœ¬åœ°å·²æœ‰åˆ†æ”¯ï¼Œåˆ‡æ¢å¹¶æ›´æ–°
+        # ±¾µØÒÑÓĞ·ÖÖ§£¬ÇĞ»»²¢¸üĞÂ
         if ! git checkout "$target_branch" 2>/dev/null; then
-            print_error "åˆ‡æ¢åˆ†æ”¯å¤±è´¥"
+            print_error "ÇĞ»»·ÖÖ§Ê§°Ü"
             return 1
         fi
         
-        # æ›´æ–°åˆ°æœ€æ–°
-        print_info "æ›´æ–°åˆ°è¿œç¨‹æœ€æ–°ç‰ˆæœ¬..."
+        # ¸üĞÂµ½×îĞÂ
+        print_info "¸üĞÂµ½Ô¶³Ì×îĞÂ°æ±¾..."
         git pull origin "$target_branch" --rebase 2>/dev/null || {
-            # å¦‚æœrebaseå¤±è´¥ï¼Œä½¿ç”¨reset
-            print_warning "æ›´æ–°å¤±è´¥ï¼Œå¼ºåˆ¶åŒæ­¥åˆ°è¿œç¨‹ç‰ˆæœ¬..."
+            # Èç¹ûrebaseÊ§°Ü£¬Ê¹ÓÃreset
+            print_warning "¸üĞÂÊ§°Ü£¬Ç¿ÖÆÍ¬²½µ½Ô¶³Ì°æ±¾..."
             git fetch origin "$target_branch"
             git reset --hard "origin/$target_branch"
         }
     else
-        # åˆ›å»ºå¹¶åˆ‡æ¢åˆ°æ–°åˆ†æ”¯
+        # ´´½¨²¢ÇĞ»»µ½ĞÂ·ÖÖ§
         if ! git checkout -b "$target_branch" "origin/$target_branch" 2>/dev/null; then
-            print_error "åˆ›å»ºå¹¶åˆ‡æ¢åˆ†æ”¯å¤±è´¥"
+            print_error "´´½¨²¢ÇĞ»»·ÖÖ§Ê§°Ü"
             return 1
         fi
     fi
     
-    print_success "å·²åˆ‡æ¢åˆ°åˆ†æ”¯: $target_branch"
+    print_success "ÒÑÇĞ»»µ½·ÖÖ§: $target_branch"
     
-    # ç¡®ä¿è„šæœ¬æœ‰æ‰§è¡Œæƒé™ï¼ˆåˆ‡æ¢åˆ†æ”¯åå¿…é¡»æ‰§è¡Œï¼‰
+    # È·±£½Å±¾ÓĞÖ´ĞĞÈ¨ÏŞ£¨ÇĞ»»·ÖÖ§ºó±ØĞëÖ´ĞĞ£©
     if [ -f "$APP_DIR/scripts/manage.sh" ]; then
         chmod +x "$APP_DIR/scripts/manage.sh"
-        print_info "å·²è®¾ç½®è„šæœ¬æ‰§è¡Œæƒé™"
+        print_info "ÒÑÉèÖÃ½Å±¾Ö´ĞĞÈ¨ÏŞ"
     fi
     
-    # æ›´æ–°ä¾èµ–ï¼ˆå¦‚æœpackage.jsonæœ‰å˜åŒ–ï¼‰
+    # ¸üĞÂÒÀÀµ£¨Èç¹ûpackage.jsonÓĞ±ä»¯£©
     if git diff "$current_branch..$target_branch" --name-only | grep -q "package.json"; then
-        print_info "æ£€æµ‹åˆ° package.json å˜åŒ–ï¼Œæ›´æ–°ä¾èµ–..."
+        print_info "¼ì²âµ½ package.json ±ä»¯£¬¸üĞÂÒÀÀµ..."
         npm install
     fi
     
-    # æ›´æ–°å‰ç«¯æ–‡ä»¶ï¼ˆå¦‚æœåˆ‡æ¢åˆ°ä¸åŒç‰ˆæœ¬ï¼‰
+    # ¸üĞÂÇ°¶ËÎÄ¼ş£¨Èç¹ûÇĞ»»µ½²»Í¬°æ±¾£©
     if [ "$target_branch" != "$current_branch" ]; then
-        print_info "æ›´æ–°å‰ç«¯æ–‡ä»¶..."
+        print_info "¸üĞÂÇ°¶ËÎÄ¼ş..."
         
-        # åˆ›å»ºç›®æ ‡ç›®å½•
+        # ´´½¨Ä¿±êÄ¿Â¼
         mkdir -p web/admin-spa/dist
         
-        # æ¸…ç†æ—§çš„å‰ç«¯æ–‡ä»¶
+        # ÇåÀí¾ÉµÄÇ°¶ËÎÄ¼ş
         if [ -d "web/admin-spa/dist" ]; then
             rm -rf web/admin-spa/dist/* 2>/dev/null || true
         fi
         
-        # å°è¯•ä»å¯¹åº”çš„ web-dist åˆ†æ”¯è·å–å‰ç«¯æ–‡ä»¶
+        # ³¢ÊÔ´Ó¶ÔÓ¦µÄ web-dist ·ÖÖ§»ñÈ¡Ç°¶ËÎÄ¼ş
         if git ls-remote --heads origin "web-dist-$target_branch" | grep -q "web-dist-$target_branch"; then
-            print_info "ä» web-dist-$target_branch åˆ†æ”¯ä¸‹è½½å‰ç«¯æ–‡ä»¶..."
+            print_info "´Ó web-dist-$target_branch ·ÖÖ§ÏÂÔØÇ°¶ËÎÄ¼ş..."
             local web_branch="web-dist-$target_branch"
-        elif git ls-remote --heads origin "$web_dist_branch" | grep -q "$web_dist_branch"; then
-            print_info "ä» web-dist åˆ†æ”¯ä¸‹è½½å‰ç«¯æ–‡ä»¶..."
-            local web_branch="$web_dist_branch"
+        elif git ls-remote --heads origin web-dist | grep -q web-dist; then
+            print_info "´Ó web-dist ·ÖÖ§ÏÂÔØÇ°¶ËÎÄ¼ş..."
+            local web_branch="web-dist"
         else
-            print_warning "æœªæ‰¾åˆ°é¢„æ„å»ºçš„å‰ç«¯æ–‡ä»¶"
+            print_warning "Î´ÕÒµ½Ô¤¹¹½¨µÄÇ°¶ËÎÄ¼ş"
             web_branch=""
         fi
         
         if [ -n "$web_branch" ]; then
-            # åˆ›å»ºä¸´æ—¶ç›®å½•ç”¨äº clone
+            # ´´½¨ÁÙÊ±Ä¿Â¼ÓÃÓÚ clone
             TEMP_CLONE_DIR=$(mktemp -d)
             
-            # ä¸‹è½½å‰ç«¯æ–‡ä»¶
+            # ÏÂÔØÇ°¶ËÎÄ¼ş
             if git clone --depth 1 --branch "$web_branch" --single-branch \
-                "$repo_url" \
+                https://github.com/Wei-Shaw/claude-relay-service.git \
                 "$TEMP_CLONE_DIR" 2>/dev/null; then
                 
-                # å¤åˆ¶æ–‡ä»¶åˆ°ç›®æ ‡ç›®å½•
+                # ¸´ÖÆÎÄ¼şµ½Ä¿±êÄ¿Â¼
                 rsync -av --exclude='.git' --exclude='README.md' "$TEMP_CLONE_DIR/" web/admin-spa/dist/ 2>/dev/null || {
                     cp -r "$TEMP_CLONE_DIR"/* web/admin-spa/dist/ 2>/dev/null
                     rm -rf web/admin-spa/dist/.git 2>/dev/null
                     rm -f web/admin-spa/dist/README.md 2>/dev/null
                 }
                 
-                print_success "å‰ç«¯æ–‡ä»¶æ›´æ–°å®Œæˆ"
+                print_success "Ç°¶ËÎÄ¼ş¸üĞÂÍê³É"
             else
-                print_warning "ä¸‹è½½å‰ç«¯æ–‡ä»¶å¤±è´¥"
+                print_warning "ÏÂÔØÇ°¶ËÎÄ¼şÊ§°Ü"
             fi
             
-            # æ¸…ç†ä¸´æ—¶ç›®å½•
+            # ÇåÀíÁÙÊ±Ä¿Â¼
             rm -rf "$TEMP_CLONE_DIR"
         fi
     fi
     
-    # æ£€æŸ¥æ˜¯å¦æœ‰æš‚å­˜çš„ä¿®æ”¹å¯ä»¥æ¢å¤
+    # ¼ì²éÊÇ·ñÓĞÔİ´æµÄĞŞ¸Ä¿ÉÒÔ»Ö¸´
     if [[ "$save_changes" =~ ^[Yy]$ ]] && git stash list | grep -q "Branch switch from $current_branch to $target_branch"; then
         echo ""
-        echo -n "æ˜¯å¦è¦æ¢å¤ä¹‹å‰æš‚å­˜çš„ä¿®æ”¹ï¼Ÿ(y/N): "
+        echo -n "ÊÇ·ñÒª»Ö¸´Ö®Ç°Ôİ´æµÄĞŞ¸Ä£¿(y/N): "
         read -n 1 restore_stash
         echo
         
         if [[ "$restore_stash" =~ ^[Yy]$ ]]; then
-            print_info "æ¢å¤æš‚å­˜çš„ä¿®æ”¹..."
-            git stash pop >/dev/null 2>&1 || print_warning "æ¢å¤ä¿®æ”¹æ—¶å‡ºç°å†²çªï¼Œè¯·æ‰‹åŠ¨è§£å†³"
+            print_info "»Ö¸´Ôİ´æµÄĞŞ¸Ä..."
+            git stash pop >/dev/null 2>&1 || print_warning "»Ö¸´ĞŞ¸ÄÊ±³öÏÖ³åÍ»£¬ÇëÊÖ¶¯½â¾ö"
         fi
     fi
     
-    # å¦‚æœä¹‹å‰åœ¨è¿è¡Œï¼Œåˆ™é‡æ–°å¯åŠ¨æœåŠ¡
+    # Èç¹ûÖ®Ç°ÔÚÔËĞĞ£¬ÔòÖØĞÂÆô¶¯·şÎñ
     if [ "$was_running" = true ]; then
-        print_info "é‡æ–°å¯åŠ¨æœåŠ¡..."
+        print_info "ÖØĞÂÆô¶¯·şÎñ..."
         start_service
     fi
     
-    # æ˜¾ç¤ºåˆ‡æ¢åçš„ä¿¡æ¯
+    # ÏÔÊ¾ÇĞ»»ºóµÄĞÅÏ¢
     echo ""
-    echo -e "${GREEN}=== åˆ†æ”¯åˆ‡æ¢å®Œæˆ ===${NC}"
-    echo -e "å½“å‰åˆ†æ”¯: ${GREEN}$target_branch${NC}"
+    echo -e "${GREEN}=== ·ÖÖ§ÇĞ»»Íê³É ===${NC}"
+    echo -e "µ±Ç°·ÖÖ§: ${GREEN}$target_branch${NC}"
     
-    # æ˜¾ç¤ºç‰ˆæœ¬ä¿¡æ¯
+    # ÏÔÊ¾°æ±¾ĞÅÏ¢
     if [ -f "$APP_DIR/VERSION" ]; then
-        echo -e "å½“å‰ç‰ˆæœ¬: ${GREEN}$(cat "$APP_DIR/VERSION")${NC}"
+        echo -e "µ±Ç°°æ±¾: ${GREEN}$(cat "$APP_DIR/VERSION")${NC}"
     fi
     
-    # æ˜¾ç¤ºæœ€æ–°æäº¤
+    # ÏÔÊ¾×îĞÂÌá½»
     local latest_commit=$(git log -1 --oneline 2>/dev/null)
     if [ -n "$latest_commit" ]; then
-        echo -e "æœ€æ–°æäº¤: ${GREEN}$latest_commit${NC}"
+        echo -e "×îĞÂÌá½»: ${GREEN}$latest_commit${NC}"
     fi
     
     echo ""
-    print_info "æç¤ºï¼šå¦‚é‡åˆ°é—®é¢˜ï¼Œå¯ä»¥è¿è¡Œ 'crs update' å¼ºåˆ¶æ›´æ–°åˆ°æœ€æ–°ç‰ˆæœ¬"
+    print_info "ÌáÊ¾£ºÈçÓöµ½ÎÊÌâ£¬¿ÉÒÔÔËĞĞ 'crs update' Ç¿ÖÆ¸üĞÂµ½×îĞÂ°æ±¾"
 }
 
-# æ˜¾ç¤ºçŠ¶æ€
+# ÏÔÊ¾×´Ì¬
 show_status() {
-    echo -e "\n${BLUE}=== Claude Relay Service çŠ¶æ€ ===${NC}"
+    echo -e "\n${BLUE}=== Claude Relay Service ×´Ì¬ ===${NC}"
     
-    # è·å–å®é™…ç«¯å£
+    # »ñÈ¡Êµ¼Ê¶Ë¿Ú
     local actual_port="$APP_PORT"
     if [ -z "$actual_port" ] && [ -f "$APP_DIR/.env" ]; then
         actual_port=$(grep "^PORT=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2)
     fi
     actual_port=${actual_port:-3000}
     
-    # æ£€æŸ¥è¿›ç¨‹
+    # ¼ì²é½ø³Ì
     local pid=$(pgrep -f "node.*src/app.js" | head -1)
     if [ -n "$pid" ]; then
-        echo -e "æœåŠ¡çŠ¶æ€: ${GREEN}è¿è¡Œä¸­${NC}"
-        echo "è¿›ç¨‹ PID: $pid"
+        echo -e "·şÎñ×´Ì¬: ${GREEN}ÔËĞĞÖĞ${NC}"
+        echo "½ø³Ì PID: $pid"
         
-        # æ˜¾ç¤ºè¿›ç¨‹ä¿¡æ¯
+        # ÏÔÊ¾½ø³ÌĞÅÏ¢
         if command_exists ps; then
             local proc_info=$(ps -p $pid -o comm,etime,rss --no-headers 2>/dev/null)
             if [ -n "$proc_info" ]; then
-                echo "è¿›ç¨‹ä¿¡æ¯: $proc_info"
+                echo "½ø³ÌĞÅÏ¢: $proc_info"
             fi
         fi
-        echo "æœåŠ¡ç«¯å£: $actual_port"
+        echo "·şÎñ¶Ë¿Ú: $actual_port"
         
-        # è·å–å…¬ç½‘IP
+        # »ñÈ¡¹«ÍøIP
         local public_ip=$(get_public_ip)
         
-        # æ˜¾ç¤ºè®¿é—®åœ°å€
-        echo -e "\nè®¿é—®åœ°å€:"
-        echo -e "  æœ¬åœ° Web: ${GREEN}http://localhost:$actual_port/web${NC}"
-        echo -e "  æœ¬åœ° API: ${GREEN}http://localhost:$actual_port/api/v1${NC}"
+        # ÏÔÊ¾·ÃÎÊµØÖ·
+        echo -e "\n·ÃÎÊµØÖ·:"
+        echo -e "  ±¾µØ Web: ${GREEN}http://localhost:$actual_port/web${NC}"
+        echo -e "  ±¾µØ API: ${GREEN}http://localhost:$actual_port/api/v1${NC}"
         if [ "$public_ip" != "localhost" ]; then
-            echo -e "  å…¬ç½‘ Web: ${GREEN}http://$public_ip:$actual_port/web${NC}"
-            echo -e "  å…¬ç½‘ API: ${GREEN}http://$public_ip:$actual_port/api/v1${NC}"
+            echo -e "  ¹«Íø Web: ${GREEN}http://$public_ip:$actual_port/web${NC}"
+            echo -e "  ¹«Íø API: ${GREEN}http://$public_ip:$actual_port/api/v1${NC}"
         fi
     else
-        echo -e "æœåŠ¡çŠ¶æ€: ${RED}æœªè¿è¡Œ${NC}"
+        echo -e "·şÎñ×´Ì¬: ${RED}Î´ÔËĞĞ${NC}"
     fi
     
-    # æ˜¾ç¤ºå®‰è£…ä¿¡æ¯
+    # ÏÔÊ¾°²×°ĞÅÏ¢
     if [ -n "$INSTALL_DIR" ] && [ -d "$INSTALL_DIR" ]; then
-        echo -e "\nå®‰è£…ç›®å½•: $INSTALL_DIR"
+        echo -e "\n°²×°Ä¿Â¼: $INSTALL_DIR"
     elif [ -d "$DEFAULT_INSTALL_DIR" ]; then
-        echo -e "\nå®‰è£…ç›®å½•: $DEFAULT_INSTALL_DIR"
+        echo -e "\n°²×°Ä¿Â¼: $DEFAULT_INSTALL_DIR"
     fi
     
-    # RedisçŠ¶æ€
+    # Redis×´Ì¬
     if command_exists redis-cli; then
-        echo -e "\nRedis çŠ¶æ€:"
+        echo -e "\nRedis ×´Ì¬:"
         local redis_cmd="redis-cli"
         if [ -n "$REDIS_HOST" ]; then
             redis_cmd="$redis_cmd -h $REDIS_HOST"
@@ -1488,78 +1350,78 @@ show_status() {
         fi
         
         if $redis_cmd ping 2>/dev/null | grep -q "PONG"; then
-            echo -e "  è¿æ¥çŠ¶æ€: ${GREEN}æ­£å¸¸${NC}"
+            echo -e "  Á¬½Ó×´Ì¬: ${GREEN}Õı³£${NC}"
         else
-            echo -e "  è¿æ¥çŠ¶æ€: ${RED}å¼‚å¸¸${NC}"
+            echo -e "  Á¬½Ó×´Ì¬: ${RED}Òì³£${NC}"
         fi
     fi
     
     echo -e "\n${BLUE}===========================${NC}"
 }
 
-# æ˜¾ç¤ºå¸®åŠ©
+# ÏÔÊ¾°ïÖú
 show_help() {
-    echo "Claude Relay Service ç®¡ç†è„šæœ¬"
+    echo "Claude Relay Service ¹ÜÀí½Å±¾"
     echo ""
-    echo "ç”¨æ³•: $0 [å‘½ä»¤]"
+    echo "ÓÃ·¨: $0 [ÃüÁî]"
     echo ""
-    echo "å‘½ä»¤:"
-    echo "  install        - å®‰è£…æœåŠ¡"
-    echo "  update         - æ›´æ–°æœåŠ¡"
-    echo "  uninstall      - å¸è½½æœåŠ¡"
-    echo "  start          - å¯åŠ¨æœåŠ¡"
-    echo "  stop           - åœæ­¢æœåŠ¡"
-    echo "  restart        - é‡å¯æœåŠ¡"
-    echo "  status         - æŸ¥çœ‹çŠ¶æ€"
-    echo "  switch-branch  - åˆ‡æ¢åˆ†æ”¯"
-    echo "  update-pricing - æ›´æ–°æ¨¡å‹ä»·æ ¼æ•°æ®"
-    echo "  symlink        - åˆ›å»º crs å¿«æ·å‘½ä»¤"
-    echo "  help           - æ˜¾ç¤ºå¸®åŠ©"
+    echo "ÃüÁî:"
+    echo "  install        - °²×°·şÎñ"
+    echo "  update         - ¸üĞÂ·şÎñ"
+    echo "  uninstall      - Ğ¶ÔØ·şÎñ"
+    echo "  start          - Æô¶¯·şÎñ"
+    echo "  stop           - Í£Ö¹·şÎñ"
+    echo "  restart        - ÖØÆô·şÎñ"
+    echo "  status         - ²é¿´×´Ì¬"
+    echo "  switch-branch  - ÇĞ»»·ÖÖ§"
+    echo "  update-pricing - ¸üĞÂÄ£ĞÍ¼Û¸ñÊı¾İ"
+    echo "  symlink        - ´´½¨ crs ¿ì½İÃüÁî"
+    echo "  help           - ÏÔÊ¾°ïÖú"
     echo ""
 }
 
-# äº¤äº’å¼èœå•
+# ½»»¥Ê½²Ëµ¥
 show_menu() {
     clear
     echo -e "${BOLD}======================================${NC}"
-    echo -e "${BOLD}  Claude Relay Service (CRS) ç®¡ç†å·¥å…·  ${NC}"
+    echo -e "${BOLD}  Claude Relay Service (CRS) ¹ÜÀí¹¤¾ß  ${NC}"
     echo -e "${BOLD}======================================${NC}"
     echo ""
     
-    # æ˜¾ç¤ºå½“å‰çŠ¶æ€
-    echo -e "${YELLOW}å½“å‰çŠ¶æ€ï¼š${NC}"
+    # ÏÔÊ¾µ±Ç°×´Ì¬
+    echo -e "${YELLOW}µ±Ç°×´Ì¬£º${NC}"
     if check_installation; then
-        echo -e "  å®‰è£…çŠ¶æ€: ${GREEN}å·²å®‰è£…${NC} (ç›®å½•: $INSTALL_DIR)"
+        echo -e "  °²×°×´Ì¬: ${GREEN}ÒÑ°²×°${NC} (Ä¿Â¼: $INSTALL_DIR)"
         
-        # è·å–å®é™…ç«¯å£
+        # »ñÈ¡Êµ¼Ê¶Ë¿Ú
         local actual_port="$APP_PORT"
         if [ -z "$actual_port" ] && [ -f "$APP_DIR/.env" ]; then
             actual_port=$(grep "^PORT=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2)
         fi
         actual_port=${actual_port:-3000}
         
-        # æ£€æŸ¥æœåŠ¡çŠ¶æ€
+        # ¼ì²é·şÎñ×´Ì¬
         local pid=$(pgrep -f "node.*src/app.js" | head -1)
         if [ -n "$pid" ]; then
-            echo -e "  è¿è¡ŒçŠ¶æ€: ${GREEN}è¿è¡Œä¸­${NC}"
-            echo -e "  è¿›ç¨‹ PID: $pid"
-            echo -e "  æœåŠ¡ç«¯å£: $actual_port"
+            echo -e "  ÔËĞĞ×´Ì¬: ${GREEN}ÔËĞĞÖĞ${NC}"
+            echo -e "  ½ø³Ì PID: $pid"
+            echo -e "  ·şÎñ¶Ë¿Ú: $actual_port"
             
-            # è·å–å…¬ç½‘IP
+            # »ñÈ¡¹«ÍøIP
             local public_ip=$(get_public_ip)
             if [ "$public_ip" != "localhost" ]; then
-                echo -e "  å…¬ç½‘åœ°å€: ${GREEN}http://$public_ip:$actual_port/web${NC}"
+                echo -e "  ¹«ÍøµØÖ·: ${GREEN}http://$public_ip:$actual_port/web${NC}"
             else
-                echo -e "  Web ç•Œé¢: ${GREEN}http://localhost:$actual_port/web${NC}"
+                echo -e "  Web ½çÃæ: ${GREEN}http://localhost:$actual_port/web${NC}"
             fi
         else
-            echo -e "  è¿è¡ŒçŠ¶æ€: ${RED}æœªè¿è¡Œ${NC}"
+            echo -e "  ÔËĞĞ×´Ì¬: ${RED}Î´ÔËĞĞ${NC}"
         fi
     else
-        echo -e "  å®‰è£…çŠ¶æ€: ${RED}æœªå®‰è£…${NC}"
+        echo -e "  °²×°×´Ì¬: ${RED}Î´°²×°${NC}"
     fi
     
-    # RedisçŠ¶æ€
+    # Redis×´Ì¬
     if command_exists redis-cli && [ -n "$REDIS_HOST" ]; then
         local redis_cmd="redis-cli -h $REDIS_HOST -p ${REDIS_PORT:-6379}"
         if [ -n "$REDIS_PASSWORD" ]; then
@@ -1567,38 +1429,38 @@ show_menu() {
         fi
         
         if $redis_cmd ping 2>/dev/null | grep -q "PONG"; then
-            echo -e "  Redis çŠ¶æ€: ${GREEN}è¿æ¥æ­£å¸¸${NC}"
+            echo -e "  Redis ×´Ì¬: ${GREEN}Á¬½ÓÕı³£${NC}"
         else
-            echo -e "  Redis çŠ¶æ€: ${RED}è¿æ¥å¼‚å¸¸${NC}"
+            echo -e "  Redis ×´Ì¬: ${RED}Á¬½ÓÒì³£${NC}"
         fi
     fi
     
     echo ""
     echo -e "${BOLD}--------------------------------------${NC}"
-    echo -e "${YELLOW}è¯·é€‰æ‹©æ“ä½œï¼š${NC}"
+    echo -e "${YELLOW}ÇëÑ¡Ôñ²Ù×÷£º${NC}"
     echo ""
     
     if ! check_installation; then
-        echo "  1) å®‰è£…æœåŠ¡"
-        echo "  2) é€€å‡º"
+        echo "  1) °²×°·şÎñ"
+        echo "  2) ÍË³ö"
         echo ""
-        echo -n "è¯·è¾“å…¥é€‰é¡¹ [1-2]: "
+        echo -n "ÇëÊäÈëÑ¡Ïî [1-2]: "
     else
-        echo "  1) æŸ¥çœ‹çŠ¶æ€"
-        echo "  2) å¯åŠ¨æœåŠ¡"
-        echo "  3) åœæ­¢æœåŠ¡"
-        echo "  4) é‡å¯æœåŠ¡"
-        echo "  5) æ›´æ–°æœåŠ¡"
-        echo "  6) åˆ‡æ¢åˆ†æ”¯"
-        echo "  7) æ›´æ–°æ¨¡å‹ä»·æ ¼"
-        echo "  8) å¸è½½æœåŠ¡"
-        echo "  9) é€€å‡º"
+        echo "  1) ²é¿´×´Ì¬"
+        echo "  2) Æô¶¯·şÎñ"
+        echo "  3) Í£Ö¹·şÎñ"
+        echo "  4) ÖØÆô·şÎñ"
+        echo "  5) ¸üĞÂ·şÎñ"
+        echo "  6) ÇĞ»»·ÖÖ§"
+        echo "  7) ¸üĞÂÄ£ĞÍ¼Û¸ñ"
+        echo "  8) Ğ¶ÔØ·şÎñ"
+        echo "  9) ÍË³ö"
         echo ""
-        echo -n "è¯·è¾“å…¥é€‰é¡¹ [1-9]: "
+        echo -n "ÇëÊäÈëÑ¡Ïî [1-9]: "
     fi
 }
 
-# å¤„ç†èœå•é€‰æ‹©
+# ´¦Àí²Ëµ¥Ñ¡Ôñ
 handle_menu_choice() {
     local choice=$1
     
@@ -1606,45 +1468,45 @@ handle_menu_choice() {
         case $choice in
             1)
                 echo ""
-                # æ£€æŸ¥ä¾èµ–
+                # ¼ì²éÒÀÀµ
                 if ! install_dependencies; then
-                    print_error "ä¾èµ–å®‰è£…å¤±è´¥"
-                    echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                    print_error "ÒÀÀµ°²×°Ê§°Ü"
+                    echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                     read
                     return 1
                 fi
                 
-                # æ£€æŸ¥Redis
+                # ¼ì²éRedis
                 if ! check_redis; then
-                    print_warning "Redis è¿æ¥å¤±è´¥"
+                    print_warning "Redis Á¬½ÓÊ§°Ü"
                     install_local_redis
                     
-                    # é‡æ–°æµ‹è¯•è¿æ¥
+                    # ÖØĞÂ²âÊÔÁ¬½Ó
                     REDIS_HOST="localhost"
                     REDIS_PORT="6379"
                     if ! check_redis; then
-                        print_error "Redis é…ç½®å¤±è´¥ï¼Œè¯·æ‰‹åŠ¨å®‰è£…å¹¶é…ç½® Redis"
-                        echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                        print_error "Redis ÅäÖÃÊ§°Ü£¬ÇëÊÖ¶¯°²×°²¢ÅäÖÃ Redis"
+                        echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                         read
                         return 1
                     fi
                 fi
                 
-                # å®‰è£…æœåŠ¡
+                # °²×°·şÎñ
                 install_service
                 
-                # åˆ›å»ºè½¯é“¾æ¥
+                # ´´½¨ÈíÁ´½Ó
                 create_symlink
                 
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             2)
-                echo "é€€å‡ºç®¡ç†å·¥å…·"
+                echo "ÍË³ö¹ÜÀí¹¤¾ß"
                 exit 0
                 ;;
             *)
-                print_error "æ— æ•ˆé€‰é¡¹"
+                print_error "ÎŞĞ§Ñ¡Ïî"
                 sleep 1
                 ;;
         esac
@@ -1653,43 +1515,43 @@ handle_menu_choice() {
             1)
                 echo ""
                 show_status
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             2)
                 echo ""
                 start_service
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             3)
                 echo ""
                 stop_service
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             4)
                 echo ""
                 restart_service
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             5)
                 echo ""
                 update_service
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             6)
                 echo ""
                 switch_branch
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             7)
                 echo ""
                 update_model_pricing
-                echo -n "æŒ‰å›è½¦é”®ç»§ç»­..."
+                echo -n "°´»Ø³µ¼ü¼ÌĞø..."
                 read
                 ;;
             8)
@@ -1700,96 +1562,96 @@ handle_menu_choice() {
                 fi
                 ;;
             9)
-                echo "é€€å‡ºç®¡ç†å·¥å…·"
+                echo "ÍË³ö¹ÜÀí¹¤¾ß"
                 exit 0
                 ;;
             *)
-                print_error "æ— æ•ˆé€‰é¡¹"
+                print_error "ÎŞĞ§Ñ¡Ïî"
                 sleep 1
                 ;;
         esac
     fi
 }
 
-# åˆ›å»ºè½¯é“¾æ¥
+# ´´½¨ÈíÁ´½Ó
 create_symlink() {
-    # è·å–è„šæœ¬çš„ç»å¯¹è·¯å¾„
+    # »ñÈ¡½Å±¾µÄ¾ø¶ÔÂ·¾¶
     local script_path=""
     
-    # ä¼˜å…ˆä½¿ç”¨é¡¹ç›®ä¸­çš„ manage.shï¼ˆåœ¨ app/scripts ç›®å½•ä¸‹ï¼‰
+    # ÓÅÏÈÊ¹ÓÃÏîÄ¿ÖĞµÄ manage.sh£¨ÔÚ app/scripts Ä¿Â¼ÏÂ£©
     if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/scripts/manage.sh" ]; then
         script_path="$APP_DIR/scripts/manage.sh"
-        # ç¡®ä¿è„šæœ¬æœ‰æ‰§è¡Œæƒé™
+        # È·±£½Å±¾ÓĞÖ´ĞĞÈ¨ÏŞ
         chmod +x "$script_path" 2>/dev/null || sudo chmod +x "$script_path" 2>/dev/null || true
     elif [ -f "/app/scripts/manage.sh" ] && [ "$(basename "$0")" = "manage.sh" ]; then
-        # Docker å®¹å™¨ä¸­çš„è·¯å¾„
+        # Docker ÈİÆ÷ÖĞµÄÂ·¾¶
         script_path="/app/scripts/manage.sh"
     elif command_exists realpath; then
         script_path="$(realpath "$0")"
     elif command_exists readlink && readlink -f "$0" >/dev/null 2>&1; then
         script_path="$(readlink -f "$0")"
     else
-        # å¤‡ç”¨æ–¹æ³•ï¼šä½¿ç”¨pwdå’Œè„šæœ¬å
+        # ±¸ÓÃ·½·¨£ºÊ¹ÓÃpwdºÍ½Å±¾Ãû
         script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     fi
     
     local symlink_path="/usr/bin/crs"
     
-    print_info "åˆ›å»ºå‘½ä»¤è¡Œå¿«æ·æ–¹å¼..."
+    print_info "´´½¨ÃüÁîĞĞ¿ì½İ·½Ê½..."
     print_info "APP_DIR: $APP_DIR"
-    print_info "è„šæœ¬è·¯å¾„: $script_path"
+    print_info "½Å±¾Â·¾¶: $script_path"
     
-    # æ£€æŸ¥è„šæœ¬æ–‡ä»¶æ˜¯å¦å­˜åœ¨
+    # ¼ì²é½Å±¾ÎÄ¼şÊÇ·ñ´æÔÚ
     if [ ! -f "$script_path" ]; then
-        print_error "æ‰¾ä¸åˆ°è„šæœ¬æ–‡ä»¶: $script_path"
-        print_info "å½“å‰ç›®å½•: $(pwd)"
-        print_info "è„šæœ¬å‚æ•° \$0: $0"
+        print_error "ÕÒ²»µ½½Å±¾ÎÄ¼ş: $script_path"
+        print_info "µ±Ç°Ä¿Â¼: $(pwd)"
+        print_info "½Å±¾²ÎÊı \$0: $0"
         if [ -n "$APP_DIR" ]; then
-            print_info "æ£€æŸ¥é¡¹ç›®ç›®å½•ç»“æ„:"
+            print_info "¼ì²éÏîÄ¿Ä¿Â¼½á¹¹:"
             ls -la "$APP_DIR/" 2>/dev/null | head -5
             if [ -d "$APP_DIR/scripts" ]; then
-                print_info "scripts ç›®å½•å†…å®¹:"
+                print_info "scripts Ä¿Â¼ÄÚÈİ:"
                 ls -la "$APP_DIR/scripts/" 2>/dev/null | grep manage.sh
             fi
         fi
         return 1
     fi
     
-    # å¦‚æœå·²å­˜åœ¨ï¼Œç›´æ¥åˆ é™¤å¹¶é‡æ–°åˆ›å»ºï¼ˆé»˜è®¤ä½¿ç”¨ä»£ç ä¸­çš„æœ€æ–°ç‰ˆæœ¬ï¼‰
+    # Èç¹ûÒÑ´æÔÚ£¬Ö±½ÓÉ¾³ı²¢ÖØĞÂ´´½¨£¨Ä¬ÈÏÊ¹ÓÃ´úÂëÖĞµÄ×îĞÂ°æ±¾£©
     if [ -L "$symlink_path" ] || [ -f "$symlink_path" ]; then
-        print_info "æ›´æ–°å·²å­˜åœ¨çš„è½¯é“¾æ¥..."
+        print_info "¸üĞÂÒÑ´æÔÚµÄÈíÁ´½Ó..."
         sudo rm -f "$symlink_path" 2>/dev/null || {
-            print_error "åˆ é™¤æ—§æ–‡ä»¶å¤±è´¥"
+            print_error "É¾³ı¾ÉÎÄ¼şÊ§°Ü"
             return 1
         }
     fi
     
-    # åˆ›å»ºè½¯é“¾æ¥
+    # ´´½¨ÈíÁ´½Ó
     if sudo ln -s "$script_path" "$symlink_path"; then
-        print_success "å·²åˆ›å»ºå¿«æ·å‘½ä»¤ 'crs'"
-        echo "æ‚¨ç°åœ¨å¯ä»¥åœ¨ä»»ä½•åœ°æ–¹ä½¿ç”¨ 'crs' å‘½ä»¤ç®¡ç†æœåŠ¡"
+        print_success "ÒÑ´´½¨¿ì½İÃüÁî 'crs'"
+        echo "ÄúÏÖÔÚ¿ÉÒÔÔÚÈÎºÎµØ·½Ê¹ÓÃ 'crs' ÃüÁî¹ÜÀí·şÎñ"
         
-        # éªŒè¯è½¯é“¾æ¥
+        # ÑéÖ¤ÈíÁ´½Ó
         if [ -L "$symlink_path" ]; then
-            print_info "è½¯é“¾æ¥éªŒè¯æˆåŠŸ"
+            print_info "ÈíÁ´½ÓÑéÖ¤³É¹¦"
         else
-            print_warning "è½¯é“¾æ¥éªŒè¯å¤±è´¥"
+            print_warning "ÈíÁ´½ÓÑéÖ¤Ê§°Ü"
         fi
     else
-        print_error "åˆ›å»ºè½¯é“¾æ¥å¤±è´¥"
-        print_info "è¯·æ‰‹åŠ¨æ‰§è¡Œä»¥ä¸‹å‘½ä»¤ï¼š"
+        print_error "´´½¨ÈíÁ´½ÓÊ§°Ü"
+        print_info "ÇëÊÖ¶¯Ö´ĞĞÒÔÏÂÃüÁî£º"
         echo "  sudo ln -s '$script_path' '$symlink_path'"
         return 1
     fi
 }
 
-# åŠ è½½å·²å®‰è£…çš„é…ç½®
+# ¼ÓÔØÒÑ°²×°µÄÅäÖÃ
 load_config() {
-    # 1) ä¼˜å…ˆä½¿ç”¨å¤–éƒ¨æ˜¾å¼æä¾›çš„ APP_DIR
+    # 1) ÓÅÏÈÊ¹ÓÃÍâ²¿ÏÔÊ½Ìá¹©µÄ APP_DIR
     if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/package.json" ]; then
         :
     else
-        # 2) è‹¥æä¾›äº† INSTALL_DIRï¼Œåˆ™æ®æ­¤æ¨å¯¼ APP_DIR
+        # 2) ÈôÌá¹©ÁË INSTALL_DIR£¬Ôò¾İ´ËÍÆµ¼ APP_DIR
         if [ -n "$INSTALL_DIR" ]; then
             if [ -d "$INSTALL_DIR/app" ] && [ -f "$INSTALL_DIR/app/package.json" ]; then
                 APP_DIR="$INSTALL_DIR/app"
@@ -1798,7 +1660,7 @@ load_config() {
             fi
         fi
 
-        # 3) å°è¯•ä»æŒä¹…åŒ–é…ç½®è¯»å–å®‰è£…ä½ç½®
+        # 3) ³¢ÊÔ´Ó³Ö¾Ã»¯ÅäÖÃ¶ÁÈ¡°²×°Î»ÖÃ
         if [ -z "$APP_DIR" ]; then
             local conf_file="$HOME/.config/crs/install.conf"
             if [ -f "$conf_file" ]; then
@@ -1822,7 +1684,7 @@ load_config() {
             fi
         fi
 
-        # 4) åŸºäºè„šæœ¬è‡ªèº«è·¯å¾„æ¨å¯¼ï¼ˆå¤„ç†ä» app/scripts/manage.sh æˆ–è½¯é“¾è°ƒç”¨çš„æƒ…å½¢ï¼‰
+        # 4) »ùÓÚ½Å±¾×ÔÉíÂ·¾¶ÍÆµ¼£¨´¦Àí´Ó app/scripts/manage.sh »òÈíÁ´µ÷ÓÃµÄÇéĞÎ£©
         if [ -z "$APP_DIR" ]; then
             local script_path=""
             if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/scripts/manage.sh" ]; then
@@ -1845,7 +1707,7 @@ load_config() {
             fi
         fi
 
-        # 5) é€€å›åˆ°é»˜è®¤ç›®å½•é€»è¾‘
+        # 5) ÍË»Øµ½Ä¬ÈÏÄ¿Â¼Âß¼­
         if [ -z "$INSTALL_DIR" ]; then
             if [ -d "$DEFAULT_INSTALL_DIR" ]; then
                 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
@@ -1862,53 +1724,53 @@ load_config() {
         fi
     fi
 
-    # 6) åŠ è½½ .env é…ç½®ï¼ˆå¦‚å­˜åœ¨ï¼‰
+    # 6) ¼ÓÔØ .env ÅäÖÃ£¨Èç´æÔÚ£©
     if [ -n "$APP_DIR" ] && [ -f "$APP_DIR/.env" ]; then
         export $(cat "$APP_DIR/.env" | grep -v '^#' | xargs)
         APP_PORT=$(grep "^PORT=" "$APP_DIR/.env" 2>/dev/null | cut -d'=' -f2)
     fi
 }
 
-# ä¸»å‡½æ•°
+# Ö÷º¯Êı
 main() {
-    # æ£€æµ‹æ“ä½œç³»ç»Ÿ
+    # ¼ì²â²Ù×÷ÏµÍ³
     detect_os
     
     if [ "$OS" == "unknown" ]; then
-        print_error "ä¸æ”¯æŒçš„æ“ä½œç³»ç»Ÿ"
+        print_error "²»Ö§³ÖµÄ²Ù×÷ÏµÍ³"
         exit 1
     fi
     
-    # åŠ è½½é…ç½®
+    # ¼ÓÔØÅäÖÃ
     load_config
     
-    # å¤„ç†å‘½ä»¤
+    # ´¦ÀíÃüÁî
     case "$1" in
         install)
-            # æ£€æŸ¥ä¾èµ–
+            # ¼ì²éÒÀÀµ
             if ! install_dependencies; then
-                print_error "ä¾èµ–å®‰è£…å¤±è´¥"
+                print_error "ÒÀÀµ°²×°Ê§°Ü"
                 exit 1
             fi
             
-            # æ£€æŸ¥Redis
+            # ¼ì²éRedis
             if ! check_redis; then
-                print_warning "Redis è¿æ¥å¤±è´¥"
+                print_warning "Redis Á¬½ÓÊ§°Ü"
                 install_local_redis
                 
-                # é‡æ–°æµ‹è¯•è¿æ¥
+                # ÖØĞÂ²âÊÔÁ¬½Ó
                 REDIS_HOST="localhost"
                 REDIS_PORT="6379"
                 if ! check_redis; then
-                    print_error "Redis é…ç½®å¤±è´¥ï¼Œè¯·æ‰‹åŠ¨å®‰è£…å¹¶é…ç½® Redis"
+                    print_error "Redis ÅäÖÃÊ§°Ü£¬ÇëÊÖ¶¯°²×°²¢ÅäÖÃ Redis"
                     exit 1
                 fi
             fi
             
-            # å®‰è£…æœåŠ¡
+            # °²×°·şÎñ
             install_service
             
-            # åˆ›å»ºè½¯é“¾æ¥
+            # ´´½¨ÈíÁ´½Ó
             create_symlink
             ;;
         update)
@@ -1936,11 +1798,11 @@ main() {
             update_model_pricing
             ;;
         symlink)
-            # å•ç‹¬åˆ›å»ºè½¯é“¾æ¥
-            # ç¡®ä¿ APP_DIR å·²è®¾ç½®
+            # µ¥¶À´´½¨ÈíÁ´½Ó
+            # È·±£ APP_DIR ÒÑÉèÖÃ
             if [ -z "$APP_DIR" ]; then
-                print_error "è¯·å…ˆå®‰è£…é¡¹ç›®åå†åˆ›å»ºè½¯é“¾æ¥"
-                print_info "è¿è¡Œ: $0 install"
+                print_error "ÇëÏÈ°²×°ÏîÄ¿ºóÔÙ´´½¨ÈíÁ´½Ó"
+                print_info "ÔËĞĞ: $0 install"
                 exit 1
             fi
             create_symlink
@@ -1949,7 +1811,7 @@ main() {
             show_help
             ;;
         "")
-            # æ— å‚æ•°æ—¶æ˜¾ç¤ºäº¤äº’å¼èœå•
+            # ÎŞ²ÎÊıÊ±ÏÔÊ¾½»»¥Ê½²Ëµ¥
             while true; do
                 show_menu
                 read choice
@@ -1957,12 +1819,13 @@ main() {
             done
             ;;
         *)
-            print_error "æœªçŸ¥å‘½ä»¤: $1"
+            print_error "Î´ÖªÃüÁî: $1"
             echo ""
             show_help
             ;;
     esac
 }
 
-# è¿è¡Œä¸»å‡½æ•°
+# ÔËĞĞÖ÷º¯Êı
 main "$@"
+
