@@ -17,6 +17,7 @@ const {
 const tokenRefreshService = require('./tokenRefreshService')
 const LRUCache = require('../utils/lruCache')
 const antigravityClient = require('./antigravityClient')
+const { getPrimaryPrefixedRedisKeys } = require('../utils/redisKeyFilter')
 
 // Gemini OAuth 配置 - 支持 Gemini CLI 与 Antigravity 两种 OAuth 应用
 const OAUTH_PROVIDER_GEMINI_CLI = 'gemini-cli'
@@ -828,7 +829,7 @@ async function deleteAccount(accountId) {
 // 获取所有账户
 async function getAllAccounts() {
   const client = redisClient.getClientSafe()
-  const keys = await client.keys(`${GEMINI_ACCOUNT_KEY_PREFIX}*`)
+  const keys = await getPrimaryPrefixedRedisKeys(client, GEMINI_ACCOUNT_KEY_PREFIX)
   const accounts = []
 
   for (const key of keys) {

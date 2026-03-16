@@ -4,6 +4,7 @@ const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 const LRUCache = require('../utils/lruCache')
+const { getPrimaryPrefixedRedisKeys } = require('../utils/redisKeyFilter')
 
 class GeminiApiAccountService {
   constructor() {
@@ -223,7 +224,7 @@ class GeminiApiAccountService {
     }
 
     // 直接从 Redis 获取所有账户（包括非共享账户）
-    const keys = await client.keys(`${this.ACCOUNT_KEY_PREFIX}*`)
+    const keys = await getPrimaryPrefixedRedisKeys(client, this.ACCOUNT_KEY_PREFIX)
     for (const key of keys) {
       const accountId = key.replace(this.ACCOUNT_KEY_PREFIX, '')
       if (!accountIds.includes(accountId)) {

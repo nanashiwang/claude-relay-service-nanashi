@@ -15,6 +15,7 @@ const {
 } = require('../utils/tokenRefreshLogger')
 const LRUCache = require('../utils/lruCache')
 const tokenRefreshService = require('./tokenRefreshService')
+const { getPrimaryPrefixedRedisKeys } = require('../utils/redisKeyFilter')
 
 // 鍔犲瘑鐩稿叧甯搁噺
 const ALGORITHM = 'aes-256-cbc'
@@ -841,7 +842,7 @@ async function deleteAccount(accountId) {
 async function getAllAccounts(options = {}) {
   const forScheduling = options && typeof options === 'object' && options.forScheduling === true
   const client = redisClient.getClientSafe()
-  const keys = await client.keys(`${OPENAI_ACCOUNT_KEY_PREFIX}*`)
+  const keys = await getPrimaryPrefixedRedisKeys(client, OPENAI_ACCOUNT_KEY_PREFIX)
   if (keys.length === 0) {
     return []
   }

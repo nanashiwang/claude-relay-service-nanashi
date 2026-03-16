@@ -5,6 +5,7 @@ const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
 const LRUCache = require('../utils/lruCache')
+const { getPrimaryPrefixedRedisKeys } = require('../utils/redisKeyFilter')
 
 class CcrAccountService {
   constructor() {
@@ -140,7 +141,7 @@ class CcrAccountService {
   async getAllAccounts() {
     try {
       const client = redis.getClientSafe()
-      const keys = await client.keys(`${this.ACCOUNT_KEY_PREFIX}*`)
+      const keys = await getPrimaryPrefixedRedisKeys(client, this.ACCOUNT_KEY_PREFIX)
       const accounts = []
 
       for (const key of keys) {

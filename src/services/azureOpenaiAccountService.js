@@ -3,6 +3,7 @@ const { v4: uuidv4 } = require('uuid')
 const crypto = require('crypto')
 const config = require('../../config/config')
 const logger = require('../utils/logger')
+const { getPrimaryPrefixedRedisKeys } = require('../utils/redisKeyFilter')
 
 // 加密相关常量
 const ALGORITHM = 'aes-256-cbc'
@@ -280,7 +281,7 @@ async function deleteAccount(accountId) {
 // 获取所有账户
 async function getAllAccounts() {
   const client = redisClient.getClientSafe()
-  const keys = await client.keys(`${AZURE_OPENAI_ACCOUNT_KEY_PREFIX}*`)
+  const keys = await getPrimaryPrefixedRedisKeys(client, AZURE_OPENAI_ACCOUNT_KEY_PREFIX)
 
   if (!keys || keys.length === 0) {
     return []

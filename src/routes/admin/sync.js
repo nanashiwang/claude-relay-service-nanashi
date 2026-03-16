@@ -8,6 +8,7 @@ const router = express.Router()
 
 const { authenticateAdmin } = require('../../middleware/auth')
 const redis = require('../../models/redis')
+const { getPrimaryPrefixedRedisKeys } = require('../../utils/redisKeyFilter')
 const claudeAccountService = require('../../services/claudeAccountService')
 const claudeConsoleAccountService = require('../../services/claudeConsoleAccountService')
 const openaiAccountService = require('../../services/openaiAccountService')
@@ -391,7 +392,7 @@ router.get('/sync/export-accounts', authenticateAdmin, async (req, res) => {
     // ===== OpenAI Responses API Key accounts =====
     const openaiResponsesAccounts = []
     const client = redis.getClientSafe()
-    const openaiResponseKeys = await client.keys('openai_responses_account:*')
+    const openaiResponseKeys = await getPrimaryPrefixedRedisKeys(client, 'openai_responses_account:')
     for (const key of openaiResponseKeys) {
       const id = key.split(':').slice(1).join(':')
       const full = await openaiResponsesAccountService.getAccount(id)

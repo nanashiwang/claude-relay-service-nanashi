@@ -3,6 +3,7 @@ const crypto = require('crypto')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const config = require('../../config/config')
+const { getPrimaryPrefixedRedisKeys } = require('../utils/redisKeyFilter')
 const bedrockRelayService = require('./bedrockRelayService')
 const LRUCache = require('../utils/lruCache')
 
@@ -127,7 +128,7 @@ class BedrockAccountService {
   async getAllAccounts() {
     try {
       const client = redis.getClientSafe()
-      const keys = await client.keys('bedrock_account:*')
+      const keys = await getPrimaryPrefixedRedisKeys(client, 'bedrock_account:')
       const accounts = []
 
       for (const key of keys) {
