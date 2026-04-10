@@ -44,7 +44,6 @@ function extractCacheCreationTokens(usageData) {
   return 0
 }
 
-
 function isWritableSSEStream(res) {
   return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
 }
@@ -212,8 +211,7 @@ function extractToolCallsFromResponseOutput(output = []) {
       toolCall.params ||
       '{}'
 
-    const idFallback =
-      nestedIndex === null ? `call_${index}` : `call_${index}_${nestedIndex}`
+    const idFallback = nestedIndex === null ? `call_${index}` : `call_${index}_${nestedIndex}`
     const toolCallId = toolCall.call_id || toolCall.id || idFallback
 
     toolCalls.push({
@@ -343,10 +341,16 @@ function inferChatCompletionFinishReason(responsePayload, hasToolCalls = false) 
   }
 
   const rawReason =
-    responsePayload?.stop_reason || responsePayload?.response?.stop_reason || responsePayload?.reason
+    responsePayload?.stop_reason ||
+    responsePayload?.response?.stop_reason ||
+    responsePayload?.reason
   if (typeof rawReason === 'string') {
     const normalized = rawReason.toLowerCase()
-    if (normalized === 'max_output_tokens' || normalized === 'max_tokens' || normalized === 'length') {
+    if (
+      normalized === 'max_output_tokens' ||
+      normalized === 'max_tokens' ||
+      normalized === 'length'
+    ) {
       return 'length'
     }
     if (normalized === 'content_filter') {
@@ -514,10 +518,7 @@ function ensureResponsesInstructions(body = {}) {
   }
 
   const normalized = { ...body }
-  if (
-    typeof normalized.instructions === 'string' &&
-    normalized.instructions.trim()
-  ) {
+  if (typeof normalized.instructions === 'string' && normalized.instructions.trim()) {
     normalized.instructions = normalized.instructions.trim()
     return normalized
   }
@@ -799,19 +800,11 @@ class OpenAIResponsesRelayService {
             }
           }
 
-          try {
-            await unifiedOpenAIScheduler.markAccountUnauthorized(
-              account.id,
-              'openai-responses',
-              sessionHash,
-              reason
-            )
-          } catch (markError) {
-            logger.error(
-              '❌ Failed to mark OpenAI-Responses account unauthorized after 401:',
-              markError
-            )
-          }
+          // 不立即标记 unauthorized —— 单次 401 可能是临时性的（token 过期、代理抖动等）。
+          // 仅记录警告日志；如果同一账户持续返回 401，由上层重试机制耗尽后再标记。
+          logger.warn(
+            `⚠️ Auth Unauthorized error detected for OpenAI-Responses account ${account.id}: ${reason}`
+          )
 
           let unauthorizedResponse = errorData
           if (
@@ -980,19 +973,10 @@ class OpenAIResponsesRelayService {
             }
           }
 
-          try {
-            await unifiedOpenAIScheduler.markAccountUnauthorized(
-              account.id,
-              'openai-responses',
-              sessionHash,
-              reason
-            )
-          } catch (markError) {
-            logger.error(
-              '❌ Failed to mark OpenAI-Responses account unauthorized in catch handler:',
-              markError
-            )
-          }
+          // 不立即标记 unauthorized —— 单次 401 可能是临时性的
+          logger.warn(
+            `⚠️ Auth Unauthorized error detected for OpenAI-Responses account ${account.id} (catch): ${reason}`
+          )
 
           let unauthorizedResponse = errorData
           if (
@@ -1325,9 +1309,8 @@ class OpenAIResponsesRelayService {
     sessionHash = null
   ) {
     try {
-      const { completedResponse, text, usageData, model, errorData } = await collectResponsesStreamResult(
-        response.data
-      )
+      const { completedResponse, text, usageData, model, errorData } =
+        await collectResponsesStreamResult(response.data)
 
       if (errorData && !completedResponse) {
         const errorPayload =
@@ -1554,7 +1537,8 @@ class OpenAIResponsesRelayService {
         0
       const cacheCreateTokens = extractCacheCreationTokens(usageData)
       const actualInputTokens = Math.max(0, totalInputTokens - cacheReadTokens)
-      const totalTokens = usageData.total_tokens || totalInputTokens + outputTokens + cacheCreateTokens
+      const totalTokens =
+        usageData.total_tokens || totalInputTokens + outputTokens + cacheCreateTokens
       const modelToRecord = actualModel || requestedModel || 'gpt-4'
 
       await apiKeyService.recordUsage(

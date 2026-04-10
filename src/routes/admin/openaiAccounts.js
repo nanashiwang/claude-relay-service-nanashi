@@ -707,13 +707,8 @@ router.delete('/:id', authenticateAdmin, async (req, res) => {
     // 自动解绑所有绑定的 API Keys
     const unboundCount = await apiKeyService.unbindAccountFromAllKeys(id, 'openai')
 
-    // 如果账户在分组中，从分组中移除
-    if (account.accountType === 'group') {
-      const group = await accountGroupService.getAccountGroup(id)
-      if (group) {
-        await accountGroupService.removeAccountFromGroup(id, group.id)
-      }
-    }
+    // 从所有分组中移除此账户（无论 accountType）
+    await accountGroupService.removeAccountFromAllGroups(id)
 
     await openaiAccountService.deleteAccount(id)
 

@@ -1354,27 +1354,14 @@ class ClaudeAccountService {
           `🚫 Account marked as rate limited with accurate reset time: ${accountData.name} (${accountId}) - ${minutesUntilEnd} minutes remaining until ${resetTime.toISOString()}`
         )
       } else {
-        // 获取或创建会话窗口（预估方式）
-        const windowData = await this.updateSessionWindow(accountId, updatedAccountData)
-        Object.assign(updatedAccountData, windowData)
-
-        // 限流结束时间 = 会话窗口结束时间
-        if (updatedAccountData.sessionWindowEnd) {
-          updatedAccountData.rateLimitEndAt = updatedAccountData.sessionWindowEnd
-          const windowEnd = new Date(updatedAccountData.sessionWindowEnd)
-          const now = new Date()
-          const minutesUntilEnd = Math.ceil((windowEnd - now) / (1000 * 60))
-          logger.warn(
-            `🚫 Account marked as rate limited until estimated session window ends: ${accountData.name} (${accountId}) - ${minutesUntilEnd} minutes remaining`
-          )
-        } else {
-          // 如果没有会话窗口，使用默认1小时（兼容旧逻辑）
-          const oneHourLater = new Date(Date.now() + 60 * 60 * 1000)
-          updatedAccountData.rateLimitEndAt = oneHourLater.toISOString()
-          logger.warn(
-            `🚫 Account marked as rate limited (1 hour default): ${accountData.name} (${accountId})`
-          )
-        }
+        // 没有准确的 reset timestamp —— 很可能是瞬时并发限流（per-minute rate limit），
+        // 而非 5h 窗口限流。使用短时冷却而非会话窗口剩余时间，避免过度惩罚。
+        const TRANSIENT_RATE_LIMIT_MINUTES = 5
+        const cooldownEnd = new Date(Date.now() + TRANSIENT_RATE_LIMIT_MINUTES * 60 * 1000)
+        updatedAccountData.rateLimitEndAt = cooldownEnd.toISOString()
+        logger.warn(
+          `🚫 Account marked as rate limited (transient, ${TRANSIENT_RATE_LIMIT_MINUTES}min cooldown): ${accountData.name} (${accountId})`
+        )
       }
 
       await redis.setClaudeAccount(accountId, updatedAccountData)

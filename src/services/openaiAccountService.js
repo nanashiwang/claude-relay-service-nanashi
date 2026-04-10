@@ -396,12 +396,7 @@ function shouldDisableAccountAfterRefreshError(error) {
     return true
   }
 
-  const errorCodes = [
-    error.code,
-    error.error,
-    error.details?.error,
-    error.response?.data?.error
-  ]
+  const errorCodes = [error.code, error.error, error.details?.error, error.response?.data?.error]
     .filter((value) => typeof value === 'string' && value.trim())
     .map((value) => value.trim().toLowerCase())
 
@@ -820,10 +815,8 @@ async function deleteAccount(accountId) {
   const client = redisClient.getClientSafe()
   await client.del(`${OPENAI_ACCOUNT_KEY_PREFIX}${accountId}`)
 
-  // 浠庡叡浜处鎴烽泦鍚堜腑绉婚櫎
-  if (account.accountType === 'shared') {
-    await client.srem(SHARED_OPENAI_ACCOUNTS_KEY, accountId)
-  }
+  // 无条件从共享账户集合中移除（srem 对不存在的成员是 no-op）
+  await client.srem(SHARED_OPENAI_ACCOUNTS_KEY, accountId)
 
   // 娓呯悊浼氳瘽鏄犲皠
   const sessionMappings = await client.keys(`${ACCOUNT_SESSION_MAPPING_PREFIX}*`)
@@ -1411,4 +1404,3 @@ module.exports = {
   generateEncryptionKey,
   decryptCache // 鏆撮湶缂撳瓨瀵硅薄浠ヤ究娴嬭瘯鍜岀洃鎺?
 }
-

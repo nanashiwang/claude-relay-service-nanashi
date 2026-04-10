@@ -287,7 +287,8 @@ function convertChatMessagesToResponsesInput(messages = []) {
       continue
     }
 
-    const originalRole = typeof message.role === 'string' ? message.role.toLowerCase().trim() : 'user'
+    const originalRole =
+      typeof message.role === 'string' ? message.role.toLowerCase().trim() : 'user'
     const role = normalizeChatRole(originalRole)
     let content = extractTextFromChatMessageContent(message.content)
 
@@ -490,8 +491,7 @@ function extractToolCallsFromResponseOutput(output = []) {
       toolCall.params ||
       '{}'
 
-    const idFallback =
-      nestedIndex === null ? `call_${index}` : `call_${index}_${nestedIndex}`
+    const idFallback = nestedIndex === null ? `call_${index}` : `call_${index}_${nestedIndex}`
     const toolCallId = toolCall.call_id || toolCall.id || idFallback
 
     toolCalls.push({
@@ -622,10 +622,16 @@ function inferChatCompletionFinishReason(responsePayload, hasToolCalls = false) 
   }
 
   const rawReason =
-    responsePayload?.stop_reason || responsePayload?.response?.stop_reason || responsePayload?.reason
+    responsePayload?.stop_reason ||
+    responsePayload?.response?.stop_reason ||
+    responsePayload?.reason
   if (typeof rawReason === 'string') {
     const normalized = rawReason.toLowerCase()
-    if (normalized === 'max_output_tokens' || normalized === 'max_tokens' || normalized === 'length') {
+    if (
+      normalized === 'max_output_tokens' ||
+      normalized === 'max_tokens' ||
+      normalized === 'length'
+    ) {
       return 'length'
     }
     if (normalized === 'content_filter') {
@@ -1107,312 +1113,311 @@ const handleResponses = async (req, res) => {
     let shouldRetryWithAnotherAccount = false
     do {
       shouldRetryWithAnotherAccount = false
-
-    ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
-      apiKeyData,
-      sessionHash,
-      requestedModel
-    ))
-
-    if (isChatCompletionsCompat) {
-      req.body = convertChatCompletionsRequestToResponses(originalRequestBody || {})
-      req.body.stream = true
-      req._openaiCompatClientWantsStream = clientWantsStream
-    }
-
-    // 如果是 OpenAI-Responses 账户，使用专门的中继服务处理
-    if (accountType === 'openai-responses') {
-      logger.info(`🔀 Using OpenAI-Responses relay service for account: ${account.name}`)
-      return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
-    }
-    // 基于白名单构造上游所需的请求头，确保键为小写且值受控
-    const incoming = req.headers || {}
-
-    const allowedKeys = ['version', 'openai-beta', 'session_id']
-
-    const headers = {}
-    for (const key of allowedKeys) {
-      if (incoming[key] !== undefined) {
-        headers[key] = incoming[key]
-      }
-    }
-    if (sessionId) {
-      headers['session_id'] = sessionId
-    }
-
-    // 判断是否访问 compact 端点
-    const isCompactRoute =
-      req.path === '/responses/compact' ||
-      req.path === '/v1/responses/compact' ||
-      (req.originalUrl && req.originalUrl.includes('/responses/compact'))
-
-    // 覆盖或新增必要头部
-    headers['authorization'] = `Bearer ${accessToken}`
-    headers['chatgpt-account-id'] = account.accountId || account.chatgptUserId || accountId
-    headers['host'] = 'chatgpt.com'
-    headers['accept'] = upstreamUseStream ? 'text/event-stream' : 'application/json'
-    headers['content-type'] = 'application/json'
-    if (!isCompactRoute) {
-      req.body['store'] = false
-    } else if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'store')) {
-      delete req.body['store']
-    }
-
-    // 创建代理 agent
-    const proxyAgent = createProxyAgent(proxy)
-
-    // 配置请求选项
-    const axiosConfig = {
-      headers,
-      timeout: config.requestTimeout || 600000,
-      validateStatus: () => true
-    }
-
-    // 如果有代理，添加代理配置
-    if (proxyAgent) {
-      axiosConfig.httpAgent = proxyAgent
-      axiosConfig.httpsAgent = proxyAgent
-      axiosConfig.proxy = false
-      logger.info(`🌐 Using proxy for OpenAI request: ${ProxyHelper.getProxyDescription(proxy)}`)
-    } else {
-      logger.debug('🌐 No proxy configured for OpenAI request')
-    }
-
-    const codexEndpoint = isCompactRoute
-      ? 'https://chatgpt.com/backend-api/codex/responses/compact'
-      : 'https://chatgpt.com/backend-api/codex/responses'
-
-    // 根据 stream 参数决定请求类型
-    if (upstreamUseStream) {
-      // 流式请求
-      upstream = await axios.post(codexEndpoint, req.body, {
-        ...axiosConfig,
-        responseType: 'stream'
-      })
-    } else {
-      // 非流式请求
-      upstream = await axios.post(codexEndpoint, req.body, axiosConfig)
-    }
-
-    const codexUsageSnapshot = extractCodexUsageHeaders(upstream.headers)
-    if (codexUsageSnapshot) {
-      try {
-        await openaiAccountService.updateCodexUsageSnapshot(accountId, codexUsageSnapshot)
-      } catch (codexError) {
-        logger.error('⚠️ 更新 Codex 使用统计失败:', codexError)
-      }
-    }
-
-    // 处理 429 限流错误
-    if (upstream.status === 429) {
-      logger.warn(`🚫 Rate limit detected for OpenAI account ${accountId} (Codex API)`)
-
-      // 解析响应体中的限流信息
-      let resetsInSeconds = null
-      let errorData = null
-
-      try {
-        // 对于429错误，无论是否是流式请求，响应都会是完整的JSON错误对象
-        if (upstreamUseStream && upstream.data) {
-          // 流式响应需要先收集数据
-          const chunks = []
-          await new Promise((resolve, reject) => {
-            upstream.data.on('data', (chunk) => chunks.push(chunk))
-            upstream.data.on('end', resolve)
-            upstream.data.on('error', reject)
-            // 设置超时防止无限等待
-            setTimeout(resolve, 5000)
-          })
-
-          const fullResponse = Buffer.concat(chunks).toString()
-          try {
-            errorData = JSON.parse(fullResponse)
-          } catch (e) {
-            logger.error('Failed to parse 429 error response:', e)
-            logger.debug('Raw response:', fullResponse)
-          }
-        } else {
-          // 非流式响应直接使用data
-          errorData = upstream.data
-        }
-
-        // 提取重置时间
-        if (errorData && errorData.error && errorData.error.resets_in_seconds) {
-          resetsInSeconds = errorData.error.resets_in_seconds
-          logger.info(
-            `🕐 Codex rate limit will reset in ${resetsInSeconds} seconds (${Math.ceil(resetsInSeconds / 60)} minutes / ${Math.ceil(resetsInSeconds / 3600)} hours)`
-          )
-        } else {
-          logger.warn(
-            '⚠️ Could not extract resets_in_seconds from 429 response, using default 60 minutes'
-          )
-        }
-      } catch (e) {
-        logger.error('⚠️ Failed to parse rate limit error:', e)
-      }
-
-      // 标记账户为限流状态
-      await unifiedOpenAIScheduler.markAccountRateLimited(
-        accountId,
-        'openai',
+      ;({ accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
+        apiKeyData,
         sessionHash,
-        resetsInSeconds
-      )
+        requestedModel
+      ))
 
-      // 返回错误响应给客户端
-      const errorResponse = errorData || {
-        error: {
-          type: 'usage_limit_reached',
-          message: 'The usage limit has been reached',
-          resets_in_seconds: resetsInSeconds
+      if (isChatCompletionsCompat) {
+        req.body = convertChatCompletionsRequestToResponses(originalRequestBody || {})
+        req.body.stream = true
+        req._openaiCompatClientWantsStream = clientWantsStream
+      }
+
+      // 如果是 OpenAI-Responses 账户，使用专门的中继服务处理
+      if (accountType === 'openai-responses') {
+        logger.info(`🔀 Using OpenAI-Responses relay service for account: ${account.name}`)
+        return await openaiResponsesRelayService.handleRequest(req, res, account, apiKeyData)
+      }
+      // 基于白名单构造上游所需的请求头，确保键为小写且值受控
+      const incoming = req.headers || {}
+
+      const allowedKeys = ['version', 'openai-beta', 'session_id']
+
+      const headers = {}
+      for (const key of allowedKeys) {
+        if (incoming[key] !== undefined) {
+          headers[key] = incoming[key]
+        }
+      }
+      if (sessionId) {
+        headers['session_id'] = sessionId
+      }
+
+      // 判断是否访问 compact 端点
+      const isCompactRoute =
+        req.path === '/responses/compact' ||
+        req.path === '/v1/responses/compact' ||
+        (req.originalUrl && req.originalUrl.includes('/responses/compact'))
+
+      // 覆盖或新增必要头部
+      headers['authorization'] = `Bearer ${accessToken}`
+      headers['chatgpt-account-id'] = account.accountId || account.chatgptUserId || accountId
+      headers['host'] = 'chatgpt.com'
+      headers['accept'] = upstreamUseStream ? 'text/event-stream' : 'application/json'
+      headers['content-type'] = 'application/json'
+      if (!isCompactRoute) {
+        req.body['store'] = false
+      } else if (req.body && Object.prototype.hasOwnProperty.call(req.body, 'store')) {
+        delete req.body['store']
+      }
+
+      // 创建代理 agent
+      const proxyAgent = createProxyAgent(proxy)
+
+      // 配置请求选项
+      const axiosConfig = {
+        headers,
+        timeout: config.requestTimeout || 600000,
+        validateStatus: () => true
+      }
+
+      // 如果有代理，添加代理配置
+      if (proxyAgent) {
+        axiosConfig.httpAgent = proxyAgent
+        axiosConfig.httpsAgent = proxyAgent
+        axiosConfig.proxy = false
+        logger.info(`🌐 Using proxy for OpenAI request: ${ProxyHelper.getProxyDescription(proxy)}`)
+      } else {
+        logger.debug('🌐 No proxy configured for OpenAI request')
+      }
+
+      const codexEndpoint = isCompactRoute
+        ? 'https://chatgpt.com/backend-api/codex/responses/compact'
+        : 'https://chatgpt.com/backend-api/codex/responses'
+
+      // 根据 stream 参数决定请求类型
+      if (upstreamUseStream) {
+        // 流式请求
+        upstream = await axios.post(codexEndpoint, req.body, {
+          ...axiosConfig,
+          responseType: 'stream'
+        })
+      } else {
+        // 非流式请求
+        upstream = await axios.post(codexEndpoint, req.body, axiosConfig)
+      }
+
+      const codexUsageSnapshot = extractCodexUsageHeaders(upstream.headers)
+      if (codexUsageSnapshot) {
+        try {
+          await openaiAccountService.updateCodexUsageSnapshot(accountId, codexUsageSnapshot)
+        } catch (codexError) {
+          logger.error('⚠️ 更新 Codex 使用统计失败:', codexError)
         }
       }
 
-      if (upstreamUseStream) {
-        // 流式响应也需要设置正确的状态码
-        res.status(429)
-        res.setHeader('Content-Type', 'text/event-stream')
-        res.setHeader('Cache-Control', 'no-cache')
-        res.setHeader('Connection', 'keep-alive')
-        res.write(`data: ${JSON.stringify(errorResponse)}\n\n`)
-        res.end()
-      } else {
-        res.status(429).json(errorResponse)
-      }
+      // 处理 429 限流错误
+      if (upstream.status === 429) {
+        logger.warn(`🚫 Rate limit detected for OpenAI account ${accountId} (Codex API)`)
 
-      return
-    } else if (upstream.status === 401 || upstream.status === 402 || upstream.status === 403) {
-      const unauthorizedStatus = upstream.status
-      const statusDescription =
-        unauthorizedStatus === 401
-          ? 'Unauthorized'
-          : unauthorizedStatus === 402
-            ? 'Payment required'
-            : 'Forbidden'
-      logger.warn(
-        `Auth ${statusDescription} error detected for OpenAI account ${accountId} (Codex API)`
-      )
+        // 解析响应体中的限流信息
+        let resetsInSeconds = null
+        let errorData = null
 
-      let errorData = null
+        try {
+          // 对于429错误，无论是否是流式请求，响应都会是完整的JSON错误对象
+          if (upstreamUseStream && upstream.data) {
+            // 流式响应需要先收集数据
+            const chunks = []
+            await new Promise((resolve, reject) => {
+              upstream.data.on('data', (chunk) => chunks.push(chunk))
+              upstream.data.on('end', resolve)
+              upstream.data.on('error', reject)
+              // 设置超时防止无限等待
+              setTimeout(resolve, 5000)
+            })
 
-      try {
-        if (upstreamUseStream && upstream.data && typeof upstream.data.on === 'function') {
-          const chunks = []
-          await new Promise((resolve, reject) => {
-            upstream.data.on('data', (chunk) => chunks.push(chunk))
-            upstream.data.on('end', resolve)
-            upstream.data.on('error', reject)
-            setTimeout(resolve, 5000)
-          })
+            const fullResponse = Buffer.concat(chunks).toString()
+            try {
+              errorData = JSON.parse(fullResponse)
+            } catch (e) {
+              logger.error('Failed to parse 429 error response:', e)
+              logger.debug('Raw response:', fullResponse)
+            }
+          } else {
+            // 非流式响应直接使用data
+            errorData = upstream.data
+          }
 
-          const fullResponse = Buffer.concat(chunks).toString()
-          try {
-            errorData = JSON.parse(fullResponse)
-          } catch (parseError) {
-            logger.error(`Failed to parse ${unauthorizedStatus} error response:`, parseError)
-            logger.debug(`Raw ${unauthorizedStatus} response:`, fullResponse)
-            errorData = {
-              error: {
-                message:
-                  fullResponse ||
-                  (unauthorizedStatus === 403
-                    ? 'Forbidden'
-                    : unauthorizedStatus === 402
-                      ? 'Payment required'
-                      : 'Unauthorized')
+          // 提取重置时间
+          if (errorData && errorData.error && errorData.error.resets_in_seconds) {
+            resetsInSeconds = errorData.error.resets_in_seconds
+            logger.info(
+              `🕐 Codex rate limit will reset in ${resetsInSeconds} seconds (${Math.ceil(resetsInSeconds / 60)} minutes / ${Math.ceil(resetsInSeconds / 3600)} hours)`
+            )
+          } else {
+            logger.warn(
+              '⚠️ Could not extract resets_in_seconds from 429 response, using default 60 minutes'
+            )
+          }
+        } catch (e) {
+          logger.error('⚠️ Failed to parse rate limit error:', e)
+        }
+
+        // 标记账户为限流状态
+        await unifiedOpenAIScheduler.markAccountRateLimited(
+          accountId,
+          'openai',
+          sessionHash,
+          resetsInSeconds
+        )
+
+        // 返回错误响应给客户端
+        const errorResponse = errorData || {
+          error: {
+            type: 'usage_limit_reached',
+            message: 'The usage limit has been reached',
+            resets_in_seconds: resetsInSeconds
+          }
+        }
+
+        if (upstreamUseStream) {
+          // 流式响应也需要设置正确的状态码
+          res.status(429)
+          res.setHeader('Content-Type', 'text/event-stream')
+          res.setHeader('Cache-Control', 'no-cache')
+          res.setHeader('Connection', 'keep-alive')
+          res.write(`data: ${JSON.stringify(errorResponse)}\n\n`)
+          res.end()
+        } else {
+          res.status(429).json(errorResponse)
+        }
+
+        return
+      } else if (upstream.status === 401 || upstream.status === 402 || upstream.status === 403) {
+        const unauthorizedStatus = upstream.status
+        const statusDescription =
+          unauthorizedStatus === 401
+            ? 'Unauthorized'
+            : unauthorizedStatus === 402
+              ? 'Payment required'
+              : 'Forbidden'
+        logger.warn(
+          `Auth ${statusDescription} error detected for OpenAI account ${accountId} (Codex API)`
+        )
+
+        let errorData = null
+
+        try {
+          if (upstreamUseStream && upstream.data && typeof upstream.data.on === 'function') {
+            const chunks = []
+            await new Promise((resolve, reject) => {
+              upstream.data.on('data', (chunk) => chunks.push(chunk))
+              upstream.data.on('end', resolve)
+              upstream.data.on('error', reject)
+              setTimeout(resolve, 5000)
+            })
+
+            const fullResponse = Buffer.concat(chunks).toString()
+            try {
+              errorData = JSON.parse(fullResponse)
+            } catch (parseError) {
+              logger.error(`Failed to parse ${unauthorizedStatus} error response:`, parseError)
+              logger.debug(`Raw ${unauthorizedStatus} response:`, fullResponse)
+              errorData = {
+                error: {
+                  message:
+                    fullResponse ||
+                    (unauthorizedStatus === 403
+                      ? 'Forbidden'
+                      : unauthorizedStatus === 402
+                        ? 'Payment required'
+                        : 'Unauthorized')
+                }
               }
             }
+          } else {
+            errorData = upstream.data
           }
-        } else {
-          errorData = upstream.data
+        } catch (parseError) {
+          logger.error(`Failed to handle ${unauthorizedStatus} error response:`, parseError)
         }
-      } catch (parseError) {
-        logger.error(`Failed to handle ${unauthorizedStatus} error response:`, parseError)
-      }
 
-      const statusLabel =
-        unauthorizedStatus === 401
-          ? '401'
-          : unauthorizedStatus === 402
-            ? '402'
-            : '403'
-      const extraHint = unauthorizedStatus === 402 ? ' (payment required)' : ''
-      let reason = `OpenAI authentication failed (${statusLabel}${extraHint})`
-      if (errorData) {
-        const messageCandidate =
-          errorData.error &&
-          typeof errorData.error.message === 'string' &&
-          errorData.error.message.trim()
-            ? errorData.error.message.trim()
-            : typeof errorData.message === 'string' && errorData.message.trim()
-              ? errorData.message.trim()
-              : null
-        if (messageCandidate) {
-          reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${messageCandidate}`
-        }
-      }
-
-      try {
-        await unifiedOpenAIScheduler.markAccountUnauthorized(
-          accountId,
-          accountType || 'openai',
-          sessionHash,
-          reason
-        )
-      } catch (markError) {
-        logger.error(
-          `Failed to mark OpenAI account unauthorized after ${unauthorizedStatus}:`,
-          markError
-        )
-      }
-
-      if (tryConsumeOpenAIAuthRetry(req, unauthorizedStatus, accountId, accountType || 'openai')) {
-        shouldRetryWithAnotherAccount = true
-        continue
-      }
-
-      let errorResponse = errorData
-      if (!errorResponse || typeof errorResponse !== 'object' || Buffer.isBuffer(errorResponse)) {
-        const fallbackMessage =
-          typeof errorData === 'string' && errorData.trim()
-            ? errorData.trim()
-            : unauthorizedStatus === 403
-              ? 'Forbidden'
-              : unauthorizedStatus === 402
-                ? 'Payment required'
-                : 'Unauthorized'
-        errorResponse = {
-          error: {
-            message: fallbackMessage,
-            type:
-              unauthorizedStatus === 403
-                ? 'forbidden'
-                : unauthorizedStatus === 402
-                  ? 'payment_required'
-                  : 'unauthorized',
-            code:
-              unauthorizedStatus === 403
-                ? 'forbidden'
-                : unauthorizedStatus === 402
-                  ? 'payment_required'
-                  : 'unauthorized'
+        const statusLabel =
+          unauthorizedStatus === 401 ? '401' : unauthorizedStatus === 402 ? '402' : '403'
+        const extraHint = unauthorizedStatus === 402 ? ' (payment required)' : ''
+        let reason = `OpenAI authentication failed (${statusLabel}${extraHint})`
+        if (errorData) {
+          const messageCandidate =
+            errorData.error &&
+            typeof errorData.error.message === 'string' &&
+            errorData.error.message.trim()
+              ? errorData.error.message.trim()
+              : typeof errorData.message === 'string' && errorData.message.trim()
+                ? errorData.message.trim()
+                : null
+          if (messageCandidate) {
+            reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${messageCandidate}`
           }
         }
-      }
 
-      res.status(unauthorizedStatus).json(errorResponse)
-      return
-    } else if (upstream.status === 200 || upstream.status === 201) {
-      // 请求成功，检查并移除限流状态
-      const isRateLimited = await unifiedOpenAIScheduler.isAccountRateLimited(accountId)
-      if (isRateLimited) {
-        logger.info(
-          `✅ Removing rate limit for OpenAI account ${accountId} after successful request`
-        )
-        await unifiedOpenAIScheduler.removeAccountRateLimit(accountId, 'openai')
-      }
-    }
+        // 先尝试重试（换其他账户），只有重试耗尽后才标记 unauthorized
+        // 避免单次 401（可能是临时性的）就永久禁用账户
+        if (
+          tryConsumeOpenAIAuthRetry(req, unauthorizedStatus, accountId, accountType || 'openai')
+        ) {
+          shouldRetryWithAnotherAccount = true
+          continue
+        }
 
+        // 重试耗尽，标记账户为 unauthorized
+        try {
+          await unifiedOpenAIScheduler.markAccountUnauthorized(
+            accountId,
+            accountType || 'openai',
+            sessionHash,
+            reason
+          )
+        } catch (markError) {
+          logger.error(
+            `Failed to mark OpenAI account unauthorized after ${unauthorizedStatus}:`,
+            markError
+          )
+        }
+
+        let errorResponse = errorData
+        if (!errorResponse || typeof errorResponse !== 'object' || Buffer.isBuffer(errorResponse)) {
+          const fallbackMessage =
+            typeof errorData === 'string' && errorData.trim()
+              ? errorData.trim()
+              : unauthorizedStatus === 403
+                ? 'Forbidden'
+                : unauthorizedStatus === 402
+                  ? 'Payment required'
+                  : 'Unauthorized'
+          errorResponse = {
+            error: {
+              message: fallbackMessage,
+              type:
+                unauthorizedStatus === 403
+                  ? 'forbidden'
+                  : unauthorizedStatus === 402
+                    ? 'payment_required'
+                    : 'unauthorized',
+              code:
+                unauthorizedStatus === 403
+                  ? 'forbidden'
+                  : unauthorizedStatus === 402
+                    ? 'payment_required'
+                    : 'unauthorized'
+            }
+          }
+        }
+
+        res.status(unauthorizedStatus).json(errorResponse)
+        return
+      } else if (upstream.status === 200 || upstream.status === 201) {
+        // 请求成功，检查并移除限流状态
+        const isRateLimited = await unifiedOpenAIScheduler.isAccountRateLimited(accountId)
+        if (isRateLimited) {
+          logger.info(
+            `✅ Removing rate limit for OpenAI account ${accountId} after successful request`
+          )
+          await unifiedOpenAIScheduler.removeAccountRateLimit(accountId, 'openai')
+        }
+      }
     } while (shouldRetryWithAnotherAccount)
 
     if (upstream.status >= 400) {
@@ -1491,8 +1496,12 @@ const handleResponses = async (req, res) => {
         // 直接获取完整响应
         let responseData = upstream.data
         if (upstreamUseStream && upstream.data && typeof upstream.data.on === 'function') {
-          const { completedResponse, text, usageData: streamUsageData, model: streamModel } =
-            await collectResponsesStreamResult(upstream.data)
+          const {
+            completedResponse,
+            text,
+            usageData: streamUsageData,
+            model: streamModel
+          } = await collectResponsesStreamResult(upstream.data)
 
           if (completedResponse && typeof completedResponse === 'object') {
             responseData = completedResponse
@@ -1522,7 +1531,8 @@ const handleResponses = async (req, res) => {
         }
 
         // 从响应中获取实际的 model 和 usage
-        actualModel = responseData.model || responseData.response?.model || requestedModel || 'gpt-4'
+        actualModel =
+          responseData.model || responseData.response?.model || requestedModel || 'gpt-4'
         usageData = responseData.usage || responseData.response?.usage
 
         logger.debug(`📊 Non-stream response - Model: ${actualModel}, Usage:`, usageData)
@@ -1983,8 +1993,7 @@ const handleResponses = async (req, res) => {
     const failedAccountType = accountType || error.accountType || 'openai'
 
     if ((status === 401 || status === 402 || status === 403) && failedAccountId) {
-      const statusLabel =
-        status === 401 ? '401' : status === 402 ? '402' : '403'
+      const statusLabel = status === 401 ? '401' : status === 402 ? '402' : '403'
       const extraHint = status === 402 ? ' (payment required)' : ''
       let reason = `OpenAI authentication failed (${statusLabel}${extraHint})`
       const errorData = error.response?.data
@@ -2004,6 +2013,15 @@ const handleResponses = async (req, res) => {
         reason = `OpenAI authentication failed (${statusLabel}${extraHint}): ${error.message}`
       }
 
+      // 先尝试重试（换其他账户），只有重试耗尽后才标记 unauthorized
+      if (
+        !res.headersSent &&
+        tryConsumeOpenAIAuthRetry(req, status, failedAccountId, failedAccountType)
+      ) {
+        return handleResponses(req, res)
+      }
+
+      // 重试耗尽，标记账户为 unauthorized
       try {
         await unifiedOpenAIScheduler.markAccountUnauthorized(
           failedAccountId,
@@ -2013,10 +2031,6 @@ const handleResponses = async (req, res) => {
         )
       } catch (markError) {
         logger.error('Failed to mark OpenAI account unauthorized in catch handler:', markError)
-      }
-
-      if (!res.headersSent && tryConsumeOpenAIAuthRetry(req, status, failedAccountId, failedAccountType)) {
-        return handleResponses(req, res)
       }
     }
 
