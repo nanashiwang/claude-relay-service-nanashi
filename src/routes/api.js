@@ -21,6 +21,7 @@ const {
 } = require('../utils/warmupInterceptor')
 const { sanitizeUpstreamError } = require('../utils/errorSanitizer')
 const { dumpAnthropicMessagesRequest } = require('../utils/anthropicRequestDump')
+const { sanitizeClaudeMessagesRequest } = require('../utils/anthropicRequestCompat')
 const {
   handleAnthropicMessagesToGemini,
   handleAnthropicCountTokensToGemini
@@ -204,19 +205,15 @@ async function handleMessagesRequest(req, res) {
     // 检查是否为流式请求
     const isStream = req.body.stream === true
 
-    // 临时修复新版本客户端，删除context_management字段，避免报错
-    // if (req.body.context_management) {
-    //   delete req.body.context_management
-    // }
-
-    // 遍历tools数组，删除input_examples字段
-    // if (req.body.tools && Array.isArray(req.body.tools)) {
-    //   req.body.tools.forEach((tool) => {
-    //     if (tool && typeof tool === 'object' && tool.input_examples) {
-    //       delete tool.input_examples
-    //     }
-    //   })
-    // }
+    const compatSummary = sanitizeClaudeMessagesRequest(req.body)
+    if (compatSummary.removedContextManagement || compatSummary.removedToolInputExamples > 0) {
+      logger.info('🔧 Applied Claude Messages compatibility sanitization', {
+        removedContextManagement: compatSummary.removedContextManagement,
+        removedToolInputExamples: compatSummary.removedToolInputExamples,
+        model: req.body?.model || null,
+        stream: isStream
+      })
+    }
 
     logger.api(
       `🚀 Processing ${isStream ? 'stream' : 'non-stream'} request for key: ${req.apiKey.name}`
