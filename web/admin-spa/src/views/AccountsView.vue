@@ -97,6 +97,22 @@
           </div>
 
           <div class="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:items-center sm:gap-3">
+            <!-- IP统计按钮 -->
+            <div class="relative">
+              <el-tooltip content="查看代理 IP 账户分布" effect="dark" placement="bottom">
+                <button
+                  class="group relative flex items-center justify-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-all duration-200 hover:border-gray-300 hover:shadow-md dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-500 sm:w-auto"
+                  @click="showIpStatsModal = true"
+                >
+                  <div
+                    class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-sky-500 to-cyan-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
+                  ></div>
+                  <i class="fas fa-network-wired relative text-sky-500" />
+                  <span class="relative">IP统计</span>
+                </button>
+              </el-tooltip>
+            </div>
+
             <!-- 账户统计按钮 -->
             <div class="relative">
               <el-tooltip content="查看账户统计汇总" effect="dark" placement="bottom">
@@ -1991,6 +2007,98 @@
       @saved="handleBalanceScriptSaved"
     />
 
+    <!-- IP统计弹窗 -->
+    <el-dialog
+      v-model="showIpStatsModal"
+      :style="{ maxWidth: '960px' }"
+      title="IP统计汇总"
+      width="90%"
+    >
+      <div class="space-y-4">
+        <div class="grid gap-3 sm:grid-cols-3">
+          <div
+            class="rounded-xl border border-sky-200 bg-sky-50 p-4 dark:border-sky-800 dark:bg-sky-900/20"
+          >
+            <div class="text-sm text-sky-700 dark:text-sky-300">代理 IP / 主机数</div>
+            <div class="mt-2 text-2xl font-bold text-sky-900 dark:text-sky-100">
+              {{ proxyIpStats.uniqueProxyHosts }}
+            </div>
+          </div>
+          <div
+            class="rounded-xl border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-900/20"
+          >
+            <div class="text-sm text-emerald-700 dark:text-emerald-300">已配置代理账户数</div>
+            <div class="mt-2 text-2xl font-bold text-emerald-900 dark:text-emerald-100">
+              {{ proxyIpStats.proxyAccountCount }}
+            </div>
+          </div>
+          <div
+            class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20"
+          >
+            <div class="text-sm text-amber-700 dark:text-amber-300">无代理账户数</div>
+            <div class="mt-2 text-2xl font-bold text-amber-900 dark:text-amber-100">
+              {{ proxyIpStats.noProxyAccountCount }}
+            </div>
+          </div>
+        </div>
+
+        <div v-if="proxyIpStats.rows.length > 0" class="overflow-x-auto">
+          <table class="w-full border-collapse text-sm" style="min-width: 760px">
+            <thead class="bg-gray-100 dark:bg-gray-700">
+              <tr>
+                <th class="border border-gray-300 px-4 py-2 text-left dark:border-gray-600">
+                  代理 IP / 主机
+                </th>
+                <th class="border border-gray-300 px-4 py-2 text-left dark:border-gray-600">
+                  端口
+                </th>
+                <th class="border border-gray-300 px-4 py-2 text-center dark:border-gray-600">
+                  账户数
+                </th>
+                <th class="border border-gray-300 px-4 py-2 text-left dark:border-gray-600">
+                  平台分布
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in proxyIpStats.rows" :key="row.host">
+                <td
+                  class="border border-gray-300 px-4 py-2 font-medium text-gray-900 dark:border-gray-600 dark:text-gray-100"
+                >
+                  {{ row.host }}
+                </td>
+                <td class="border border-gray-300 px-4 py-2 dark:border-gray-600">
+                  <span class="break-all text-gray-600 dark:text-gray-300">{{
+                    row.portsText
+                  }}</span>
+                </td>
+                <td class="border border-gray-300 px-4 py-2 text-center dark:border-gray-600">
+                  <span class="font-semibold text-sky-600 dark:text-sky-400">{{
+                    row.accountCount
+                  }}</span>
+                </td>
+                <td class="border border-gray-300 px-4 py-2 dark:border-gray-600">
+                  <span class="break-words text-gray-600 dark:text-gray-300">{{
+                    row.platformsText
+                  }}</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div
+          v-else
+          class="rounded-xl border border-dashed border-gray-300 px-4 py-10 text-center text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400"
+        >
+          当前筛选范围内暂无代理 IP 数据
+        </div>
+
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          说明：按代理主机聚合统计，同一主机的不同端口会合并展示；未配置代理的账户单独计入“无代理账户数”。
+        </p>
+      </div>
+    </el-dialog>
+
     <!-- 账户统计弹窗 -->
     <el-dialog
       v-model="showAccountStatsModal"
@@ -2218,6 +2326,9 @@ const testingAccount = ref(null)
 const showScheduledTestModal = ref(false)
 const scheduledTestAccount = ref(null)
 
+// IP统计弹窗状态
+const showIpStatsModal = ref(false)
+
 // 账户统计弹窗状态
 const showAccountStatsModal = ref(false)
 
@@ -2289,6 +2400,13 @@ const platformGroupMap = {
   'group-gemini': ['gemini', 'gemini-api'],
   'group-droid': ['droid']
 }
+
+const platformLabelMap = platformHierarchy.reduce((labels, group) => {
+  group.children?.forEach((child) => {
+    labels[child.value] = child.label
+  })
+  return labels
+}, {})
 
 // 平台请求处理器
 const platformRequestHandlers = {
@@ -2804,6 +2922,69 @@ const accountStats = computed(() => {
       }
     })
     .filter((stat) => stat.total > 0) // 只显示有账户的平台
+})
+
+const getPlatformLabel = (platform) => platformLabelMap[platform] || platform
+
+const proxyIpStats = computed(() => {
+  const proxyMap = new Map()
+  let proxyAccountCount = 0
+  let noProxyAccountCount = 0
+
+  accounts.value.forEach((account) => {
+    const proxyConfig = account.proxyConfig || normalizeProxyData(account.proxy)
+    const host = proxyConfig?.host?.trim()
+
+    if (!host) {
+      noProxyAccountCount += 1
+      return
+    }
+
+    proxyAccountCount += 1
+
+    const hostKey = host.toLowerCase()
+    const current = proxyMap.get(hostKey) || {
+      host,
+      accountCount: 0,
+      ports: new Set(),
+      platforms: new Set()
+    }
+
+    current.accountCount += 1
+
+    if (proxyConfig.port) {
+      current.ports.add(String(proxyConfig.port).trim())
+    }
+
+    current.platforms.add(getPlatformLabel(account.platform))
+    proxyMap.set(hostKey, current)
+  })
+
+  const rows = Array.from(proxyMap.values())
+    .map((item) => ({
+      host: item.host,
+      accountCount: item.accountCount,
+      portsText:
+        Array.from(item.ports)
+          .sort((a, b) => a.localeCompare(b, 'zh-CN', { numeric: true }))
+          .join(', ') || '--',
+      platformsText: Array.from(item.platforms)
+        .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+        .join(' / ')
+    }))
+    .sort((a, b) => {
+      if (b.accountCount !== a.accountCount) {
+        return b.accountCount - a.accountCount
+      }
+      return a.host.localeCompare(b.host, 'zh-CN')
+    })
+
+  return {
+    uniqueProxyHosts: rows.length,
+    proxyAccountCount,
+    noProxyAccountCount,
+    rows
+  }
 })
 
 // 账户统计合计
