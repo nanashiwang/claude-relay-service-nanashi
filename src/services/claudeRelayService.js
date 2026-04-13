@@ -17,6 +17,12 @@ const requestIdentityService = require('./requestIdentityService')
 const { createClaudeTestPayload } = require('../utils/testPayloadHelper')
 const userMessageQueueService = require('./userMessageQueueService')
 const { isStreamWritable } = require('../utils/streamHelper')
+const {
+  appendPreviewBuffer,
+  createDecodedUpstreamStream,
+  normalizeContentEncoding,
+  toHexPreview
+} = require('../utils/upstreamResponseStream')
 
 class ClaudeRelayService {
   constructor() {
@@ -1096,6 +1102,14 @@ class ClaudeRelayService {
     headers['User-Agent'] = userAgent
     headers['Accept'] = acceptHeader
 
+    if (isStream) {
+      Object.keys(headers).forEach((key) => {
+        if (key.toLowerCase() === 'accept-encoding') {
+          delete headers[key]
+        }
+      })
+    }
+
     logger.info(`🔗 指纹是这个: ${headers['User-Agent']}`)
 
     logger.info(`🔗 指纹是这个: ${headers['User-Agent']}`)
@@ -1853,201 +1867,304 @@ class ClaudeRelayService {
         }
 
         let buffer = ''
-        const allUsageData = [] // 收集所有的usage事件
-        let currentUsageData = {} // 当前正在收集的usage数据
-        let rateLimitDetected = false // 限流检测标志
+        const allUsageData = [] // ?????usage??
+        let currentUsageData = {} // ???????usage??
+        let rateLimitDetected = false // ??????
+        let streamFailed = false
+        const rawContentEncoding = res.headers ? res.headers['content-encoding'] : null
+        const upstreamContentEncoding = normalizeContentEncoding(rawContentEncoding)
+        const upstreamContentType = Array.isArray(res.headers?.['content-type'])
+          ? res.headers['content-type'][0]
+          : res.headers?.['content-type'] || null
+        const upstreamTransferEncoding = Array.isArray(res.headers?.['transfer-encoding'])
+          ? res.headers['transfer-encoding'][0]
+          : res.headers?.['transfer-encoding'] || null
+        const upstreamStreamInfo = createDecodedUpstreamStream(res, rawContentEncoding)
+        const upstreamStream = upstreamStreamInfo.stream
+        const streamDiagnostics = {
+          accountId,
+          model: body.model || null,
+          contentType: upstreamContentType,
+          contentEncoding: upstreamContentEncoding || 'identity',
+          transferEncoding: upstreamTransferEncoding,
+          decoded: upstreamStreamInfo.decoded,
+          decodingSupported: upstreamStreamInfo.supported,
+          rawBytes: 0,
+          rawChunks: 0,
+          decodedBytes: 0,
+          decodedChunks: 0,
+          sseDataLines: 0,
+          jsonEvents: 0,
+          parseErrors: 0,
+          doneEvents: 0,
+          eventTypes: [],
+          decodeError: null
+        }
+        let rawPreview = Buffer.alloc(0)
+        let decodedPreview = Buffer.alloc(0)
 
-        // 监听数据块，解析SSE并寻找usage信息
-        res.on('data', (chunk) => {
+        if (upstreamContentEncoding && upstreamStreamInfo.decoded) {
+          logger.info(
+            `Decoding Claude stream response (${upstreamContentEncoding}) for account ${accountId}`
+          )
+        } else if (upstreamContentEncoding && !upstreamStreamInfo.decoded) {
+          logger.warn(
+            `Unsupported Claude stream content-encoding ${upstreamContentEncoding} for account ${accountId}, continuing without decompression`
+          )
+        }
+
+        const rememberEventType = (eventType) => {
+          if (
+            typeof eventType === 'string' &&
+            eventType &&
+            !streamDiagnostics.eventTypes.includes(eventType) &&
+            streamDiagnostics.eventTypes.length < 12
+          ) {
+            streamDiagnostics.eventTypes.push(eventType)
+          }
+        }
+
+        const buildStreamDiagnostics = () => ({
+          ...streamDiagnostics,
+          rawPreviewHex: toHexPreview(rawPreview, 48),
+          decodedPreviewHex: toHexPreview(decodedPreview, 96),
+          finalBufferLength: Buffer.byteLength(buffer || '', 'utf8')
+        })
+
+        const writeStreamError = (error, errorLabel = 'Stream processing error') => {
+          if (!isStreamWritable(responseStream)) {
+            return
+          }
+
+          if (streamTransformer) {
+            responseStream.write(
+              `data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`
+            )
+            return
+          }
+
+          responseStream.write('event: error\n')
+          responseStream.write(
+            `data: ${JSON.stringify({
+              error: errorLabel,
+              message: error.message,
+              timestamp: new Date().toISOString()
+            })}\n\n`
+          )
+        }
+
+        const forwardStreamText = (text) => {
+          if (!text) {
+            return
+          }
+
+          if (isStreamWritable(responseStream)) {
+            if (streamTransformer) {
+              const transformed = streamTransformer(text)
+              if (transformed) {
+                responseStream.write(transformed)
+              }
+            } else {
+              responseStream.write(text)
+            }
+            return
+          }
+
+          logger.warn(
+            `[Official] Client disconnected during stream, skipping ${Buffer.byteLength(text, 'utf8')} bytes for account: ${accountId}`
+          )
+        }
+
+        const processSseLine = (line) => {
+          if (!line.startsWith('data:')) {
+            return
+          }
+
+          const jsonStr = line.slice(5).trimStart()
+          if (!jsonStr) {
+            return
+          }
+
+          if (jsonStr === '[DONE]') {
+            streamDiagnostics.doneEvents += 1
+            return
+          }
+
+          streamDiagnostics.sseDataLines += 1
+
           try {
-            const chunkStr = chunk.toString()
+            const data = JSON.parse(jsonStr)
+            streamDiagnostics.jsonEvents += 1
+            rememberEventType(data.type)
 
-            buffer += chunkStr
+            if (data.type === 'message_start' && data.message && data.message.usage) {
+              if (
+                currentUsageData.input_tokens !== undefined &&
+                currentUsageData.output_tokens !== undefined
+              ) {
+                allUsageData.push({ ...currentUsageData })
+                currentUsageData = {}
+              }
 
-            // 处理完整的SSE行
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || '' // 保留最后的不完整行
+              currentUsageData.input_tokens = data.message.usage.input_tokens || 0
+              currentUsageData.cache_creation_input_tokens =
+                data.message.usage.cache_creation_input_tokens || 0
+              currentUsageData.cache_read_input_tokens =
+                data.message.usage.cache_read_input_tokens || 0
+              currentUsageData.model = data.message.model
 
-            // 转发已处理的完整行到客户端
-            if (lines.length > 0) {
-              if (isStreamWritable(responseStream)) {
-                const linesToForward = lines.join('\n') + (lines.length > 0 ? '\n' : '')
-                // 如果有流转换器，应用转换
-                if (streamTransformer) {
-                  const transformed = streamTransformer(linesToForward)
-                  if (transformed) {
-                    responseStream.write(transformed)
-                  }
-                } else {
-                  responseStream.write(linesToForward)
+              if (
+                data.message.usage.cache_creation &&
+                typeof data.message.usage.cache_creation === 'object'
+              ) {
+                currentUsageData.cache_creation = {
+                  ephemeral_5m_input_tokens:
+                    data.message.usage.cache_creation.ephemeral_5m_input_tokens || 0,
+                  ephemeral_1h_input_tokens:
+                    data.message.usage.cache_creation.ephemeral_1h_input_tokens || 0
                 }
-              } else {
-                // 客户端连接已断开，记录警告（但仍继续解析usage）
-                logger.warn(
-                  `⚠️ [Official] Client disconnected during stream, skipping ${lines.length} lines for account: ${accountId}`
+                logger.debug(
+                  'Collected detailed cache creation data:',
+                  JSON.stringify(currentUsageData.cache_creation)
                 )
               }
-            }
 
-            for (const line of lines) {
-              // 解析SSE数据寻找usage信息
-              if (line.startsWith('data:')) {
-                const jsonStr = line.slice(5).trimStart()
-                if (!jsonStr || jsonStr === '[DONE]') {
-                  continue
-                }
-                try {
-                  const data = JSON.parse(jsonStr)
-
-                  // 收集来自不同事件的usage数据
-                  if (data.type === 'message_start' && data.message && data.message.usage) {
-                    // 新的消息开始，如果之前有数据，先保存
-                    if (
-                      currentUsageData.input_tokens !== undefined &&
-                      currentUsageData.output_tokens !== undefined
-                    ) {
-                      allUsageData.push({ ...currentUsageData })
-                      currentUsageData = {}
-                    }
-
-                    // message_start包含input tokens、cache tokens和模型信息
-                    currentUsageData.input_tokens = data.message.usage.input_tokens || 0
-                    currentUsageData.cache_creation_input_tokens =
-                      data.message.usage.cache_creation_input_tokens || 0
-                    currentUsageData.cache_read_input_tokens =
-                      data.message.usage.cache_read_input_tokens || 0
-                    currentUsageData.model = data.message.model
-
-                    // 检查是否有详细的 cache_creation 对象
-                    if (
-                      data.message.usage.cache_creation &&
-                      typeof data.message.usage.cache_creation === 'object'
-                    ) {
-                      currentUsageData.cache_creation = {
-                        ephemeral_5m_input_tokens:
-                          data.message.usage.cache_creation.ephemeral_5m_input_tokens || 0,
-                        ephemeral_1h_input_tokens:
-                          data.message.usage.cache_creation.ephemeral_1h_input_tokens || 0
-                      }
-                      logger.debug(
-                        '📊 Collected detailed cache creation data:',
-                        JSON.stringify(currentUsageData.cache_creation)
-                      )
-                    }
-
-                    logger.debug(
-                      '📊 Collected input/cache data from message_start:',
-                      JSON.stringify(currentUsageData)
-                    )
-                  }
-
-                  // message_delta包含最终的output tokens
-                  if (
-                    data.type === 'message_delta' &&
-                    data.usage &&
-                    data.usage.output_tokens !== undefined
-                  ) {
-                    currentUsageData.output_tokens = data.usage.output_tokens || 0
-
-                    logger.debug(
-                      '📊 Collected output data from message_delta:',
-                      JSON.stringify(currentUsageData)
-                    )
-
-                    // 如果已经收集到了input数据和output数据，这是一个完整的usage
-                    if (currentUsageData.input_tokens !== undefined) {
-                      logger.debug(
-                        '🎯 Complete usage data collected for model:',
-                        currentUsageData.model,
-                        '- Input:',
-                        currentUsageData.input_tokens,
-                        'Output:',
-                        currentUsageData.output_tokens
-                      )
-                      // 保存到列表中，但不立即触发回调
-                      allUsageData.push({ ...currentUsageData })
-                      // 重置当前数据，准备接收下一个
-                      currentUsageData = {}
-                    }
-                  }
-
-                  // 检查是否有限流错误
-                  if (
-                    data.type === 'error' &&
-                    data.error &&
-                    data.error.message &&
-                    data.error.message.toLowerCase().includes("exceed your account's rate limit")
-                  ) {
-                    rateLimitDetected = true
-                    logger.warn(`🚫 Rate limit detected in stream for account ${accountId}`)
-                  }
-                } catch (parseError) {
-                  // 忽略JSON解析错误，继续处理
-                  logger.debug('🔍 SSE line not JSON or no usage data:', line.slice(0, 100))
-                }
-              }
-            }
-          } catch (error) {
-            logger.error('❌ Error processing stream data:', error)
-            // 发送错误但不破坏流，让它自然结束
-            if (isStreamWritable(responseStream)) {
-              responseStream.write('event: error\n')
-              responseStream.write(
-                `data: ${JSON.stringify({
-                  error: 'Stream processing error',
-                  message: error.message,
-                  timestamp: new Date().toISOString()
-                })}\n\n`
+              logger.debug(
+                'Collected input/cache data from message_start:',
+                JSON.stringify(currentUsageData)
               )
             }
+
+            if (
+              data.type === 'message_delta' &&
+              data.usage &&
+              data.usage.output_tokens !== undefined
+            ) {
+              currentUsageData.output_tokens = data.usage.output_tokens || 0
+
+              logger.debug(
+                'Collected output data from message_delta:',
+                JSON.stringify(currentUsageData)
+              )
+
+              if (currentUsageData.input_tokens !== undefined) {
+                logger.debug(
+                  'Complete usage data collected for model:',
+                  currentUsageData.model,
+                  '- Input:',
+                  currentUsageData.input_tokens,
+                  'Output:',
+                  currentUsageData.output_tokens
+                )
+                allUsageData.push({ ...currentUsageData })
+                currentUsageData = {}
+              }
+            }
+
+            if (
+              data.type === 'error' &&
+              data.error &&
+              data.error.message &&
+              data.error.message.toLowerCase().includes("exceed your account's rate limit")
+            ) {
+              rateLimitDetected = true
+              logger.warn(`Rate limit detected in stream for account ${accountId}`)
+            }
+          } catch (parseError) {
+            streamDiagnostics.parseErrors += 1
+            logger.debug('SSE line not JSON or no usage data:', line.slice(0, 100))
+          }
+        }
+
+        const processStreamText = (text, flush = false) => {
+          if (!text && !flush) {
+            return
+          }
+
+          buffer += text
+          const lines = buffer.split('\n')
+          buffer = flush ? '' : lines.pop() || ''
+
+          if (lines.length > 0) {
+            const textToForward = flush ? lines.join('\n') : `${lines.join('\n')}\n`
+            forwardStreamText(textToForward)
+            lines.forEach(processSseLine)
+          }
+        }
+
+        res.on('data', (chunk) => {
+          streamDiagnostics.rawChunks += 1
+          streamDiagnostics.rawBytes += chunk.length
+          rawPreview = appendPreviewBuffer(rawPreview, chunk, 96)
+        })
+
+        upstreamStream.on('data', (chunk) => {
+          try {
+            const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            streamDiagnostics.decodedChunks += 1
+            streamDiagnostics.decodedBytes += chunkBuffer.length
+            decodedPreview = appendPreviewBuffer(decodedPreview, chunkBuffer, 192)
+            processStreamText(chunkBuffer.toString('utf8'))
+          } catch (error) {
+            logger.error('Error processing stream data:', error)
+            writeStreamError(error)
           }
         })
 
-        res.on('end', async () => {
+        upstreamStream.on('error', (error) => {
+          streamFailed = true
+          streamDiagnostics.decodeError = error.message
+          logger.error(
+            `Failed to decode Claude stream response (Account: ${account?.name || accountId}):`,
+            error
+          )
+          logger.error(
+            `Claude stream decode diagnostics: ${JSON.stringify(buildStreamDiagnostics())}`
+          )
+          writeStreamError(error, 'Stream decode error')
+          if (isStreamWritable(responseStream)) {
+            responseStream.end()
+          }
+          reject(error)
+        })
+
+        upstreamStream.on('end', async () => {
+          if (streamFailed) {
+            return
+          }
+
           try {
-            // 处理缓冲区中剩余的数据
-            if (buffer.trim() && isStreamWritable(responseStream)) {
-              if (streamTransformer) {
-                const transformed = streamTransformer(buffer)
-                if (transformed) {
-                  responseStream.write(transformed)
-                }
-              } else {
-                responseStream.write(buffer)
-              }
+            if (buffer) {
+              processStreamText('', true)
             }
 
-            // 确保流正确结束
             if (isStreamWritable(responseStream)) {
               responseStream.end()
               logger.debug(
-                `🌊 Stream end called | bytesWritten: ${responseStream.bytesWritten || 'unknown'}`
+                `Stream end called | bytesWritten: ${responseStream.bytesWritten || 'unknown'}`
               )
             } else {
-              // 连接已断开，记录警告
               logger.warn(
-                `⚠️ [Official] Client disconnected before stream end, data may not have been received | account: ${account?.name || accountId}`
+                `[Official] Client disconnected before stream end, data may not have been received | account: ${account?.name || accountId}`
               )
             }
           } catch (error) {
-            logger.error('❌ Error processing stream end:', error)
+            logger.error('Error processing stream end:', error)
           }
 
-          // 如果还有未完成的usage数据，尝试保存
           if (currentUsageData.input_tokens !== undefined) {
             if (currentUsageData.output_tokens === undefined) {
-              currentUsageData.output_tokens = 0 // 如果没有output，设为0
+              currentUsageData.output_tokens = 0
             }
             allUsageData.push(currentUsageData)
           }
 
-          // 检查是否捕获到usage数据
           if (allUsageData.length === 0) {
             logger.warn(
-              '⚠️ Stream completed but no usage data was captured! This indicates a problem with SSE parsing or Claude API response format.'
+              'Stream completed but no usage data was captured! This indicates a problem with SSE parsing or Claude API response format.'
             )
+            logger.warn(`Stream usage capture diagnostics: ${JSON.stringify(buildStreamDiagnostics())}`)
           } else {
-            // 打印此次请求的所有usage数据汇总
             const totalUsage = allUsageData.reduce(
               (acc, usage) => ({
                 input_tokens: (acc.input_tokens || 0) + (usage.input_tokens || 0),
@@ -2061,22 +2178,18 @@ class ClaudeRelayService {
               {}
             )
 
-            // 打印原始的usage数据为JSON字符串，避免嵌套问题
             logger.info(
-              `📊 === Stream Request Usage Summary === Model: ${body.model}, Total Events: ${allUsageData.length}, Usage Data: ${JSON.stringify(allUsageData)}`
+              `=== Stream Request Usage Summary === Model: ${body.model}, Total Events: ${allUsageData.length}, Usage Data: ${JSON.stringify(allUsageData)}`
             )
 
-            // 一般一个请求只会使用一个模型，即使有多个usage事件也应该合并
-            // 计算总的usage
             const finalUsage = {
               input_tokens: totalUsage.input_tokens,
               output_tokens: totalUsage.output_tokens,
               cache_creation_input_tokens: totalUsage.cache_creation_input_tokens,
               cache_read_input_tokens: totalUsage.cache_read_input_tokens,
-              model: allUsageData[allUsageData.length - 1].model || body.model // 使用最后一个模型或请求模型
+              model: allUsageData[allUsageData.length - 1].model || body.model
             }
 
-            // 如果有详细的cache_creation数据，合并它们
             let totalEphemeral5m = 0
             let totalEphemeral1h = 0
             allUsageData.forEach((usage) => {
@@ -2086,26 +2199,22 @@ class ClaudeRelayService {
               }
             })
 
-            // 如果有详细的缓存数据，添加到finalUsage
             if (totalEphemeral5m > 0 || totalEphemeral1h > 0) {
               finalUsage.cache_creation = {
                 ephemeral_5m_input_tokens: totalEphemeral5m,
                 ephemeral_1h_input_tokens: totalEphemeral1h
               }
               logger.info(
-                '📊 Detailed cache creation breakdown:',
+                'Detailed cache creation breakdown:',
                 JSON.stringify(finalUsage.cache_creation)
               )
             }
 
-            // 调用一次usageCallback记录合并后的数据
             if (usageCallback && typeof usageCallback === 'function') {
               usageCallback(finalUsage)
             }
           }
 
-          // 提取5小时会话窗口状态
-          // 使用大小写不敏感的方式获取响应头
           const get5hStatus = (resHeaders) => {
             if (!resHeaders) {
               return null
