@@ -15,6 +15,7 @@ const logger = require('../../utils/logger')
 const ProxyHelper = require('../../utils/proxyHelper')
 const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
+const { normalizeImportedOpenAIJson } = require('../../utils/openaiJsonImport')
 
 const router = express.Router()
 
@@ -44,6 +45,65 @@ const OPENAI_CONFIG = {
   CLIENT_ID: 'app_EMoamEEZ73f0CkXaXp7hrann',
   REDIRECT_URI: 'http://localhost:1455/auth/callback',
   SCOPE: 'openid profile email offline_access'
+}
+
+function parseImportEntries(imports = []) {
+  const entries = []
+
+  imports.forEach((item, fileIndex) => {
+    const fileName = typeof item?.fileName === 'string' ? item.fileName.trim() : ''
+    const rawContent = item?.content ?? item?.payload ?? item
+    let parsed = rawContent
+
+    if (typeof rawContent === 'string' && rawContent.trim()) {
+      try {
+        parsed = JSON.parse(rawContent)
+      } catch {
+        parsed = rawContent
+      }
+    }
+
+    if (Array.isArray(parsed)) {
+      parsed.forEach((payload, payloadIndex) => {
+        entries.push({
+          fileIndex,
+          payloadIndex,
+          fileName: fileName || `import-${fileIndex + 1}.json`,
+          payload
+        })
+      })
+      return
+    }
+
+    entries.push({
+      fileIndex,
+      payloadIndex: 0,
+      fileName: fileName || `import-${fileIndex + 1}.json`,
+      payload: parsed
+    })
+  })
+
+  return entries
+}
+
+function findExistingImportedAccount(existingAccounts, normalizedAccount) {
+  const importedAccountId = (normalizedAccount.accountInfo?.accountId || '').trim().toLowerCase()
+  const importedEmail = (normalizedAccount.accountInfo?.email || '').trim().toLowerCase()
+
+  return existingAccounts.find((account) => {
+    const currentAccountId = (account.accountId || '').trim().toLowerCase()
+    const currentEmail = (account.email || '').trim().toLowerCase()
+
+    if (importedAccountId && currentAccountId && importedAccountId === currentAccountId) {
+      return true
+    }
+
+    if (importedEmail && currentEmail && importedEmail === currentEmail) {
+      return true
+    }
+
+    return false
+  })
 }
 
 /**
@@ -348,6 +408,124 @@ router.get('/', authenticateAdmin, async (req, res) => {
 })
 
 // 创建 OpenAI 账户
+router.post('/import-json', authenticateAdmin, async (req, res) => {
+  try {
+    const imports = Array.isArray(req.body?.imports) ? req.body.imports : []
+    if (imports.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '请至少上传一个 JSON 文件'
+      })
+    }
+
+    const defaults =
+      req.body?.defaults && typeof req.body.defaults === 'object' ? req.body.defaults : {}
+    const allowDuplicates = req.body?.allowDuplicates === true
+    const importEntries = parseImportEntries(imports)
+
+    if (importEntries.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: '未找到可导入的 JSON 账户数据'
+      })
+    }
+
+    const existingAccounts = await openaiAccountService.getAllAccounts()
+    const summary = {
+      total: importEntries.length,
+      importedCount: 0,
+      skippedCount: 0,
+      failedCount: 0,
+      imported: [],
+      skipped: [],
+      failed: []
+    }
+
+    for (const entry of importEntries) {
+      try {
+        const normalized = normalizeImportedOpenAIJson(entry.payload, {
+          fileName: entry.fileName,
+          namePrefix: defaults.namePrefix || ''
+        })
+
+        const existingAccount = findExistingImportedAccount(existingAccounts, normalized)
+        if (existingAccount && !allowDuplicates) {
+          summary.skippedCount += 1
+          summary.skipped.push({
+            fileName: entry.fileName,
+            payloadIndex: entry.payloadIndex,
+            reason: '已存在相同账号',
+            existingAccountId: existingAccount.id,
+            existingAccountName: existingAccount.name || existingAccount.email || existingAccount.id
+          })
+          continue
+        }
+
+        const accountData = {
+          platform: 'openai',
+          name: normalized.name,
+          description: normalized.description,
+          openaiOauth: normalized.openaiOauth,
+          accountInfo: normalized.accountInfo,
+          proxy: defaults.proxy || null,
+          accountType: defaults.accountType || 'shared',
+          priority: defaults.priority || 50,
+          rateLimitDuration:
+            defaults.rateLimitDuration !== undefined && defaults.rateLimitDuration !== null
+              ? defaults.rateLimitDuration
+              : 60,
+          isActive: defaults.isActive !== false,
+          schedulable: defaults.schedulable !== false,
+          expiresAt: normalized.expiresAt || undefined,
+          lastRefresh: normalized.lastRefresh || undefined
+        }
+
+        const createdAccount = await openaiAccountService.createAccount(accountData)
+
+        if (defaults.accountType === 'group' && defaults.groupId) {
+          await accountGroupService.addAccountToGroup(createdAccount.id, defaults.groupId, 'openai')
+        }
+
+        const importedSummary = {
+          id: createdAccount.id,
+          name: createdAccount.name,
+          email: normalized.accountInfo?.email || '',
+          accountId: normalized.accountInfo?.accountId || '',
+          fileName: entry.fileName,
+          payloadIndex: entry.payloadIndex
+        }
+
+        existingAccounts.push(importedSummary)
+        summary.importedCount += 1
+        summary.imported.push(importedSummary)
+      } catch (error) {
+        summary.failedCount += 1
+        summary.failed.push({
+          fileName: entry.fileName,
+          payloadIndex: entry.payloadIndex,
+          error: error.message
+        })
+      }
+    }
+
+    logger.info(
+      `Imported OpenAI JSON accounts: total=${summary.total}, imported=${summary.importedCount}, skipped=${summary.skippedCount}, failed=${summary.failedCount}`
+    )
+
+    return res.json({
+      success: true,
+      data: summary
+    })
+  } catch (error) {
+    logger.error('批量导入 OpenAI JSON 账号失败:', error)
+    return res.status(500).json({
+      success: false,
+      message: '批量导入失败',
+      error: error.message
+    })
+  }
+})
+
 router.post('/', authenticateAdmin, async (req, res) => {
   try {
     const {

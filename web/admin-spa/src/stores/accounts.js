@@ -294,6 +294,25 @@ export const useAccountsStore = defineStore('accounts', () => {
     }
   }
 
+  const importOpenAIAccountsFromJson = async (data) => {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await apiClient.post('/admin/openai-accounts/import-json', data)
+      if (response.success) {
+        await fetchOpenAIAccounts()
+        return response.data
+      } else {
+        throw new Error(response.message || '批量导入 OpenAI JSON 账号失败')
+      }
+    } catch (err) {
+      error.value = err.message
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
   // 创建Droid账户
   const createDroidAccount = async (data) => {
     loading.value = true
@@ -927,6 +946,7 @@ export const useAccountsStore = defineStore('accounts', () => {
     createBedrockAccount,
     createGeminiAccount,
     createOpenAIAccount,
+    importOpenAIAccountsFromJson,
     createDroidAccount,
     updateDroidAccount,
     createAzureOpenAIAccount,

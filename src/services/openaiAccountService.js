@@ -626,6 +626,7 @@ async function createAccount(accountData) {
 
   const account = {
     id: accountId,
+    platform: accountData.platform || 'openai',
     name: accountData.name,
     description: accountData.description || '',
     accountType: accountData.accountType || 'shared',
@@ -656,9 +657,11 @@ async function createAccount(accountData) {
     email: isEmailEncrypted ? accountInfo.email : encrypt(accountInfo.email || ''),
     emailVerified: accountInfo.emailVerified === true ? 'true' : 'false',
     // 杩囨湡鏃堕棿
-    expiresAt: oauthData.expires_in
-      ? new Date(Date.now() + oauthData.expires_in * 1000).toISOString()
-      : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(), // OAuth Token 杩囨湡鏃堕棿锛堟妧鏈瓧娈碉級
+    expiresAt:
+      accountData.expiresAt ||
+      (oauthData.expires_in
+        ? new Date(Date.now() + oauthData.expires_in * 1000).toISOString()
+        : new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()), // OAuth Token 杩囨湡鏃堕棿锛堟妧鏈瓧娈碉級
 
     // 鉁?鏂板锛氳处鎴疯闃呭埌鏈熸椂闂达紙涓氬姟瀛楁锛屾墜鍔ㄧ鐞嗭級
     subscriptionExpiresAt: accountData.subscriptionExpiresAt || null,
@@ -667,7 +670,7 @@ async function createAccount(accountData) {
     isActive: accountData.isActive !== false ? 'true' : 'false',
     status: 'active',
     schedulable: accountData.schedulable !== false ? 'true' : 'false',
-    lastRefresh: now,
+    lastRefresh: accountData.lastRefresh || now,
     createdAt: now,
     updatedAt: now
   }

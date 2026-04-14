@@ -209,6 +209,14 @@
               <i class="fas fa-plus"></i>
               <span>添加账户</span>
             </button>
+
+            <button
+              class="flex w-full items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-5 py-2.5 text-sm font-medium text-emerald-700 shadow-sm transition-all duration-200 hover:border-emerald-300 hover:bg-emerald-100 hover:shadow-md dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/50 sm:w-auto"
+              @click.stop="openOpenAIJsonImportModal"
+            >
+              <i class="fas fa-file-import"></i>
+              <span>导入 JSON</span>
+            </button>
           </div>
         </div>
       </div>
@@ -1927,6 +1935,11 @@
     </div>
 
     <!-- 添加账户模态框 -->
+    <OpenAIJsonImportModal
+      v-if="showOpenAIJsonImportModal"
+      @close="showOpenAIJsonImportModal = false"
+      @success="handleOpenAIJsonImportSuccess"
+    />
     <AccountForm
       v-if="showCreateAccountModal && (!newAccountPlatform || newAccountPlatform !== 'ccr')"
       @close="closeCreateAccountModal"
@@ -2257,6 +2270,7 @@ import CustomDropdown from '@/components/common/CustomDropdown.vue'
 import ActionDropdown from '@/components/common/ActionDropdown.vue'
 import BalanceDisplay from '@/components/accounts/BalanceDisplay.vue'
 import AccountBalanceScriptModal from '@/components/accounts/AccountBalanceScriptModal.vue'
+import OpenAIJsonImportModal from '@/components/accounts/OpenAIJsonImportModal.vue'
 
 // 使用确认弹窗
 const { showConfirmModal, confirmOptions, showConfirm, handleConfirm, handleCancel } = useConfirm()
@@ -2479,6 +2493,7 @@ const groupOptions = computed(() => {
 const shouldShowCheckboxes = computed(() => showCheckboxes.value)
 
 // 模态框状态
+const showOpenAIJsonImportModal = ref(false)
 const showCreateAccountModal = ref(false)
 const newAccountPlatform = ref(null) // 跟踪新建账户选择的平台
 const showEditAccountModal = ref(false)
@@ -3828,6 +3843,14 @@ const getRateLimitRemainingMinutes = (account) => {
   }
 
   return 0
+}
+
+const openOpenAIJsonImportModal = () => {
+  showOpenAIJsonImportModal.value = true
+}
+
+const handleOpenAIJsonImportSuccess = async () => {
+  await loadAccounts()
 }
 
 // 打开创建账户模态框
