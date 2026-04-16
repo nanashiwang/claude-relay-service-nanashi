@@ -1,4 +1,4 @@
-describe('ClaudeAccountService five-hour warning auto-stop', () => {
+describe('ClaudeAccountService allowed_warning handling', () => {
   function loadService(initialAccount = {}) {
     jest.resetModules()
     jest.spyOn(global, 'setInterval').mockImplementation(() => 0)
@@ -91,37 +91,34 @@ describe('ClaudeAccountService five-hour warning auto-stop', () => {
     jest.resetModules()
   })
 
-  it('stops scheduling only after the third consecutive warning in the same window', async () => {
+  it('keeps scheduling enabled even after repeated warnings in the same window', async () => {
     const { service, getAccount, webhookNotifier } = loadService()
 
     await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
+    await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
+    await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
+    await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
+
     expect(getAccount().schedulable).toBe('true')
     expect(getAccount().fiveHourAutoStopped).toBeUndefined()
-
-    await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
-    expect(getAccount().schedulable).toBe('true')
-    expect(getAccount().fiveHourAutoStopped).toBeUndefined()
-
-    await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
-    expect(getAccount().schedulable).toBe('false')
-    expect(getAccount().fiveHourAutoStopped).toBe('true')
-    expect(getAccount().stoppedReason).toBe('5小时使用量接近限制，已自动停止调度')
-    expect(webhookNotifier.sendAccountAnomalyNotification).toHaveBeenCalledTimes(1)
+    expect(getAccount().stoppedReason).toBeUndefined()
+    expect(getAccount().sessionWindowStatus).toBe('allowed_warning')
+    expect(webhookNotifier.sendAccountAnomalyNotification).not.toHaveBeenCalled()
   })
 
-  it('resets consecutive warning count after an allowed status', async () => {
+  it('only records warning status without storing auto-stop metadata', async () => {
     const { service, getAccount } = loadService()
 
     await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
-    await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
-    await service.updateSessionWindowStatus('acc-1', 'allowed')
-    await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
 
     expect(getAccount().schedulable).toBe('true')
     expect(getAccount().fiveHourAutoStopped).toBeUndefined()
+    expect(getAccount().stoppedReason).toBeUndefined()
+    expect(getAccount().fiveHourConsecutiveWarningCount).toBeUndefined()
+    expect(getAccount().sessionWindowStatus).toBe('allowed_warning')
   })
 
-  it('resets consecutive warning count when the five-hour window changes', async () => {
+  it('keeps scheduling enabled across warnings from multiple windows', async () => {
     const { service, getAccount, updateAccount } = loadService()
 
     await service.updateSessionWindowStatus('acc-1', 'allowed_warning')
@@ -136,5 +133,6 @@ describe('ClaudeAccountService five-hour warning auto-stop', () => {
 
     expect(getAccount().schedulable).toBe('true')
     expect(getAccount().fiveHourAutoStopped).toBeUndefined()
+    expect(getAccount().stoppedReason).toBeUndefined()
   })
 })

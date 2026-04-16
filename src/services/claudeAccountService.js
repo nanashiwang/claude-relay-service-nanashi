@@ -37,18 +37,6 @@ class ClaudeAccountService {
   constructor() {
     this.claudeApiUrl = 'https://console.anthropic.com/v1/oauth/token'
     this.claudeOauthClientId = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
-    let maxWarnings = parseInt(process.env.CLAUDE_5H_WARNING_MAX_NOTIFICATIONS || '', 10)
-
-    if (Number.isNaN(maxWarnings) && config.claude?.fiveHourWarning) {
-      maxWarnings = parseInt(config.claude.fiveHourWarning.maxNotificationsPerWindow, 10)
-    }
-
-    if (Number.isNaN(maxWarnings) || maxWarnings < 1) {
-      maxWarnings = 1
-    }
-
-    this.maxFiveHourWarningsPerWindow = Math.min(maxWarnings, 10)
-    this.autoStopWarningThreshold = 3
 
     // 加密相关常量
     this.ENCRYPTION_ALGORITHM = 'aes-256-cbc'
@@ -1810,25 +1798,6 @@ class ClaudeAccountService {
     }
   }
 
-  async _clearFiveHourConsecutiveWarningCount(accountId, accountData = null) {
-    if (accountData) {
-      delete accountData.fiveHourConsecutiveWarningCount
-    }
-
-    try {
-      if (redis.client && typeof redis.client.hdel === 'function') {
-        await redis.client.hdel(
-          `claude:account:${accountId}`,
-          'fiveHourConsecutiveWarningCount'
-        )
-      }
-    } catch (error) {
-      logger.warn(
-        `⚠️ Failed to clear five-hour consecutive warning count for account ${accountId}: ${error.message}`
-      )
-    }
-  }
-
   // 📊 获取会话窗口信息
   async getSessionWindowInfo(accountId) {
     try {
@@ -2766,90 +2735,14 @@ class ClaudeAccountService {
       accountData.sessionWindowStatus = status
       accountData.sessionWindowStatusUpdatedAt = nowIso
 
-      if (status !== 'allowed_warning' && accountData.fiveHourConsecutiveWarningCount) {
-        await this._clearFiveHourConsecutiveWarningCount(accountId, accountData)
-      }
+      const hasLegacyFiveHourWarningMetadata =
+        accountData.fiveHourWarningWindow ||
+        accountData.fiveHourWarningCount ||
+        accountData.fiveHourConsecutiveWarningCount ||
+        accountData.fiveHourWarningLastSentAt
 
-      // 如果状态是 allowed_warning 且账户设置了自动停止调度
-      if (status === 'allowed_warning' && accountData.autoStopOnWarning === 'true') {
-        const alreadyAutoStopped =
-          accountData.schedulable === 'false' && accountData.fiveHourAutoStopped === 'true'
-
-        if (!alreadyAutoStopped) {
-          const windowIdentifier =
-            accountData.sessionWindowEnd || accountData.sessionWindowStart || 'unknown'
-
-          let warningCount = 0
-          let consecutiveWarningCount = 0
-          if (accountData.fiveHourWarningWindow === windowIdentifier) {
-            const parsedCount = parseInt(accountData.fiveHourWarningCount || '0', 10)
-            warningCount = Number.isNaN(parsedCount) ? 0 : parsedCount
-            const parsedConsecutiveCount = parseInt(
-              accountData.fiveHourConsecutiveWarningCount || '0',
-              10
-            )
-            consecutiveWarningCount = Number.isNaN(parsedConsecutiveCount)
-              ? 0
-              : parsedConsecutiveCount
-          }
-
-          const maxWarningsPerWindow = this.maxFiveHourWarningsPerWindow
-          const nextConsecutiveWarningCount = consecutiveWarningCount + 1
-
-          accountData.fiveHourWarningWindow = windowIdentifier
-          accountData.fiveHourConsecutiveWarningCount = nextConsecutiveWarningCount.toString()
-
-          const canSendWarning = warningCount < maxWarningsPerWindow
-          let updatedWarningCount = warningCount
-
-          if (canSendWarning) {
-            updatedWarningCount += 1
-            accountData.fiveHourWarningLastSentAt = nowIso
-          }
-          accountData.fiveHourWarningCount = updatedWarningCount.toString()
-
-          if (nextConsecutiveWarningCount >= this.autoStopWarningThreshold) {
-            logger.warn(
-              `⚠️ Account ${accountData.name} (${accountId}) received ${nextConsecutiveWarningCount} consecutive 5h warnings, auto-stopping scheduling`
-            )
-            accountData.schedulable = 'false'
-            // 使用独立的5小时限制自动停止标记
-            accountData.fiveHourAutoStopped = 'true'
-            accountData.fiveHourStoppedAt = nowIso
-            // 设置停止原因，供前端显示
-            accountData.stoppedReason = '5小时使用量接近限制，已自动停止调度'
-          } else {
-            logger.warn(
-              `⚠️ Account ${accountData.name} (${accountId}) approaching 5h limit (${nextConsecutiveWarningCount}/${this.autoStopWarningThreshold}), keeping scheduling enabled`
-            )
-          }
-
-          if (canSendWarning) {
-            // 发送Webhook通知
-            try {
-              const webhookNotifier = require('../utils/webhookNotifier')
-              await webhookNotifier.sendAccountAnomalyNotification({
-                accountId,
-                accountName: accountData.name || 'Claude Account',
-                platform: 'claude',
-                status: 'warning',
-                errorCode: 'CLAUDE_5H_LIMIT_WARNING',
-                reason: '5小时使用量接近限制，已自动停止调度',
-                timestamp: getISOStringWithTimezone(now)
-              })
-            } catch (webhookError) {
-              logger.error('Failed to send webhook notification:', webhookError)
-            }
-          } else {
-            logger.debug(
-              `⚠️ Account ${accountData.name} (${accountId}) reached max ${maxWarningsPerWindow} warning notifications for current 5h window, skipping webhook`
-            )
-          }
-        } else {
-          logger.debug(
-            `⚠️ Account ${accountData.name} (${accountId}) already auto-stopped for 5h limit, skipping duplicate warning`
-          )
-        }
+      if (hasLegacyFiveHourWarningMetadata) {
+        await this._clearFiveHourWarningMetadata(accountId, accountData)
       }
 
       await redis.setClaudeAccount(accountId, accountData)
