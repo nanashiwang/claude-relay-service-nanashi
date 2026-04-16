@@ -48,6 +48,7 @@ class ClaudeAccountService {
     }
 
     this.maxFiveHourWarningsPerWindow = Math.min(maxWarnings, 10)
+    this.autoStopWarningThreshold = 3
 
     // 加密相关常量
     this.ENCRYPTION_ALGORITHM = 'aes-256-cbc'
@@ -1788,6 +1789,7 @@ class ClaudeAccountService {
     if (accountData) {
       delete accountData.fiveHourWarningWindow
       delete accountData.fiveHourWarningCount
+      delete accountData.fiveHourConsecutiveWarningCount
       delete accountData.fiveHourWarningLastSentAt
     }
 
@@ -1797,12 +1799,32 @@ class ClaudeAccountService {
           `claude:account:${accountId}`,
           'fiveHourWarningWindow',
           'fiveHourWarningCount',
+          'fiveHourConsecutiveWarningCount',
           'fiveHourWarningLastSentAt'
         )
       }
     } catch (error) {
       logger.warn(
         `⚠️ Failed to clear five-hour warning metadata for account ${accountId}: ${error.message}`
+      )
+    }
+  }
+
+  async _clearFiveHourConsecutiveWarningCount(accountId, accountData = null) {
+    if (accountData) {
+      delete accountData.fiveHourConsecutiveWarningCount
+    }
+
+    try {
+      if (redis.client && typeof redis.client.hdel === 'function') {
+        await redis.client.hdel(
+          `claude:account:${accountId}`,
+          'fiveHourConsecutiveWarningCount'
+        )
+      }
+    } catch (error) {
+      logger.warn(
+        `⚠️ Failed to clear five-hour consecutive warning count for account ${accountId}: ${error.message}`
       )
     }
   }
@@ -2431,6 +2453,7 @@ class ClaudeAccountService {
       delete updatedAccountData.tempErrorAutoStopped
       delete updatedAccountData.fiveHourWarningWindow
       delete updatedAccountData.fiveHourWarningCount
+      delete updatedAccountData.fiveHourConsecutiveWarningCount
       delete updatedAccountData.fiveHourWarningLastSentAt
       // 兼容旧的标记
       delete updatedAccountData.autoStoppedAt
@@ -2467,6 +2490,7 @@ class ClaudeAccountService {
         'fiveHourStoppedAt',
         'fiveHourWarningWindow',
         'fiveHourWarningCount',
+        'fiveHourConsecutiveWarningCount',
         'fiveHourWarningLastSentAt',
         'tempErrorAutoStopped',
         // 兼容旧的标记
@@ -2742,6 +2766,10 @@ class ClaudeAccountService {
       accountData.sessionWindowStatus = status
       accountData.sessionWindowStatusUpdatedAt = nowIso
 
+      if (status !== 'allowed_warning' && accountData.fiveHourConsecutiveWarningCount) {
+        await this._clearFiveHourConsecutiveWarningCount(accountId, accountData)
+      }
+
       // 如果状态是 allowed_warning 且账户设置了自动停止调度
       if (status === 'allowed_warning' && accountData.autoStopOnWarning === 'true') {
         const alreadyAutoStopped =
@@ -2752,32 +2780,49 @@ class ClaudeAccountService {
             accountData.sessionWindowEnd || accountData.sessionWindowStart || 'unknown'
 
           let warningCount = 0
+          let consecutiveWarningCount = 0
           if (accountData.fiveHourWarningWindow === windowIdentifier) {
             const parsedCount = parseInt(accountData.fiveHourWarningCount || '0', 10)
             warningCount = Number.isNaN(parsedCount) ? 0 : parsedCount
+            const parsedConsecutiveCount = parseInt(
+              accountData.fiveHourConsecutiveWarningCount || '0',
+              10
+            )
+            consecutiveWarningCount = Number.isNaN(parsedConsecutiveCount)
+              ? 0
+              : parsedConsecutiveCount
           }
 
           const maxWarningsPerWindow = this.maxFiveHourWarningsPerWindow
+          const nextConsecutiveWarningCount = consecutiveWarningCount + 1
 
-          logger.warn(
-            `⚠️ Account ${accountData.name} (${accountId}) approaching 5h limit, auto-stopping scheduling`
-          )
-          accountData.schedulable = 'false'
-          // 使用独立的5小时限制自动停止标记
-          accountData.fiveHourAutoStopped = 'true'
-          accountData.fiveHourStoppedAt = nowIso
-          // 设置停止原因，供前端显示
-          accountData.stoppedReason = '5小时使用量接近限制，已自动停止调度'
+          accountData.fiveHourWarningWindow = windowIdentifier
+          accountData.fiveHourConsecutiveWarningCount = nextConsecutiveWarningCount.toString()
 
           const canSendWarning = warningCount < maxWarningsPerWindow
           let updatedWarningCount = warningCount
 
-          accountData.fiveHourWarningWindow = windowIdentifier
           if (canSendWarning) {
             updatedWarningCount += 1
             accountData.fiveHourWarningLastSentAt = nowIso
           }
           accountData.fiveHourWarningCount = updatedWarningCount.toString()
+
+          if (nextConsecutiveWarningCount >= this.autoStopWarningThreshold) {
+            logger.warn(
+              `⚠️ Account ${accountData.name} (${accountId}) received ${nextConsecutiveWarningCount} consecutive 5h warnings, auto-stopping scheduling`
+            )
+            accountData.schedulable = 'false'
+            // 使用独立的5小时限制自动停止标记
+            accountData.fiveHourAutoStopped = 'true'
+            accountData.fiveHourStoppedAt = nowIso
+            // 设置停止原因，供前端显示
+            accountData.stoppedReason = '5小时使用量接近限制，已自动停止调度'
+          } else {
+            logger.warn(
+              `⚠️ Account ${accountData.name} (${accountId}) approaching 5h limit (${nextConsecutiveWarningCount}/${this.autoStopWarningThreshold}), keeping scheduling enabled`
+            )
+          }
 
           if (canSendWarning) {
             // 发送Webhook通知
