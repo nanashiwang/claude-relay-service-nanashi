@@ -586,7 +586,8 @@ router.post('/claude-accounts', authenticateAdmin, async (req, res) => {
       expiresAt,
       extInfo,
       maxConcurrency,
-      interceptWarmup
+      interceptWarmup,
+      rateLimitDuration
     } = req.body
 
     if (!name) {
@@ -615,6 +616,13 @@ router.post('/claude-accounts', authenticateAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Priority must be a number between 1 and 100' })
     }
 
+    if (
+      rateLimitDuration !== undefined &&
+      (typeof rateLimitDuration !== 'number' || rateLimitDuration < 0)
+    ) {
+      return res.status(400).json({ error: 'rateLimitDuration must be a non-negative number' })
+    }
+
     const newAccount = await claudeAccountService.createAccount({
       name,
       description,
@@ -633,7 +641,9 @@ router.post('/claude-accounts', authenticateAdmin, async (req, res) => {
       expiresAt: expiresAt || null, // 账户订阅到期时间
       extInfo: extInfo || null,
       maxConcurrency: maxConcurrency || 0, // 账户级串行队列：0=使用全局配置，>0=强制启用
-      interceptWarmup: interceptWarmup === true // 拦截预热请求：默认为false
+      interceptWarmup: interceptWarmup === true, // 拦截预热请求：默认为false
+      rateLimitDuration:
+        rateLimitDuration === undefined ? 5 : Math.max(Number(rateLimitDuration) || 0, 0)
     })
 
     // 如果是分组类型，将账户添加到分组
@@ -675,6 +685,13 @@ router.put('/claude-accounts/:accountId', authenticateAdmin, async (req, res) =>
         mappedUpdates.priority > 100)
     ) {
       return res.status(400).json({ error: 'Priority must be a number between 1 and 100' })
+    }
+
+    if (
+      mappedUpdates.rateLimitDuration !== undefined &&
+      (typeof mappedUpdates.rateLimitDuration !== 'number' || mappedUpdates.rateLimitDuration < 0)
+    ) {
+      return res.status(400).json({ error: 'rateLimitDuration must be a non-negative number' })
     }
 
     // 验证accountType的有效性

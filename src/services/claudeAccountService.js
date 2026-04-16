@@ -59,6 +59,20 @@ class ClaudeAccountService {
     )
   }
 
+  _getClaudeRateLimitDuration(accountData = {}) {
+    const rawValue = accountData.rateLimitDuration
+    if (rawValue === undefined || rawValue === null || rawValue === '') {
+      return 5
+    }
+
+    const parsedValue = parseInt(rawValue, 10)
+    if (Number.isNaN(parsedValue)) {
+      return 5
+    }
+
+    return Math.max(parsedValue, 0)
+  }
+
   // 🏢 创建Claude账户
   async createAccount(options = {}) {
     const {
@@ -82,7 +96,8 @@ class ClaudeAccountService {
       expiresAt = null, // 账户订阅到期时间
       extInfo = null, // 额外扩展信息
       maxConcurrency = 0, // 账户级用户消息串行队列：0=使用全局配置，>0=强制启用串行
-      interceptWarmup = false // 拦截预热请求（标题生成、Warmup等）
+      interceptWarmup = false, // 拦截预热请求（标题生成、Warmup等）
+      rateLimitDuration = 5 // 429 自动限流冷却时间，0=关闭自动限流
     } = options
 
     const accountId = uuidv4()
@@ -131,7 +146,9 @@ class ClaudeAccountService {
         // 账户级用户消息串行队列限制
         maxConcurrency: maxConcurrency.toString(),
         // 拦截预热请求
-        interceptWarmup: interceptWarmup.toString()
+        interceptWarmup: interceptWarmup.toString(),
+        // 429 自动限流冷却时间
+        rateLimitDuration: Math.max(parseInt(rateLimitDuration, 10) || 0, 0).toString()
       }
     } else {
       // 兼容旧格式
@@ -167,7 +184,9 @@ class ClaudeAccountService {
         // 账户级用户消息串行队列限制
         maxConcurrency: maxConcurrency.toString(),
         // 拦截预热请求
-        interceptWarmup: interceptWarmup.toString()
+        interceptWarmup: interceptWarmup.toString(),
+        // 429 自动限流冷却时间
+        rateLimitDuration: Math.max(parseInt(rateLimitDuration, 10) || 0, 0).toString()
       }
     }
 
@@ -216,7 +235,8 @@ class ClaudeAccountService {
       useUnifiedClientId,
       unifiedClientId,
       extInfo: normalizedExtInfo,
-      interceptWarmup
+      interceptWarmup,
+      rateLimitDuration: Math.max(parseInt(rateLimitDuration, 10) || 0, 0)
     }
   }
 
@@ -578,7 +598,9 @@ class ClaudeAccountService {
             // 账户级用户消息串行队列限制
             maxConcurrency: parseInt(account.maxConcurrency || '0', 10),
             // 拦截预热请求
-            interceptWarmup: account.interceptWarmup === 'true'
+            interceptWarmup: account.interceptWarmup === 'true',
+            // 429 自动限流冷却时间，兼容旧账号默认开启
+            rateLimitDuration: this._getClaudeRateLimitDuration(account)
           }
         })
       )
@@ -672,10 +694,12 @@ class ClaudeAccountService {
         'subscriptionExpiresAt',
         'extInfo',
         'maxConcurrency',
-        'interceptWarmup'
+        'interceptWarmup',
+        'rateLimitDuration'
       ]
       const updatedData = { ...accountData }
       let shouldClearAutoStopFields = false
+      let shouldClearRateLimitFields = false
       let extInfoProvided = false
 
       // 检查是否新增了 refresh token
@@ -689,6 +713,8 @@ class ClaudeAccountService {
             updatedData[field] = value ? JSON.stringify(value) : ''
           } else if (field === 'priority' || field === 'maxConcurrency') {
             updatedData[field] = value.toString()
+          } else if (field === 'rateLimitDuration') {
+            updatedData[field] = Math.max(parseInt(value, 10) || 0, 0).toString()
           } else if (field === 'subscriptionInfo') {
             // 处理订阅信息更新
             updatedData[field] = typeof value === 'string' ? value : JSON.stringify(value)
@@ -773,6 +799,24 @@ class ClaudeAccountService {
         }
       }
 
+      if (
+        Object.prototype.hasOwnProperty.call(updates, 'rateLimitDuration') &&
+        this._getClaudeRateLimitDuration({ rateLimitDuration: updates.rateLimitDuration }) === 0
+      ) {
+        const hadRateLimitAutoStop = accountData.rateLimitAutoStopped === 'true'
+
+        delete updatedData.rateLimitedAt
+        delete updatedData.rateLimitStatus
+        delete updatedData.rateLimitEndAt
+        delete updatedData.rateLimitAutoStopped
+
+        if (hadRateLimitAutoStop && updatedData.schedulable === 'false') {
+          updatedData.schedulable = 'true'
+        }
+
+        shouldClearRateLimitFields = true
+      }
+
       // 检查是否手动禁用了账号，如果是则发送webhook通知
       if (updates.isActive === 'false' && accountData.isActive === 'true') {
         try {
@@ -795,15 +839,21 @@ class ClaudeAccountService {
 
       await redis.setClaudeAccount(accountId, updatedData)
 
-      if (shouldClearAutoStopFields) {
-        const fieldsToRemove = [
-          'rateLimitAutoStopped',
-          'fiveHourAutoStopped',
-          'fiveHourStoppedAt',
-          'tempErrorAutoStopped',
-          'autoStoppedAt',
-          'stoppedReason'
-        ]
+      if (shouldClearAutoStopFields || shouldClearRateLimitFields) {
+        const fieldsToRemove = []
+        if (shouldClearAutoStopFields) {
+          fieldsToRemove.push(
+            'rateLimitAutoStopped',
+            'fiveHourAutoStopped',
+            'fiveHourStoppedAt',
+            'tempErrorAutoStopped',
+            'autoStoppedAt',
+            'stoppedReason'
+          )
+        }
+        if (shouldClearRateLimitFields) {
+          fieldsToRemove.push('rateLimitedAt', 'rateLimitStatus', 'rateLimitEndAt', 'rateLimitAutoStopped')
+        }
         await this._removeAccountFields(accountId, fieldsToRemove, 'manual_schedule_update')
       }
 
@@ -1317,6 +1367,14 @@ class ClaudeAccountService {
         throw new Error('Account not found')
       }
 
+      const rateLimitDuration = this._getClaudeRateLimitDuration(accountData)
+      if (rateLimitDuration === 0) {
+        logger.info(
+          `⏭️ Account ${accountData.name} (${accountId}) has 429 auto cooldown disabled, skipping rate-limit state update`
+        )
+        return { success: true, skipped: true }
+      }
+
       // 设置限流状态和时间
       const updatedAccountData = { ...accountData }
       updatedAccountData.rateLimitedAt = new Date().toISOString()
@@ -1345,11 +1403,10 @@ class ClaudeAccountService {
       } else {
         // 没有准确的 reset timestamp —— 很可能是瞬时并发限流（per-minute rate limit），
         // 而非 5h 窗口限流。仅短时冷却，不自动关闭调度开关，避免误伤。
-        const TRANSIENT_RATE_LIMIT_MINUTES = 5
-        const cooldownEnd = new Date(Date.now() + TRANSIENT_RATE_LIMIT_MINUTES * 60 * 1000)
+        const cooldownEnd = new Date(Date.now() + rateLimitDuration * 60 * 1000)
         updatedAccountData.rateLimitEndAt = cooldownEnd.toISOString()
         logger.warn(
-          `🚫 Account marked as rate limited (transient, ${TRANSIENT_RATE_LIMIT_MINUTES}min cooldown): ${accountData.name} (${accountId})`
+          `🚫 Account marked as rate limited (transient, ${rateLimitDuration}min cooldown): ${accountData.name} (${accountId})`
         )
       }
 

@@ -97,6 +97,18 @@ describe('ClaudeAccountService transient 429 handling', () => {
     expect(getAccount().rateLimitAutoStopped).toBeUndefined()
   })
 
+  it('skips rate-limit state entirely when 429 auto cooldown is disabled', async () => {
+    const { service, getAccount, redisMock } = loadService({ rateLimitDuration: '0' })
+
+    await service.markAccountRateLimited('acc-1', 'session-1', null)
+
+    expect(getAccount().schedulable).toBe('true')
+    expect(getAccount().rateLimitStatus).toBeUndefined()
+    expect(getAccount().rateLimitEndAt).toBeUndefined()
+    expect(getAccount().rateLimitAutoStopped).toBeUndefined()
+    expect(redisMock.deleteSessionAccountMapping).not.toHaveBeenCalled()
+  })
+
   it('still auto-stops scheduling when 429 has an explicit reset timestamp', async () => {
     const { service, getAccount } = loadService()
     const resetTimestamp = Math.floor(Date.now() / 1000) + 3600
@@ -107,5 +119,23 @@ describe('ClaudeAccountService transient 429 handling', () => {
     expect(getAccount().rateLimitStatus).toBe('limited')
     expect(getAccount().rateLimitEndAt).toBeTruthy()
     expect(getAccount().rateLimitAutoStopped).toBe('true')
+  })
+
+  it('clears current rate-limit state when 429 auto cooldown is turned off in edit mode', async () => {
+    const { service, getAccount } = loadService({
+      schedulable: 'false',
+      rateLimitDuration: '5',
+      rateLimitStatus: 'limited',
+      rateLimitedAt: new Date().toISOString(),
+      rateLimitEndAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      rateLimitAutoStopped: 'true'
+    })
+
+    await service.updateAccount('acc-1', { rateLimitDuration: 0 })
+
+    expect(getAccount().schedulable).toBe('true')
+    expect(getAccount().rateLimitStatus).toBeUndefined()
+    expect(getAccount().rateLimitEndAt).toBeUndefined()
+    expect(getAccount().rateLimitAutoStopped).toBeUndefined()
   })
 })

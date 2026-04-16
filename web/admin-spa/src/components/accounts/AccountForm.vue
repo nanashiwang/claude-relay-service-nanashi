@@ -1662,6 +1662,24 @@
               </label>
             </div>
 
+            <div v-if="form.platform === 'claude'" class="mt-4">
+              <label class="flex items-start">
+                <input
+                  v-model="form.enableRateLimit"
+                  class="mt-1 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                  type="checkbox"
+                />
+                <div class="ml-3">
+                  <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    429错误自动进入限流冷却
+                  </span>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    开启后遇到 429 会记录为“限流中”并短暂跳过调度；关闭后仅记录日志和透传，不写入限流状态。
+                  </p>
+                </div>
+              </label>
+            </div>
+
             <!-- Claude 账户级串行队列开关 -->
             <div v-if="form.platform === 'claude'" class="mt-4">
               <label class="flex items-start">
@@ -2683,6 +2701,24 @@
                 </span>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   当系统检测到账户接近5小时使用限制时，自动暂停调度该账户。进入新的时间窗口后会自动恢复调度。
+                </p>
+              </div>
+            </label>
+          </div>
+
+          <div v-if="form.platform === 'claude'" class="mt-4">
+            <label class="flex items-start">
+              <input
+                v-model="form.enableRateLimit"
+                class="mt-1 text-blue-600 focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+                type="checkbox"
+              />
+              <div class="ml-3">
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  429错误自动进入限流冷却
+                </span>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  开启后遇到 429 会记录为“限流中”并短暂跳过调度；关闭后仅记录日志和透传，不写入限流状态。
                 </p>
               </div>
             </label>
@@ -4081,7 +4117,12 @@ const form = ref({
   baseApi: props.account?.baseApi || '',
   // Gemini-API 特定字段
   baseUrl: props.account?.baseUrl || 'https://generativelanguage.googleapis.com',
-  rateLimitDuration: props.account?.rateLimitDuration || 60,
+  rateLimitDuration: (() => {
+    if (props.account?.rateLimitDuration !== undefined && props.account?.rateLimitDuration !== null) {
+      return Number(props.account.rateLimitDuration)
+    }
+    return props.account?.platform === 'claude' ? 5 : 60
+  })(),
   supportedModels: (() => {
     const models = props.account?.supportedModels
     if (!models) return []
@@ -4096,7 +4137,12 @@ const form = ref({
     return []
   })(),
   userAgent: props.account?.userAgent || '',
-  enableRateLimit: props.account ? props.account.rateLimitDuration > 0 : true,
+  enableRateLimit: props.account
+    ? Number(
+        props.account.rateLimitDuration ??
+          (props.account.platform === 'claude' ? 5 : 60)
+      ) > 0
+    : true,
   disableAutoProtection: props.account?.disableAutoProtection === true,
   // 额度管理字段
   dailyQuota: props.account?.dailyQuota || 0,
@@ -4659,6 +4705,7 @@ const buildClaudeAccountData = (tokenInfo, accountName, clientId) => {
     useUnifiedClientId: form.value.useUnifiedClientId || false,
     unifiedClientId: clientId,
     maxConcurrency: form.value.serialQueueEnabled ? 1 : 0,
+    rateLimitDuration: form.value.enableRateLimit ? 5 : 0,
     subscriptionInfo: {
       accountType: form.value.subscriptionType || 'claude_max',
       hasClaudeMax: form.value.subscriptionType === 'claude_max',
@@ -4797,6 +4844,7 @@ const handleOAuthSuccess = async (tokenInfoOrList) => {
       data.useUnifiedClientId = form.value.useUnifiedClientId || false
       data.unifiedClientId = form.value.unifiedClientId || ''
       data.maxConcurrency = form.value.serialQueueEnabled ? 1 : 0
+      data.rateLimitDuration = form.value.enableRateLimit ? 5 : 0
       // 添加订阅类型信息
       data.subscriptionInfo = {
         accountType: form.value.subscriptionType || 'claude_max',
@@ -5126,6 +5174,7 @@ const createAccount = async () => {
       data.useUnifiedClientId = form.value.useUnifiedClientId || false
       data.unifiedClientId = form.value.unifiedClientId || ''
       data.maxConcurrency = form.value.serialQueueEnabled ? 1 : 0
+      data.rateLimitDuration = form.value.enableRateLimit ? 5 : 0
       // 添加订阅类型信息
       data.subscriptionInfo = {
         accountType: form.value.subscriptionType || 'claude_max',
@@ -5523,6 +5572,7 @@ const updateAccount = async () => {
       data.useUnifiedClientId = form.value.useUnifiedClientId || false
       data.unifiedClientId = form.value.unifiedClientId || ''
       data.maxConcurrency = form.value.serialQueueEnabled ? 1 : 0
+      data.rateLimitDuration = form.value.enableRateLimit ? 5 : 0
       // 更新订阅类型信息
       data.subscriptionInfo = {
         accountType: form.value.subscriptionType || 'claude_max',
@@ -6131,6 +6181,12 @@ watch(
         useUnifiedClientId: newAccount.useUnifiedClientId || false,
         unifiedClientId: newAccount.unifiedClientId || '',
         serialQueueEnabled: (newAccount.maxConcurrency || 0) > 0,
+        rateLimitDuration:
+          newAccount.rateLimitDuration !== undefined && newAccount.rateLimitDuration !== null
+            ? Number(newAccount.rateLimitDuration)
+            : newAccount.platform === 'claude'
+              ? 5
+              : 60,
         groupId: groupId,
         groupIds: [],
         projectId: newAccount.projectId || '',
@@ -6159,8 +6215,10 @@ watch(
         })(),
         userAgent: newAccount.userAgent || '',
         enableRateLimit:
-          newAccount.rateLimitDuration && newAccount.rateLimitDuration > 0 ? true : false,
-        rateLimitDuration: newAccount.rateLimitDuration || 60,
+          Number(
+            newAccount.rateLimitDuration ??
+              (newAccount.platform === 'claude' ? 5 : 60)
+          ) > 0,
         // Bedrock 特定字段
         accessKeyId: '', // 编辑模式不显示现有的访问密钥
         secretAccessKey: '', // 编辑模式不显示现有的秘密密钥
