@@ -1321,13 +1321,13 @@ class ClaudeAccountService {
       const updatedAccountData = { ...accountData }
       updatedAccountData.rateLimitedAt = new Date().toISOString()
       updatedAccountData.rateLimitStatus = 'limited'
-      // 限流时停止调度，与 OpenAI 账号保持一致
-      updatedAccountData.schedulable = 'false'
-      // 使用独立的限流自动停止标记，避免与其他自动停止冲突
-      updatedAccountData.rateLimitAutoStopped = 'true'
 
       // 如果提供了准确的限流重置时间戳（来自API响应头）
       if (rateLimitResetTimestamp) {
+        // 只有明确给出 reset 时间的 429，才认为是窗口级强限流并暂停调度
+        updatedAccountData.schedulable = 'false'
+        updatedAccountData.rateLimitAutoStopped = 'true'
+
         // 将Unix时间戳（秒）转换为毫秒并创建Date对象
         const resetTime = new Date(rateLimitResetTimestamp * 1000)
         updatedAccountData.rateLimitEndAt = resetTime.toISOString()
@@ -1344,7 +1344,7 @@ class ClaudeAccountService {
         )
       } else {
         // 没有准确的 reset timestamp —— 很可能是瞬时并发限流（per-minute rate limit），
-        // 而非 5h 窗口限流。使用短时冷却而非会话窗口剩余时间，避免过度惩罚。
+        // 而非 5h 窗口限流。仅短时冷却，不自动关闭调度开关，避免误伤。
         const TRANSIENT_RATE_LIMIT_MINUTES = 5
         const cooldownEnd = new Date(Date.now() + TRANSIENT_RATE_LIMIT_MINUTES * 60 * 1000)
         updatedAccountData.rateLimitEndAt = cooldownEnd.toISOString()
