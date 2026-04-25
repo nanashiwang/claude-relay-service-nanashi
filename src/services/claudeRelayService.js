@@ -159,6 +159,7 @@ class ClaudeRelayService {
     let queueLockAcquired = false
     let queueRequestId = null
     let selectedAccountId = null
+    let cleanupClientDisconnectListeners = null
 
     try {
       // 调试日志：查看API Key数据
@@ -337,6 +338,14 @@ class ClaudeRelayService {
       if (clientResponse) {
         clientResponse.once('close', handleClientDisconnect)
       }
+      cleanupClientDisconnectListeners = () => {
+        if (clientRequest) {
+          clientRequest.removeListener('close', handleClientDisconnect)
+        }
+        if (clientResponse) {
+          clientResponse.removeListener('close', handleClientDisconnect)
+        }
+      }
 
       // 发送请求到Claude API（传入回调以获取请求对象）
       // 🔄 403 重试机制：仅对 claude-official 类型账户（OAuth 或 Setup Token）
@@ -399,14 +408,6 @@ class ClaudeRelayService {
 
       response.accountId = accountId
       response.accountType = accountType
-
-      // 移除监听器（请求成功完成）
-      if (clientRequest) {
-        clientRequest.removeListener('close', handleClientDisconnect)
-      }
-      if (clientResponse) {
-        clientResponse.removeListener('close', handleClientDisconnect)
-      }
 
       // 检查响应是否为限流错误或认证错误
       if (response.statusCode !== 200 && response.statusCode !== 201) {
@@ -667,6 +668,10 @@ class ClaudeRelayService {
       )
       throw error
     } finally {
+      if (cleanupClientDisconnectListeners) {
+        cleanupClientDisconnectListeners()
+      }
+
       // 📬 释放用户消息队列锁（兜底，正常情况下已在请求发送后提前释放）
       if (queueLockAcquired && queueRequestId && selectedAccountId) {
         try {
@@ -2163,7 +2168,9 @@ class ClaudeRelayService {
             logger.warn(
               'Stream completed but no usage data was captured! This indicates a problem with SSE parsing or Claude API response format.'
             )
-            logger.warn(`Stream usage capture diagnostics: ${JSON.stringify(buildStreamDiagnostics())}`)
+            logger.warn(
+              `Stream usage capture diagnostics: ${JSON.stringify(buildStreamDiagnostics())}`
+            )
           } else {
             const totalUsage = allUsageData.reduce(
               (acc, usage) => ({

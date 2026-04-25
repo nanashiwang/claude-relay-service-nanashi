@@ -34,6 +34,7 @@ class ClaudeConsoleRelayService {
     let concurrencyAcquired = false
     let queueLockAcquired = false
     let queueRequestId = null
+    let cleanupClientDisconnectListeners = null
 
     try {
       // 📬 用户消息队列处理：如果是用户消息请求，需要获取队列锁
@@ -185,6 +186,14 @@ class ClaudeConsoleRelayService {
       if (clientResponse) {
         clientResponse.once('close', handleClientDisconnect)
       }
+      cleanupClientDisconnectListeners = () => {
+        if (clientRequest) {
+          clientRequest.removeListener('close', handleClientDisconnect)
+        }
+        if (clientResponse) {
+          clientResponse.removeListener('close', handleClientDisconnect)
+        }
+      }
 
       // 构建完整的API URL
       const cleanUrl = account.apiUrl.replace(/\/$/, '') // 移除末尾斜杠
@@ -281,14 +290,6 @@ class ClaudeConsoleRelayService {
             releaseError.message
           )
         }
-      }
-
-      // 移除监听器（请求成功完成）
-      if (clientRequest) {
-        clientRequest.removeListener('close', handleClientDisconnect)
-      }
-      if (clientResponse) {
-        clientResponse.removeListener('close', handleClientDisconnect)
       }
 
       logger.debug(`🔗 Claude Console API response: ${response.status}`)
@@ -432,6 +433,10 @@ class ClaudeConsoleRelayService {
 
       throw error
     } finally {
+      if (cleanupClientDisconnectListeners) {
+        cleanupClientDisconnectListeners()
+      }
+
       // 🔓 并发控制：释放并发槽位
       if (concurrencyAcquired) {
         try {

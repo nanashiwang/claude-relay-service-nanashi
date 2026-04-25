@@ -1,0 +1,32 @@
+[Unit]
+Description=Claude Relay Service
+After=network.target redis.service
+Requires=redis.service
+
+[Service]
+Type=simple
+User=<DEPLOY_USER>
+WorkingDirectory=<CRS_INSTALL_PATH>
+
+# 关键：限制 Node 堆 + OOM 前自动 dump heapsnapshot
+ExecStart=/usr/bin/node --max-old-space-size=2048 --heapsnapshot-near-heap-limit=2 src/app.js
+
+# 进程崩溃自动重启
+Restart=on-failure
+RestartSec=5
+
+# 防止反复崩溃风暴：5 分钟内最多重启 10 次
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# 文件描述符上限：socket 多的服务必须放大
+LimitNOFILE=65535
+
+# cgroup 内存上限：比 --max-old-space-size 略大留缓冲
+MemoryMax=3G
+
+StandardOutput=append:<CRS_INSTALL_PATH>/logs/service.log
+StandardError=append:<CRS_INSTALL_PATH>/logs/service-error.log
+
+[Install]
+WantedBy=multi-user.target

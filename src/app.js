@@ -14,6 +14,42 @@ const redis = require('./models/redis')
 const pricingService = require('./services/pricingService')
 const cacheMonitor = require('./utils/cacheMonitor')
 
+let consecutiveEventLoopLags = 0
+setInterval(() => {
+  const scheduledAt = Date.now()
+  setImmediate(() => {
+    const lagMs = Date.now() - scheduledAt
+    if (lagMs > 1000) {
+      consecutiveEventLoopLags += 1
+      if (consecutiveEventLoopLags >= 3) {
+        logger.warn('Event loop lag detected', { lagMs })
+      }
+      return
+    }
+    consecutiveEventLoopLags = 0
+  })
+}, 1000).unref()
+
+function writeCrashDump(error) {
+  try {
+    const timestamp = new Date().toISOString()
+    const safeTimestamp = timestamp.replace(/[:.]/g, '-')
+    const logsDir = path.join(__dirname, '..', 'logs')
+    fs.mkdirSync(logsDir, { recursive: true })
+    const crashDump = [
+      `timestamp: ${timestamp}`,
+      `stack: ${error?.stack || error}`,
+      `memoryUsage: ${JSON.stringify(process.memoryUsage(), null, 2)}`,
+      `activeHandles: ${process._getActiveHandles().length}`,
+      `activeRequests: ${process._getActiveRequests().length}`
+    ].join('\n\n')
+
+    fs.writeFileSync(path.join(logsDir, `crash-${safeTimestamp}.log`), crashDump)
+  } catch (dumpError) {
+    logger.error('❌ Failed to write crash dump:', dumpError)
+  }
+}
+
 // Import routes
 const apiRoutes = require('./routes/api')
 const unifiedRoutes = require('./routes/unified')
@@ -794,6 +830,14 @@ class Application {
   setupGracefulShutdown() {
     const shutdown = async (signal) => {
       logger.info(`🛑 Received ${signal}, starting graceful shutdown...`)
+      logger.info('🔄 Performing graceful shutdown...')
+
+      try {
+        cacheMonitor.stopAllIntervals()
+        logger.info('📊 Cache monitor intervals stopped')
+      } catch (error) {
+        logger.error('❌ Error stopping cache monitor intervals:', error)
+      }
 
       if (this.server) {
         this.server.close(async () => {
@@ -898,11 +942,13 @@ class Application {
     // 处理未捕获异常
     process.on('uncaughtException', (error) => {
       logger.error('💥 Uncaught exception:', error)
+      writeCrashDump(error)
       shutdown('uncaughtException')
     })
 
     process.on('unhandledRejection', (reason, promise) => {
       logger.error('💥 Unhandled rejection at:', promise, 'reason:', reason)
+      writeCrashDump(reason)
       shutdown('unhandledRejection')
     })
   }

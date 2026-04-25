@@ -559,12 +559,14 @@ async function collectResponsesStreamResult(stream) {
       }
 
       if (eventData.type === 'response.completed' && eventData.response) {
-        completedResponse = eventData.response
-        if (eventData.response.model) {
-          model = eventData.response.model
+        const { response } = eventData
+        const { model: responseModel, usage } = response
+        completedResponse = response
+        if (responseModel) {
+          model = responseModel
         }
-        if (eventData.response.usage) {
-          usageData = eventData.response.usage
+        if (usage) {
+          usageData = usage
         }
       }
     }
@@ -607,8 +609,9 @@ class OpenAIResponsesRelayService {
   // 处理请求转发
   async handleRequest(req, res, account, apiKeyData) {
     let abortController = null
+    let cleanupClientDisconnectListeners = null
     const stickySession = resolveOpenAIStickySessionContext(req, apiKeyData?.id || null)
-    const sessionHash = stickySession.sessionHash
+    const { sessionHash } = stickySession
 
     if (sessionHash && stickySession.source) {
       logger.debug(
@@ -637,6 +640,10 @@ class OpenAIResponsesRelayService {
       // 监听客户端断开事件
       req.once('close', handleClientDisconnect)
       res.once('close', handleClientDisconnect)
+      cleanupClientDisconnectListeners = () => {
+        req.removeListener('close', handleClientDisconnect)
+        res.removeListener('close', handleClientDisconnect)
+      }
 
       const isChatCompletionsCompat = isChatCompletionsCompatMode(req)
       const clientWantsStream = isChatCompletionsCompat
@@ -824,16 +831,8 @@ class OpenAIResponsesRelayService {
             }
           }
 
-          // 清理监听器
-          req.removeListener('close', handleClientDisconnect)
-          res.removeListener('close', handleClientDisconnect)
-
           return res.status(401).json(unauthorizedResponse)
         }
-
-        // 清理监听器
-        req.removeListener('close', handleClientDisconnect)
-        res.removeListener('close', handleClientDisconnect)
 
         return res.status(response.status).json(errorData)
       }
@@ -1010,6 +1009,10 @@ class OpenAIResponsesRelayService {
           details: error.message
         }
       })
+    } finally {
+      if (cleanupClientDisconnectListeners) {
+        cleanupClientDisconnectListeners()
+      }
     }
   }
 

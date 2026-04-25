@@ -13,6 +13,7 @@ class CacheMonitor {
     this.totalHits = 0
     this.totalMisses = 0
     this.totalEvictions = 0
+    this._timers = []
 
     // 🔒 安全配置
     this.securityConfig = {
@@ -162,21 +163,25 @@ class CacheMonitor {
    */
   setupSecurityCleanup() {
     // 每 10 分钟执行一次安全清理
-    setInterval(
-      () => {
-        this.performSecurityCleanup()
-      },
-      10 * 60 * 1000
+    this._timers.push(
+      setInterval(
+        () => {
+          this.performSecurityCleanup()
+        },
+        10 * 60 * 1000
+      )
     )
 
     // 每 30 分钟强制完整清理
-    setInterval(() => {
-      logger.warn('⚠️ Performing forced complete cleanup for security')
-      for (const [name, monitor] of this.monitors) {
-        monitor.cache.clear()
-        logger.info(`🗑️ Force cleared cache: ${name}`)
-      }
-    }, this.securityConfig.forceCleanupInterval)
+    this._timers.push(
+      setInterval(() => {
+        logger.warn('⚠️ Performing forced complete cleanup for security')
+        for (const [name, monitor] of this.monitors) {
+          monitor.cache.clear()
+          logger.info(`🗑️ Force cleared cache: ${name}`)
+        }
+      }, this.securityConfig.forceCleanupInterval)
+    )
   }
 
   /**
@@ -184,23 +189,34 @@ class CacheMonitor {
    */
   setupPeriodicReporting() {
     // 每 5 分钟生成一次简单统计
-    setInterval(
-      () => {
-        const stats = this.getGlobalStats()
-        logger.info(
-          `📊 Quick Stats - Caches: ${stats.cacheCount}, Size: ${stats.totalSize}, Hit Rate: ${stats.averageHitRate}`
-        )
-      },
-      5 * 60 * 1000
+    this._timers.push(
+      setInterval(
+        () => {
+          const stats = this.getGlobalStats()
+          logger.info(
+            `📊 Quick Stats - Caches: ${stats.cacheCount}, Size: ${stats.totalSize}, Hit Rate: ${stats.averageHitRate}`
+          )
+        },
+        5 * 60 * 1000
+      )
     )
 
     // 每 30 分钟生成一次详细报告
-    setInterval(
-      () => {
-        this.generateReport()
-      },
-      30 * 60 * 1000
+    this._timers.push(
+      setInterval(
+        () => {
+          this.generateReport()
+        },
+        30 * 60 * 1000
+      )
     )
+  }
+
+  stopAllIntervals() {
+    for (const timer of this._timers) {
+      clearInterval(timer)
+    }
+    this._timers = []
   }
 
   /**
