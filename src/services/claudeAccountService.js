@@ -73,6 +73,24 @@ class ClaudeAccountService {
     return Math.max(parsedValue, 0)
   }
 
+  _isTransientTokenRefreshError(error) {
+    const statusCode = error.response?.status || error.status || error.statusCode
+    if (statusCode === 408 || statusCode === 429 || statusCode >= 500) {
+      return true
+    }
+
+    const transientCodes = new Set([
+      'ECONNABORTED',
+      'ECONNRESET',
+      'ECONNREFUSED',
+      'ETIMEDOUT',
+      'EAI_AGAIN',
+      'ENOTFOUND'
+    ])
+
+    return transientCodes.has(error.code)
+  }
+
   // 🏢 创建Claude账户
   async createAccount(options = {}) {
     const {
@@ -359,9 +377,24 @@ class ClaudeAccountService {
         accountData.expiresAt = (Date.now() + expires_in * 1000).toString()
         accountData.lastRefreshAt = new Date().toISOString()
         accountData.status = 'active'
+        accountData.schedulable = 'true'
         accountData.errorMessage = ''
+        delete accountData.unauthorizedAt
+        delete accountData.tempErrorAt
+        delete accountData.tempErrorAutoStopped
+        delete accountData.lastRefreshErrorAt
 
         await redis.setClaudeAccount(accountId, accountData)
+        await redis.client.hdel(
+          `claude:account:${accountId}`,
+          'errorMessage',
+          'unauthorizedAt',
+          'tempErrorAt',
+          'tempErrorAutoStopped',
+          'lastRefreshErrorAt'
+        )
+        await redis.client.del(`claude_account:${accountId}:401_errors`)
+        await redis.client.del(`temp_unavailable:claude-official:${accountId}`)
 
         // 刷新成功后，如果有 user:profile 权限，尝试获取账号 profile 信息
         // 检查账户的 scopes 是否包含 user:profile（标准 OAuth 有，Setup Token 没有）
@@ -404,8 +437,21 @@ class ClaudeAccountService {
       const accountData = await redis.getClaudeAccount(accountId)
       if (accountData) {
         logRefreshError(accountId, accountData.name, 'claude', error)
-        accountData.status = 'error'
-        accountData.errorMessage = error.message
+        const isTransientError = this._isTransientTokenRefreshError(error)
+        accountData.errorMessage = isTransientError
+          ? `Transient token refresh failed: ${error.message}`
+          : error.message
+        accountData.lastRefreshErrorAt = new Date().toISOString()
+
+        if (isTransientError) {
+          await redis.client.setex(`temp_unavailable:claude-official:${accountId}`, 60, '1')
+          logger.warn(
+            `⚠️ Transient token refresh failure for account ${accountId}; pausing scheduling for 60s without marking error`
+          )
+        } else {
+          accountData.status = 'error'
+        }
+
         await redis.setClaudeAccount(accountId, accountData)
 
         // 发送Webhook通知
@@ -467,7 +513,8 @@ class ClaudeAccountService {
       // 检查token是否过期
       const expiresAt = parseInt(accountData.expiresAt)
       const now = Date.now()
-      const isExpired = !expiresAt || now >= expiresAt - 60000 // 60秒提前刷新
+      const hasKnownExpiry = Number.isFinite(expiresAt) && expiresAt > 0
+      const isExpired = !hasKnownExpiry || now >= expiresAt - 60000 // 60秒提前刷新
 
       // 记录token使用情况
       logTokenUsage(accountId, accountData.name, 'claude', accountData.expiresAt, isExpired)
@@ -479,12 +526,14 @@ class ClaudeAccountService {
           return refreshResult.accessToken
         } catch (refreshError) {
           logger.warn(`⚠️ Token refresh failed for account ${accountId}: ${refreshError.message}`)
-          // 如果刷新失败，仍然尝试使用当前token（可能是手动添加的长期有效token）
+          // 仅在 token 仍未真实过期，或无过期时间（如 setup token）时继续使用当前 token。
           const currentToken = this._decryptSensitiveData(accountData.accessToken)
-          if (currentToken) {
+          const canUseCurrentToken = currentToken && (!hasKnownExpiry || now < expiresAt)
+          if (canUseCurrentToken) {
             logger.info(`🔄 Using current token for account ${accountId} (refresh failed)`)
             return currentToken
           }
+          logger.warn(`⚠️ Not using expired token for account ${accountId} after refresh failure`)
           throw refreshError
         }
       }
@@ -852,7 +901,12 @@ class ClaudeAccountService {
           )
         }
         if (shouldClearRateLimitFields) {
-          fieldsToRemove.push('rateLimitedAt', 'rateLimitStatus', 'rateLimitEndAt', 'rateLimitAutoStopped')
+          fieldsToRemove.push(
+            'rateLimitedAt',
+            'rateLimitStatus',
+            'rateLimitEndAt',
+            'rateLimitAutoStopped'
+          )
         }
         await this._removeAccountFields(accountId, fieldsToRemove, 'manual_schedule_update')
       }

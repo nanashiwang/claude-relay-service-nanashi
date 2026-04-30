@@ -31,6 +31,11 @@ class ClaudeRelayService {
     this.betaHeader = config.claude.betaHeader
     this.systemPrompt = config.claude.systemPrompt
     this.claudeCodeSystemPrompt = "You are Claude Code, Anthropic's official CLI for Claude."
+    const unauthorizedThreshold = parseInt(process.env.CLAUDE_UNAUTHORIZED_ERROR_THRESHOLD, 10)
+    this.unauthorizedErrorThreshold =
+      Number.isFinite(unauthorizedThreshold) && unauthorizedThreshold > 0
+        ? unauthorizedThreshold
+        : 3
   }
 
   // 🔧 根据模型ID和客户端传递的 anthropic-beta 获取最终的 header
@@ -426,13 +431,14 @@ class ClaudeRelayService {
           // 记录401错误
           await this.recordUnauthorizedError(accountId)
 
-          // 检查是否需要标记为异常（遇到1次401就停止调度）
+          // 检查是否需要标记为异常，避免单次代理/OAuth 抖动导致误停
           const errorCount = await this.getUnauthorizedErrorCount(accountId)
+          const threshold = this.unauthorizedErrorThreshold
           logger.info(
-            `🔐 Account ${accountId} has ${errorCount} consecutive 401 errors in the last 5 minutes`
+            `🔐 Account ${accountId} has ${errorCount}/${threshold} consecutive 401 errors in the last 5 minutes`
           )
 
-          if (errorCount >= 1) {
+          if (errorCount >= threshold) {
             logger.error(
               `❌ Account ${accountId} encountered 401 error (${errorCount} errors), marking as unauthorized`
             )
@@ -440,6 +446,10 @@ class ClaudeRelayService {
               accountId,
               accountType,
               sessionHash
+            )
+          } else {
+            logger.warn(
+              `⚠️ Account ${accountId} 401 count below threshold, keeping it schedulable for now`
             )
           }
         }
@@ -1735,11 +1745,12 @@ class ClaudeRelayService {
               await this.recordUnauthorizedError(accountId)
 
               const errorCount = await this.getUnauthorizedErrorCount(accountId)
+              const threshold = this.unauthorizedErrorThreshold
               logger.info(
-                `🔐 [Stream] Account ${accountId} has ${errorCount} consecutive 401 errors in the last 5 minutes`
+                `🔐 [Stream] Account ${accountId} has ${errorCount}/${threshold} consecutive 401 errors in the last 5 minutes`
               )
 
-              if (errorCount >= 1) {
+              if (errorCount >= threshold) {
                 logger.error(
                   `❌ [Stream] Account ${accountId} encountered 401 error (${errorCount} errors), marking as unauthorized`
                 )
@@ -1747,6 +1758,10 @@ class ClaudeRelayService {
                   accountId,
                   accountType,
                   sessionHash
+                )
+              } else {
+                logger.warn(
+                  `⚠️ [Stream] Account ${accountId} 401 count below threshold, keeping it schedulable for now`
                 )
               }
             } else if (res.statusCode === 403) {
