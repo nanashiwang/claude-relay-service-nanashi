@@ -5,6 +5,7 @@ const claudeRelayConfigService = require('./claudeRelayConfigService')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
+const { isModelSupportedForCodexAutoReview } = require('../utils/codexAutoReview')
 
 const OPENAI_STICKY_TTL_MIN_HOURS = 6
 const OPENAI_STICKY_TTL_MAX_HOURS = 24
@@ -293,7 +294,10 @@ class UnifiedOpenAIScheduler {
             boundAccount.supportedModels &&
             boundAccount.supportedModels.length > 0
           ) {
-            const modelSupported = boundAccount.supportedModels.includes(requestedModel)
+            const modelSupported = isModelSupportedForCodexAutoReview(
+              boundAccount.supportedModels,
+              requestedModel
+            )
             if (!modelSupported) {
               const errorMsg = `Dedicated account ${boundAccount.name} does not support model ${requestedModel}`
               logger.warn(`⚠️ ${errorMsg}`)
@@ -476,7 +480,10 @@ class UnifiedOpenAIScheduler {
         // 检查模型支持（仅在明确设置了supportedModels且不为空时才检查）
         // 如果没有设置supportedModels或为空数组，则支持所有模型
         if (requestedModel && account.supportedModels && account.supportedModels.length > 0) {
-          const modelSupported = account.supportedModels.includes(requestedModel)
+          const modelSupported = isModelSupportedForCodexAutoReview(
+            account.supportedModels,
+            requestedModel
+          )
           if (!modelSupported) {
             logger.debug(
               `⏭️ Skipping OpenAI account ${account.name} - doesn't support model ${requestedModel}`
@@ -954,7 +961,10 @@ class UnifiedOpenAIScheduler {
           // 检查模型支持（仅在明确设置了supportedModels且不为空时才检查）
           // 如果没有设置supportedModels或为空数组，则支持所有模型
           if (requestedModel && account.supportedModels && account.supportedModels.length > 0) {
-            const modelSupported = account.supportedModels.includes(requestedModel)
+            const modelSupported = isModelSupportedForCodexAutoReview(
+              account.supportedModels,
+              requestedModel
+            )
             if (!modelSupported) {
               logger.debug(
                 `⏭️ Skipping group member ${accountType} account ${account.name} - doesn't support model ${requestedModel}`
