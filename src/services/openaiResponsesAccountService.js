@@ -423,6 +423,11 @@ class OpenAIResponsesAccountService {
       return
     }
 
+    if (account.quotaPeriod && account.quotaPeriod !== 'daily') {
+      const accountQuotaService = require('./accountQuotaService')
+      return accountQuotaService.checkAndEnforceQuota(accountId, 'openai-responses')
+    }
+
     // 检查是否需要重置额度
     const today = redis.getDateStringInTimezone()
     if (account.lastResetDate !== today) {

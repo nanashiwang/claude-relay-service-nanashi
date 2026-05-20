@@ -512,7 +512,9 @@
                       <div class="flex items-center gap-2">
                         <div
                           class="truncate text-sm font-semibold text-gray-900 dark:text-gray-100"
-                          :title="account.name || account.email || account.accountName || account.id"
+                          :title="
+                            account.name || account.email || account.accountName || account.id
+                          "
                         >
                           {{ account.name || account.email || account.accountName || account.id }}
                         </div>
@@ -1324,6 +1326,14 @@
                       <span class="ml-1">定时</span>
                     </button>
                     <button
+                      class="rounded bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-800/50"
+                      title="配置账号额度"
+                      @click="openQuotaModal(account)"
+                    >
+                      <i class="fas fa-wallet" />
+                      <span class="ml-1">额度</span>
+                    </button>
+                    <button
                       class="rounded bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-200"
                       title="编辑账户"
                       @click="editAccount(account)"
@@ -1828,6 +1838,14 @@
             </button>
 
             <button
+              class="flex-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-600 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-800/50"
+              @click="openQuotaModal(account)"
+            >
+              <i class="fas fa-wallet mr-1" />
+              额度
+            </button>
+
+            <button
               class="flex-1 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 transition-colors hover:bg-gray-100"
               @click="editAccount(account)"
             >
@@ -1988,6 +2006,120 @@
       :summary="accountUsageSummary"
       @close="closeAccountUsageModal"
     />
+
+    <!-- 账号额度配置 -->
+    <div
+      v-if="showQuotaModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    >
+      <div class="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-gray-800">
+        <div class="mb-5 flex items-center justify-between">
+          <div>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">账号额度</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ quotaAccount?.name || quotaAccount?.email || quotaAccount?.id }}
+            </p>
+          </div>
+          <button
+            class="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-700"
+            @click="closeQuotaModal"
+          >
+            <i class="fas fa-times" />
+          </button>
+        </div>
+
+        <div v-if="quotaLoading" class="py-10 text-center text-gray-500 dark:text-gray-400">
+          <i class="fas fa-spinner fa-spin mr-2" />加载中...
+        </div>
+        <div v-else class="space-y-5">
+          <div class="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                周期
+              </label>
+              <select
+                v-model="quotaForm.quotaPeriod"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+              >
+                <option value="daily">每日</option>
+                <option value="weekly">每周</option>
+                <option value="monthly">每月</option>
+                <option value="total">总计</option>
+              </select>
+            </div>
+            <div>
+              <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                额度 ($)
+              </label>
+              <input
+                v-model.number="quotaForm.quotaLimit"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                min="0"
+                placeholder="0 表示不限制"
+                step="0.01"
+                type="number"
+              />
+            </div>
+          </div>
+
+          <div v-if="quotaForm.quotaPeriod === 'daily'">
+            <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+              每日重置时间
+            </label>
+            <input
+              v-model="quotaForm.quotaResetTime"
+              class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+              type="time"
+            />
+          </div>
+
+          <div class="rounded-xl bg-gray-50 p-4 dark:bg-gray-900/40">
+            <div class="mb-2 flex items-center justify-between text-sm">
+              <span class="font-medium text-gray-700 dark:text-gray-300">
+                当前{{ getQuotaPeriodLabel(quotaForm.quotaPeriod) }}使用
+              </span>
+              <span class="font-semibold text-gray-900 dark:text-gray-100">
+                ${{ formatCost(quotaStatus?.usage?.cost || 0) }}
+                <template v-if="Number(quotaForm.quotaLimit) > 0">
+                  / ${{ Number(quotaForm.quotaLimit).toFixed(2) }}
+                </template>
+              </span>
+            </div>
+            <div class="h-2 rounded-full bg-gray-200 dark:bg-gray-700">
+              <div
+                :class="['h-2 rounded-full', getQuotaBarClass(quotaStatus?.usage?.percentage || 0)]"
+                :style="{ width: `${Math.min(100, quotaStatus?.usage?.percentage || 0)}%` }"
+              />
+            </div>
+            <div class="mt-2 flex justify-between text-xs text-gray-500 dark:text-gray-400">
+              <span>{{ quotaStatus?.usage?.periodKey || '-' }}</span>
+              <span>{{ (quotaStatus?.usage?.percentage || 0).toFixed(1) }}%</span>
+            </div>
+          </div>
+
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            达到额度后会自动停用该账号并停止调度；下个周期开始后自动恢复。额度为 0 表示不限制。
+          </p>
+
+          <div class="flex justify-end gap-3">
+            <button
+              class="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+              @click="closeQuotaModal"
+            >
+              取消
+            </button>
+            <button
+              class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="quotaSaving"
+              @click="saveQuotaConfig"
+            >
+              <i v-if="quotaSaving" class="fas fa-spinner fa-spin mr-1" />
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- 账户过期时间编辑弹窗 -->
     <AccountExpiryEditModal
@@ -2336,6 +2468,18 @@ const expiryEditModalRef = ref(null)
 const showAccountTestModal = ref(false)
 const testingAccount = ref(null)
 
+// 账号额度弹窗状态
+const showQuotaModal = ref(false)
+const quotaAccount = ref(null)
+const quotaLoading = ref(false)
+const quotaSaving = ref(false)
+const quotaStatus = ref(null)
+const quotaForm = ref({
+  quotaLimit: 0,
+  quotaPeriod: 'daily',
+  quotaResetTime: '00:00'
+})
+
 // 定时测试配置弹窗状态
 const showScheduledTestModal = ref(false)
 const scheduledTestAccount = ref(null)
@@ -2626,6 +2770,14 @@ const getAccountActions = (account) => {
     })
   }
 
+  actions.push({
+    key: 'quota',
+    label: '额度',
+    icon: 'fa-wallet',
+    color: 'green',
+    handler: () => openQuotaModal(account)
+  })
+
   // 删除
   actions.push({
     key: 'delete',
@@ -2698,6 +2850,87 @@ const openAccountTestModal = (account) => {
 const closeAccountTestModal = () => {
   showAccountTestModal.value = false
   testingAccount.value = null
+}
+
+const getQuotaPeriodLabel = (period) => {
+  const labels = {
+    daily: '每日',
+    weekly: '每周',
+    monthly: '每月',
+    total: '总计'
+  }
+  return labels[period] || '每日'
+}
+
+const openQuotaModal = async (account) => {
+  quotaAccount.value = account
+  quotaForm.value = {
+    quotaLimit: Number(account?.quotaLimit ?? account?.dailyQuota ?? 0),
+    quotaPeriod: account?.quotaPeriod || 'daily',
+    quotaResetTime: account?.quotaResetTime || '00:00'
+  }
+  quotaStatus.value = null
+  showQuotaModal.value = true
+  quotaLoading.value = true
+
+  try {
+    const response = await apiClient.get(`/admin/accounts/${account.id}/quota`, {
+      params: { platform: account.platform }
+    })
+    if (response.success) {
+      quotaStatus.value = response
+      quotaForm.value = {
+        quotaLimit: Number(response.config?.quotaLimit || 0),
+        quotaPeriod: response.config?.quotaPeriod || 'daily',
+        quotaResetTime: response.config?.quotaResetTime || '00:00'
+      }
+    }
+  } catch (error) {
+    showToast('加载账号额度失败', 'error')
+  } finally {
+    quotaLoading.value = false
+  }
+}
+
+const closeQuotaModal = () => {
+  showQuotaModal.value = false
+  quotaAccount.value = null
+  quotaStatus.value = null
+}
+
+const saveQuotaConfig = async () => {
+  if (!quotaAccount.value || quotaSaving.value) return
+
+  quotaSaving.value = true
+  try {
+    const response = await apiClient.put(`/admin/accounts/${quotaAccount.value.id}/quota`, {
+      platform: quotaAccount.value.platform,
+      quotaLimit: Number(quotaForm.value.quotaLimit || 0),
+      quotaPeriod: quotaForm.value.quotaPeriod || 'daily',
+      quotaResetTime: quotaForm.value.quotaResetTime || '00:00'
+    })
+
+    if (response.success) {
+      quotaStatus.value = response
+      const target = accounts.value.find((item) => item.id === quotaAccount.value.id)
+      if (target) {
+        target.quotaLimit = response.config?.quotaLimit || 0
+        target.dailyQuota = response.config?.quotaLimit || 0
+        target.quotaPeriod = response.config?.quotaPeriod || 'daily'
+        target.quotaResetTime = response.config?.quotaResetTime || '00:00'
+        target.quotaStoppedAt = response.stopped?.quotaStoppedAt || ''
+      }
+      showToast('账号额度已保存', 'success')
+      closeQuotaModal()
+      loadAccounts(true)
+    } else {
+      showToast(response.error || '保存账号额度失败', 'error')
+    }
+  } catch (error) {
+    showToast('保存账号额度失败', 'error')
+  } finally {
+    quotaSaving.value = false
+  }
 }
 
 // 定时测试配置相关函数

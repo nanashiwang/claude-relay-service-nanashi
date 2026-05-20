@@ -463,10 +463,7 @@ class ApiKeyService {
         keyData.isActivated === 'true' &&
         keyData.expiresAt &&
         new Date() > new Date(keyData.expiresAt)
-      if (
-        !allowExpired &&
-        isExpired
-      ) {
+      if (!allowExpired && isExpired) {
         const keyName = keyData.name || 'Unknown'
         return { valid: false, error: `API Key "${keyName}" 已过期`, keyName }
       }
@@ -799,7 +796,11 @@ class ApiKeyService {
           if (field === 'permissions') {
             // permissions 必须以 JSON 数组持久化，避免 toString() 变成逗号拼接字符串
             updatedData[field] = JSON.stringify(normalizePermissions(value))
-          } else if (field === 'restrictedModels' || field === 'allowedClients' || field === 'tags') {
+          } else if (
+            field === 'restrictedModels' ||
+            field === 'allowedClients' ||
+            field === 'tags'
+          ) {
             // 特殊处理数组字段
             updatedData[field] = JSON.stringify(value || [])
           } else if (
@@ -939,13 +940,19 @@ class ApiKeyService {
           return []
         }
         if (Array.isArray(value)) {
-          return value.map((item) => String(item)).filter(Boolean).sort()
+          return value
+            .map((item) => String(item))
+            .filter(Boolean)
+            .sort()
         }
         if (typeof value === 'string') {
           try {
             const parsed = JSON.parse(value)
             if (Array.isArray(parsed)) {
-              return parsed.map((item) => String(item)).filter(Boolean).sort()
+              return parsed
+                .map((item) => String(item))
+                .filter(Boolean)
+                .sort()
             }
           } catch (error) {
             // 忽略解析错误，按单值处理
@@ -1036,9 +1043,10 @@ class ApiKeyService {
         }
       }
 
-      const normalizePermissionsForCompare = (value) => {
-        return normalizePermissions(value).map((item) => String(item)).sort()
-      }
+      const normalizePermissionsForCompare = (value) =>
+        normalizePermissions(value)
+          .map((item) => String(item))
+          .sort()
 
       const buildSettings = (key) => ({
         concurrencyLimit: toNumber(key.concurrencyLimit),
@@ -1398,7 +1406,8 @@ class ApiKeyService {
     cacheCreateTokens = 0,
     cacheReadTokens = 0,
     model = 'unknown',
-    accountId = null
+    accountId = null,
+    accountType = null
   ) {
     try {
       const totalTokens = inputTokens + outputTokens + cacheCreateTokens + cacheReadTokens
@@ -1469,6 +1478,7 @@ class ApiKeyService {
           logger.database(
             `📊 Recorded account usage: ${accountId} - ${totalTokens} tokens (API Key: ${keyId})`
           )
+          await this._checkAccountQuota(accountId, accountType)
         } else {
           logger.debug(
             '⚠️ No accountId provided for usage recording, skipping account-level statistics'
@@ -1516,6 +1526,19 @@ class ApiKeyService {
       logger.database(`📊 Recorded usage: ${keyId} - ${logParts.join(', ')}`)
     } catch (error) {
       logger.error('❌ Failed to record usage:', error)
+    }
+  }
+
+  async _checkAccountQuota(accountId, accountType = null) {
+    if (!accountId) {
+      return
+    }
+
+    try {
+      const accountQuotaService = require('./accountQuotaService')
+      await accountQuotaService.checkAndEnforceQuota(accountId, accountType)
+    } catch (error) {
+      logger.warn(`⚠️ Failed to check account quota for ${accountId}: ${error.message}`)
     }
   }
 
@@ -1749,6 +1772,7 @@ class ApiKeyService {
           logger.database(
             `📊 Recorded account usage: ${accountId} - ${totalTokens} tokens (API Key: ${keyId})`
           )
+          await this._checkAccountQuota(accountId, accountType)
         } else {
           logger.debug(
             '⚠️ No accountId provided for usage recording, skipping account-level statistics'

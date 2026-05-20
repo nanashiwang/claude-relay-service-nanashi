@@ -573,7 +573,9 @@ class ClaudeConsoleAccountService {
             status: 'quota_exceeded'
             // isActive淇濇寔false
           })
-          logger.info(`鈿狅笍 Rate limit removed but quota exceeded remains for account: ${accountId}`)
+          logger.info(
+            `鈿狅笍 Rate limit removed but quota exceeded remains for account: ${accountId}`
+          )
         } else {
           // 娌℃湁棰濆害闄愬埗锛屽畬鍏ㄦ仮澶?
           const accountData = await client.hgetall(accountKey)
@@ -973,7 +975,9 @@ class ClaudeConsoleAccountService {
         logger.error('Failed to send overload webhook notification:', webhookError)
       }
 
-      logger.warn(`馃毇 Claude Console account marked as overloaded: ${account.name} (${accountId})`)
+      logger.warn(
+        `馃毇 Claude Console account marked as overloaded: ${account.name} (${accountId})`
+      )
       return { success: true }
     } catch (error) {
       logger.error(`鉂?Failed to mark Claude Console account as overloaded: ${accountId}`, error)
@@ -1288,6 +1292,12 @@ class ClaudeConsoleAccountService {
   // 馃挵 妫€鏌ヨ处鎴蜂娇鐢ㄩ搴︼紙鍩轰簬瀹炴椂缁熻鏁版嵁锛?
   async checkQuotaUsage(accountId) {
     try {
+      const quotaAccount = await this.getAccount(accountId)
+      if (quotaAccount?.quotaPeriod && quotaAccount.quotaPeriod !== 'daily') {
+        const accountQuotaService = require('./accountQuotaService')
+        return await accountQuotaService.checkAndEnforceQuota(accountId, 'claude-console')
+      }
+
       // 鑾峰彇瀹炴椂鐨勪娇鐢ㄧ粺璁★紙鍖呭惈璐圭敤锛?
       const usageStats = await redis.getAccountUsageStats(accountId)
       const currentDailyCost = usageStats.daily.cost || 0
@@ -1615,4 +1625,3 @@ class ClaudeConsoleAccountService {
 }
 
 module.exports = new ClaudeConsoleAccountService()
-

@@ -45,7 +45,8 @@ router.get('/openai-responses-accounts', authenticateAdmin, async (req, res) => 
         try {
           // 检查是否需要重置额度
           const today = redis.getDateStringInTimezone()
-          if (account.lastResetDate !== today) {
+          const quotaPeriod = account.quotaPeriod || 'daily'
+          if (quotaPeriod === 'daily' && account.lastResetDate !== today) {
             // 今天还没重置过，需要重置
             await openaiResponsesAccountService.updateAccount(account.id, {
               dailyUsage: '0',

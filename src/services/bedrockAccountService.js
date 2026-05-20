@@ -41,7 +41,10 @@ class BedrockAccountService {
       accountType = 'shared', // 'dedicated' or 'shared'
       priority = 50, // 调度优先级 (1-100，数字越小优先级越高)
       schedulable = true, // 是否可被调度
-      credentialType = 'default' // 'default', 'access_key', 'bearer_token'
+      credentialType = 'default', // 'default', 'access_key', 'bearer_token'
+      quotaLimit = 0,
+      quotaPeriod = 'daily',
+      quotaResetTime = '00:00'
     } = options
 
     const accountId = uuidv4()
@@ -57,6 +60,10 @@ class BedrockAccountService {
       priority,
       schedulable,
       credentialType,
+      quotaLimit,
+      quotaPeriod,
+      quotaResetTime,
+      dailyQuota: quotaLimit,
 
       // ✅ 新增：账户订阅到期时间（业务字段，手动管理）
       // 注意：Bedrock 使用 AWS 凭证，没有 OAuth token，因此没有 expiresAt
@@ -90,6 +97,10 @@ class BedrockAccountService {
         priority,
         schedulable,
         credentialType,
+        quotaLimit,
+        quotaPeriod,
+        quotaResetTime,
+        dailyQuota: quotaLimit,
         createdAt: accountData.createdAt,
         type: 'bedrock'
       }
@@ -148,6 +159,10 @@ class BedrockAccountService {
             priority: account.priority,
             schedulable: account.schedulable,
             credentialType: account.credentialType,
+            quotaLimit: account.quotaLimit || account.dailyQuota || 0,
+            quotaPeriod: account.quotaPeriod || 'daily',
+            quotaResetTime: account.quotaResetTime || '00:00',
+            dailyQuota: account.dailyQuota || account.quotaLimit || 0,
 
             // ✅ 前端显示订阅过期时间（业务字段）
             expiresAt: account.subscriptionExpiresAt || null,
@@ -221,6 +236,18 @@ class BedrockAccountService {
       if (updates.credentialType !== undefined) {
         account.credentialType = updates.credentialType
       }
+      if (updates.quotaLimit !== undefined || updates.dailyQuota !== undefined) {
+        const quotaLimit =
+          updates.quotaLimit !== undefined ? updates.quotaLimit : updates.dailyQuota
+        account.quotaLimit = quotaLimit
+        account.dailyQuota = quotaLimit
+      }
+      if (updates.quotaPeriod !== undefined) {
+        account.quotaPeriod = updates.quotaPeriod
+      }
+      if (updates.quotaResetTime !== undefined) {
+        account.quotaResetTime = updates.quotaResetTime
+      }
 
       // 更新AWS凭证
       if (updates.awsCredentials !== undefined) {
@@ -261,6 +288,10 @@ class BedrockAccountService {
           priority: account.priority,
           schedulable: account.schedulable,
           credentialType: account.credentialType,
+          quotaLimit: account.quotaLimit || account.dailyQuota || 0,
+          quotaPeriod: account.quotaPeriod || 'daily',
+          quotaResetTime: account.quotaResetTime || '00:00',
+          dailyQuota: account.dailyQuota || account.quotaLimit || 0,
           updatedAt: account.updatedAt,
           type: 'bedrock'
         }

@@ -715,6 +715,12 @@ class CcrAccountService {
         return false
       }
 
+      if (account.quotaPeriod && account.quotaPeriod !== 'daily') {
+        const accountQuotaService = require('./accountQuotaService')
+        const result = await accountQuotaService.checkAndEnforceQuota(accountId, 'ccr')
+        return result.state === 'exceeded'
+      }
+
       const dailyQuota = parseFloat(account.dailyQuota || '0')
       // 如果未设置额度限制，则不限制
       if (dailyQuota <= 0) {

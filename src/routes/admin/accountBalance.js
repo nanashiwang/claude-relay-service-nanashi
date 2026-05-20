@@ -2,6 +2,7 @@ const express = require('express')
 const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const accountBalanceService = require('../../services/accountBalanceService')
+const accountQuotaService = require('../../services/accountQuotaService')
 const balanceScriptService = require('../../services/balanceScriptService')
 const { isBalanceScriptEnabled } = require('../../utils/featureFlags')
 
@@ -20,6 +21,64 @@ const ensureValidPlatform = (rawPlatform) => {
 
   return { ok: true, platform: normalized }
 }
+
+const ensureValidQuotaPlatform = (rawPlatform) => {
+  const normalized = accountQuotaService.normalizePlatform(rawPlatform)
+  if (!normalized) {
+    return { ok: false, status: 400, error: '缺少 platform 参数' }
+  }
+
+  if (!accountQuotaService.getSupportedPlatforms().includes(normalized)) {
+    return { ok: false, status: 400, error: `不支持的平台: ${normalized}` }
+  }
+
+  return { ok: true, platform: normalized }
+}
+
+// 0) 获取账户额度状态
+// GET /admin/accounts/:accountId/quota?platform=xxx
+router.get('/accounts/:accountId/quota', authenticateAdmin, async (req, res) => {
+  try {
+    const { accountId } = req.params
+    const valid = ensureValidQuotaPlatform(req.query.platform)
+    if (!valid.ok) {
+      return res.status(valid.status).json({ success: false, error: valid.error })
+    }
+
+    const status = await accountQuotaService.getQuotaStatus(accountId, valid.platform)
+    if (!status.success) {
+      return res.status(404).json(status)
+    }
+
+    return res.json(status)
+  } catch (error) {
+    logger.error('获取账户额度状态失败', error)
+    return res.status(500).json({ success: false, error: error.message })
+  }
+})
+
+// 0) 保存账户额度配置
+// PUT /admin/accounts/:accountId/quota
+// Body: { platform, quotaLimit, quotaPeriod, quotaResetTime }
+router.put('/accounts/:accountId/quota', authenticateAdmin, async (req, res) => {
+  try {
+    const { accountId } = req.params
+    const valid = ensureValidQuotaPlatform(req.body?.platform)
+    if (!valid.ok) {
+      return res.status(valid.status).json({ success: false, error: valid.error })
+    }
+
+    const result = await accountQuotaService.updateQuotaConfig(accountId, valid.platform, req.body)
+    if (!result.success) {
+      return res.status(400).json(result)
+    }
+
+    return res.json(result)
+  } catch (error) {
+    logger.error('保存账户额度配置失败', error)
+    return res.status(500).json({ success: false, error: error.message })
+  }
+})
 
 // 1) 获取账户余额（默认本地统计优先，可选触发 Provider）
 // GET /admin/accounts/:accountId/balance?platform=xxx&queryApi=false

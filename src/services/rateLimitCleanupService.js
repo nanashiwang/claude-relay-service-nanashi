@@ -9,6 +9,7 @@ const claudeAccountService = require('./claudeAccountService')
 const claudeConsoleAccountService = require('./claudeConsoleAccountService')
 const unifiedOpenAIScheduler = require('./unifiedOpenAIScheduler')
 const webhookService = require('./webhookService')
+const accountQuotaService = require('./accountQuotaService')
 
 class RateLimitCleanupService {
   constructor() {
@@ -73,6 +74,7 @@ class RateLimitCleanupService {
         openai: { checked: 0, cleared: 0, errors: [] },
         claude: { checked: 0, cleared: 0, errors: [] },
         claudeConsole: { checked: 0, cleared: 0, errors: [] },
+        quota: { checked: 0, stopped: 0, recovered: 0, errors: [] },
         tokenRefresh: { checked: 0, refreshed: 0, errors: [] }
       }
 
@@ -85,6 +87,9 @@ class RateLimitCleanupService {
       // 清理 Claude Console 账号
       await this.cleanupClaudeConsoleAccounts(results.claudeConsole)
 
+      // 检查账号额度周期切换与超额停用
+      results.quota = await accountQuotaService.refreshQuotaStates()
+
       // 主动刷新等待重置的 Claude 账户 Token（防止 5小时/7天 等待期间 Token 过期）
       await this.proactiveRefreshClaudeTokens(results.tokenRefresh)
 
@@ -94,9 +99,14 @@ class RateLimitCleanupService {
         results.openai.cleared + results.claude.cleared + results.claudeConsole.cleared
       const duration = Date.now() - startTime
 
-      if (totalCleared > 0 || results.tokenRefresh.refreshed > 0) {
+      if (
+        totalCleared > 0 ||
+        results.quota.recovered > 0 ||
+        results.quota.stopped > 0 ||
+        results.tokenRefresh.refreshed > 0
+      ) {
         logger.info(
-          `✅ Rate limit cleanup completed: ${totalCleared}/${totalChecked} accounts cleared, ${results.tokenRefresh.refreshed} tokens refreshed (${duration}ms)`
+          `✅ Rate limit cleanup completed: ${totalCleared}/${totalChecked} accounts cleared, ${results.quota.recovered} quota recovered, ${results.quota.stopped} quota stopped, ${results.tokenRefresh.refreshed} tokens refreshed (${duration}ms)`
         )
         logger.info(`   OpenAI: ${results.openai.cleared}/${results.openai.checked}`)
         logger.info(`   Claude: ${results.claude.cleared}/${results.claude.checked}`)
@@ -106,6 +116,11 @@ class RateLimitCleanupService {
         if (results.tokenRefresh.checked > 0 || results.tokenRefresh.refreshed > 0) {
           logger.info(
             `   Token Refresh: ${results.tokenRefresh.refreshed}/${results.tokenRefresh.checked} refreshed`
+          )
+        }
+        if (results.quota.checked > 0) {
+          logger.info(
+            `   Account Quota: ${results.quota.recovered} recovered, ${results.quota.stopped} stopped / ${results.quota.checked} checked`
           )
         }
 
@@ -124,6 +139,7 @@ class RateLimitCleanupService {
         ...results.openai.errors,
         ...results.claude.errors,
         ...results.claudeConsole.errors,
+        ...results.quota.errors,
         ...results.tokenRefresh.errors
       ]
       if (allErrors.length > 0) {
