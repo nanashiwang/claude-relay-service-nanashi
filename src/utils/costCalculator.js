@@ -198,14 +198,23 @@ class CostCalculator {
       const isOpenAIModel =
         model.includes('gpt') || model.includes('o1') || pricingData.litellm_provider === 'openai'
 
-      if (isOpenAIModel && !pricingData.cache_creation_input_token_cost && cacheCreateTokens > 0) {
+      const customOverride = pricingData._customPriceOverride || {}
+      if (
+        isOpenAIModel &&
+        !pricingData.cache_creation_input_token_cost &&
+        !customOverride.cacheCreation &&
+        cacheCreateTokens > 0
+      ) {
         // OpenAI 模型：缓存创建按普通 input 价格计费
         cacheWritePrice = inputPrice
       }
 
-      const hasValidDynamicPricing = [inputPrice, outputPrice, cacheWritePrice, cacheReadPrice].some(
-        (price) => Number.isFinite(price) && price > 0
-      )
+      const hasCustomOverride = Object.values(customOverride).some(Boolean)
+      const hasValidDynamicPricing =
+        hasCustomOverride ||
+        [inputPrice, outputPrice, cacheWritePrice, cacheReadPrice].some(
+          (price) => Number.isFinite(price) && price > 0
+        )
 
       if (hasValidDynamicPricing) {
         pricing = {

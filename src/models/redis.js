@@ -1295,7 +1295,10 @@ class RedisClient {
 
     // 获取账户今日所有模型的使用数据
     const pattern = `account_usage:model:daily:${accountId}:*:${today}`
-    const modelKeys = await filterAccountUsageModelStatsKeys(await this.client.keys(pattern), 'daily')
+    const modelKeys = await filterAccountUsageModelStatsKeys(
+      await this.client.keys(pattern),
+      'daily'
+    )
 
     if (!modelKeys || modelKeys.length === 0) {
       return 0
@@ -2228,7 +2231,10 @@ class RedisClient {
         return runtimeConfig.stickySessionAutoRenewalEnabled
       }
     } catch (error) {
-      logger.debug('Failed to load sticky session auto renewal override from runtime config:', error)
+      logger.debug(
+        'Failed to load sticky session auto renewal override from runtime config:',
+        error
+      )
     }
 
     return undefined
@@ -3958,15 +3964,10 @@ redisClient.getAccountLastTestTime = async function (accountId, platform) {
   }
 }
 
-
 // ============== Stream interruption stats ==============
 
 const STREAM_INTERRUPTION_MINUTE_KEY_PREFIX = 'stream_interruption:minute:'
-const STREAM_INTERRUPTION_REASON_FIELDS = [
-  'upstream_stream_error',
-  'timeout',
-  'client_abort'
-]
+const STREAM_INTERRUPTION_REASON_FIELDS = ['upstream_stream_error', 'timeout', 'client_abort']
 
 redisClient.recordStreamInterruption = async function (reason, provider = 'unknown') {
   try {
@@ -3975,7 +3976,9 @@ redisClient.recordStreamInterruption = async function (reason, provider = 'unkno
     const minuteKey = `${STREAM_INTERRUPTION_MINUTE_KEY_PREFIX}${minuteTimestamp}`
 
     const safeReason =
-      typeof reason === 'string' && reason.trim() ? reason.trim().toLowerCase() : 'upstream_stream_error'
+      typeof reason === 'string' && reason.trim()
+        ? reason.trim().toLowerCase()
+        : 'upstream_stream_error'
     const safeProvider =
       typeof provider === 'string' && provider.trim() ? provider.trim().toLowerCase() : 'unknown'
 
@@ -4068,6 +4071,37 @@ redisClient.getRecentStreamInterruptionStats = async function (windowMinutes = 6
     logger.error('Failed to get recent stream interruption stats:', error)
     return baseResult
   }
+}
+
+// 💰 自定义模型价格覆盖（单位：美元/token）
+redisClient.getCustomModelPricing = async function () {
+  const client = this.getClientSafe()
+  const raw = await client.hgetall('pricing:custom_model')
+  const result = {}
+
+  if (!raw) {
+    return result
+  }
+
+  for (const [model, value] of Object.entries(raw)) {
+    try {
+      result[model] = JSON.parse(value)
+    } catch (_error) {
+      // 忽略旧数据或损坏数据
+    }
+  }
+
+  return result
+}
+
+redisClient.setCustomModelPricing = async function (model, override) {
+  const client = this.getClientSafe()
+  await client.hset('pricing:custom_model', model, JSON.stringify(override))
+}
+
+redisClient.deleteCustomModelPricing = async function (model) {
+  const client = this.getClientSafe()
+  await client.hdel('pricing:custom_model', model)
 }
 
 module.exports = redisClient

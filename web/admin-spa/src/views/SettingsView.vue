@@ -11,7 +11,7 @@
 
       <!-- 设置分类导航 -->
       <div class="mb-6">
-        <nav class="flex space-x-8">
+        <nav class="flex flex-wrap gap-4 sm:gap-8">
           <button
             :class="[
               'border-b-2 pb-2 text-sm font-medium transition-colors',
@@ -47,6 +47,18 @@
           >
             <i class="fas fa-robot mr-2"></i>
             Claude 转发
+          </button>
+          <button
+            :class="[
+              'border-b-2 pb-2 text-sm font-medium transition-colors',
+              activeSection === 'pricing'
+                ? 'border-blue-500 text-blue-600 dark:border-blue-400 dark:text-blue-400'
+                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300'
+            ]"
+            @click="activeSection = 'pricing'"
+          >
+            <i class="fas fa-tags mr-2"></i>
+            模型价格
           </button>
         </nav>
       </div>
@@ -898,7 +910,6 @@
               </div>
             </div>
 
-
             <!-- Sticky Session Auto Renewal -->
             <div
               class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
@@ -915,7 +926,8 @@
                       Sticky Session Auto Renewal
                     </h4>
                     <p class="text-sm text-gray-500 dark:text-gray-400">
-                      When disabled, active sessions are not renewed and may switch accounts after TTL expiry
+                      When disabled, active sessions are not renewed and may switch accounts after
+                      TTL expiry
                     </p>
                   </div>
                 </div>
@@ -937,7 +949,8 @@
                   <i class="fas fa-info-circle mt-0.5 text-indigo-500"></i>
                   <div class="ml-3">
                     <p class="text-sm text-indigo-700 dark:text-indigo-300">
-                      <strong>Recommended:</strong> keep this enabled so active mappings renew before TTL expiry
+                      <strong>Recommended:</strong> keep this enabled so active mappings renew
+                      before TTL expiry
                     </p>
                   </div>
                 </div>
@@ -959,7 +972,8 @@
                   @change="saveClaudeConfig"
                 />
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  Controls OpenAI / OpenAI-Responses SSE keep-alive ping interval. Range: 5000-60000, default 15000.
+                  Controls OpenAI / OpenAI-Responses SSE keep-alive ping interval. Range:
+                  5000-60000, default 15000.
                 </p>
               </div>
             </div>
@@ -1089,6 +1103,291 @@
                 由 <strong>{{ claudeConfig.updatedBy }}</strong> 修改
               </span>
             </div>
+          </div>
+        </div>
+
+        <!-- 模型价格配置部分 -->
+        <div v-show="activeSection === 'pricing'">
+          <div
+            class="mb-6 rounded-lg bg-white/80 p-6 shadow-lg backdrop-blur-sm dark:bg-gray-800/80"
+          >
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div class="flex items-center">
+                  <div
+                    class="mr-3 flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg"
+                  >
+                    <i class="fas fa-tags"></i>
+                  </div>
+                  <div>
+                    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-200">
+                      模型价格覆盖
+                    </h2>
+                    <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+                      单位为 $/百万 tokens，留空则使用官方价格；自定义值会在价格文件刷新后继续生效。
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <input
+                  v-model="pricingSearch"
+                  class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                  placeholder="搜索模型"
+                  type="search"
+                />
+                <div class="flex gap-2">
+                  <input
+                    v-model="newPricingModelName"
+                    class="min-w-0 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm text-gray-900 shadow-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                    placeholder="新增模型名"
+                    type="text"
+                    @keyup.enter="addCustomPricingModel"
+                  />
+                  <button
+                    class="whitespace-nowrap rounded-lg bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-300 dark:hover:bg-emerald-900/50"
+                    @click="addCustomPricingModel"
+                  >
+                    添加
+                  </button>
+                </div>
+                <button
+                  class="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                  :disabled="pricingLoading"
+                  @click="loadPricingData"
+                >
+                  <i class="fas fa-sync-alt mr-2" :class="{ 'fa-spin': pricingLoading }"></i>
+                  重新加载
+                </button>
+                <button
+                  class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-gray-400"
+                  :disabled="pricingRefreshing"
+                  @click="refreshOfficialPricing"
+                >
+                  <i
+                    class="fas fa-cloud-download-alt mr-2"
+                    :class="{ 'fa-spin': pricingRefreshing }"
+                  ></i>
+                  刷新官方价格
+                </button>
+              </div>
+            </div>
+
+            <div class="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+              <div
+                class="rounded-lg bg-emerald-50 p-3 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300"
+              >
+                模型数：{{ pricingStatus.modelCount || pricingRows.length }}
+              </div>
+              <div
+                class="rounded-lg bg-blue-50 p-3 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
+              >
+                自定义：{{ pricingStatus.customModelCount || Object.keys(customPricing).length }}
+              </div>
+              <div
+                class="rounded-lg bg-gray-50 p-3 text-gray-600 dark:bg-gray-700/50 dark:text-gray-300"
+              >
+                更新时间：{{ formatDateTime(pricingStatus.lastUpdated) || '未知' }}
+              </div>
+            </div>
+          </div>
+
+          <div v-if="pricingLoading" class="py-12 text-center">
+            <div class="loading-spinner mx-auto mb-4"></div>
+            <p class="text-gray-500 dark:text-gray-400">正在加载模型价格...</p>
+          </div>
+
+          <div
+            v-else
+            class="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700"
+          >
+            <table class="w-full min-w-[1100px] divide-y divide-gray-200 dark:divide-gray-700">
+              <thead class="bg-gray-50 dark:bg-gray-800">
+                <tr>
+                  <th
+                    class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    模型
+                  </th>
+                  <th
+                    class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    服务商
+                  </th>
+                  <th
+                    class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    官方输入
+                  </th>
+                  <th
+                    class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    官方输出
+                  </th>
+                  <th
+                    class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    官方缓存写
+                  </th>
+                  <th
+                    class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    官方缓存读
+                  </th>
+                  <th
+                    class="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    自定义输入
+                  </th>
+                  <th
+                    class="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    自定义输出
+                  </th>
+                  <th
+                    class="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    自定义缓存写
+                  </th>
+                  <th
+                    class="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    自定义缓存读
+                  </th>
+                  <th
+                    class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500 dark:text-gray-400"
+                  >
+                    操作
+                  </th>
+                </tr>
+              </thead>
+              <tbody
+                class="divide-y divide-gray-200 bg-white dark:divide-gray-700 dark:bg-gray-900"
+              >
+                <tr
+                  v-for="model in pricingRows"
+                  :key="model.name"
+                  class="hover:bg-gray-50 dark:hover:bg-gray-800/70"
+                >
+                  <td class="px-3 py-3">
+                    <div
+                      class="max-w-xs truncate font-mono text-xs font-semibold text-gray-900 dark:text-gray-100"
+                      :title="model.name"
+                    >
+                      {{ model.name }}
+                    </div>
+                    <div
+                      v-if="hasCustomPricing(model.name)"
+                      class="mt-1 text-xs text-emerald-600 dark:text-emerald-400"
+                    >
+                      已覆盖
+                    </div>
+                  </td>
+                  <td class="px-3 py-3 text-sm text-gray-600 dark:text-gray-300">
+                    {{ model.provider }}
+                  </td>
+                  <td
+                    class="px-3 py-3 text-right font-mono text-xs text-gray-700 dark:text-gray-300"
+                  >
+                    {{ formatPricingNumber(model.input) }}
+                  </td>
+                  <td
+                    class="px-3 py-3 text-right font-mono text-xs text-gray-700 dark:text-gray-300"
+                  >
+                    {{ formatPricingNumber(model.output) }}
+                  </td>
+                  <td
+                    class="px-3 py-3 text-right font-mono text-xs text-gray-700 dark:text-gray-300"
+                  >
+                    {{ formatPricingNumber(model.cacheCreation) }}
+                  </td>
+                  <td
+                    class="px-3 py-3 text-right font-mono text-xs text-gray-700 dark:text-gray-300"
+                  >
+                    {{ formatPricingNumber(model.cacheRead) }}
+                  </td>
+                  <td class="px-3 py-3">
+                    <input
+                      v-model="pricingDrafts[model.name].input"
+                      class="w-24 rounded-md border border-gray-200 bg-white px-2 py-1 text-right font-mono text-xs text-gray-700 placeholder-gray-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-600"
+                      min="0"
+                      :placeholder="formatPricingNumber(model.input)"
+                      step="0.01"
+                      type="number"
+                    />
+                  </td>
+                  <td class="px-3 py-3">
+                    <input
+                      v-model="pricingDrafts[model.name].output"
+                      class="w-24 rounded-md border border-gray-200 bg-white px-2 py-1 text-right font-mono text-xs text-gray-700 placeholder-gray-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-600"
+                      min="0"
+                      :placeholder="formatPricingNumber(model.output)"
+                      step="0.01"
+                      type="number"
+                    />
+                  </td>
+                  <td class="px-3 py-3">
+                    <input
+                      v-model="pricingDrafts[model.name].cacheCreation"
+                      class="w-24 rounded-md border border-gray-200 bg-white px-2 py-1 text-right font-mono text-xs text-gray-700 placeholder-gray-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-600"
+                      min="0"
+                      :placeholder="formatPricingNumber(model.cacheCreation)"
+                      step="0.01"
+                      type="number"
+                    />
+                  </td>
+                  <td class="px-3 py-3">
+                    <input
+                      v-model="pricingDrafts[model.name].cacheRead"
+                      class="w-24 rounded-md border border-gray-200 bg-white px-2 py-1 text-right font-mono text-xs text-gray-700 placeholder-gray-300 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/30 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-600"
+                      min="0"
+                      :placeholder="formatPricingNumber(model.cacheRead)"
+                      step="0.01"
+                      type="number"
+                    />
+                  </td>
+                  <td class="px-3 py-3 text-right">
+                    <div class="flex justify-end gap-2">
+                      <button
+                        class="rounded-md px-3 py-1 text-xs font-medium transition-colors"
+                        :class="
+                          canSavePricing(model.name) && pricingSavingModel !== model.name
+                            ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                            : 'cursor-not-allowed bg-gray-200 text-gray-400 dark:bg-gray-700 dark:text-gray-500'
+                        "
+                        :disabled="!canSavePricing(model.name) || pricingSavingModel === model.name"
+                        @click="saveCustomPricing(model.name)"
+                      >
+                        <i
+                          v-if="pricingSavingModel === model.name"
+                          class="fas fa-spinner fa-spin"
+                        ></i>
+                        <span v-else>保存</span>
+                      </button>
+                      <button
+                        class="rounded-md px-3 py-1 text-xs font-medium transition-colors"
+                        :class="
+                          hasCustomPricing(model.name) && pricingSavingModel !== model.name
+                            ? 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                            : 'cursor-not-allowed bg-gray-50 text-gray-300 dark:bg-gray-800 dark:text-gray-600'
+                        "
+                        :disabled="
+                          !hasCustomPricing(model.name) || pricingSavingModel === model.name
+                        "
+                        @click="resetCustomPricing(model.name)"
+                      >
+                        重置
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                <tr v-if="pricingRows.length === 0">
+                  <td class="px-3 py-8 text-center text-gray-500 dark:text-gray-400" colspan="11">
+                    没有匹配的模型
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -1756,6 +2055,17 @@ const claudeConfig = ref({
   updatedBy: null
 })
 
+// 模型价格配置
+const pricingLoading = ref(false)
+const pricingRefreshing = ref(false)
+const pricingSavingModel = ref('')
+const pricingSearch = ref('')
+const newPricingModelName = ref('')
+const modelPricingData = ref({})
+const customPricing = ref({})
+const pricingStatus = ref({})
+const pricingDrafts = ref({})
+
 // 平台表单相关
 const showAddPlatformModal = ref(false)
 const editingPlatform = ref(null)
@@ -1795,6 +2105,8 @@ const sectionWatcher = watch(activeSection, async (newSection) => {
     await loadWebhookConfig()
   } else if (newSection === 'claude') {
     await loadClaudeConfig()
+  } else if (newSection === 'pricing') {
+    await loadPricingData()
   }
 })
 
@@ -1927,12 +2239,265 @@ const getApiErrorMessage = (error, fallbackMessage) => {
   return `${fallbackMessage}：${detailMessage}`
 }
 
+// 模型价格相关函数
+const perTokenToMTok = (value) => {
+  if (value === null || value === undefined) return ''
+  const numberValue = Number(value)
+  if (!Number.isFinite(numberValue)) return ''
+  return Number((numberValue * 1e6).toFixed(6)).toString()
+}
+
+const toMTokNumber = (value) => {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue * 1e6 : 0
+}
+
+const formatPricingNumber = (value) => {
+  const numberValue = Number(value)
+  if (!Number.isFinite(numberValue)) return '-'
+  if (numberValue === 0) return '0'
+  if (numberValue < 0.01) return numberValue.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
+  if (numberValue < 1) return numberValue.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')
+  return numberValue.toFixed(2).replace(/0+$/, '').replace(/\.$/, '')
+}
+
+const parseMTokInput = (value) => {
+  if (value === '' || value === null || value === undefined) return null
+  const numberValue = Number(value)
+  if (!Number.isFinite(numberValue) || numberValue < 0) return NaN
+  return numberValue / 1e6
+}
+
+const samePriceValue = (left, right) => {
+  if (left === null && right === null) return true
+  if (left === null || right === null) return false
+  return Math.abs(left - right) < 1e-15
+}
+
+const syncPricingDrafts = () => {
+  const next = {}
+  const names = new Set([
+    ...Object.keys(modelPricingData.value),
+    ...Object.keys(customPricing.value)
+  ])
+
+  for (const name of names) {
+    const override = customPricing.value[name]
+    next[name] = {
+      input: override ? perTokenToMTok(override.input) : '',
+      output: override ? perTokenToMTok(override.output) : '',
+      cacheCreation: override ? perTokenToMTok(override.cacheCreation) : '',
+      cacheRead: override ? perTokenToMTok(override.cacheRead) : ''
+    }
+  }
+
+  pricingDrafts.value = next
+}
+
+const pricingRows = computed(() => {
+  const query = pricingSearch.value.trim().toLowerCase()
+
+  return Object.entries(modelPricingData.value)
+    .map(([name, data]) => ({
+      name,
+      provider: data.litellm_provider || data.provider || 'custom',
+      input: toMTokNumber(data.input_cost_per_token),
+      output: toMTokNumber(data.output_cost_per_token),
+      cacheCreation: toMTokNumber(data.cache_creation_input_token_cost),
+      cacheRead: toMTokNumber(data.cache_read_input_token_cost)
+    }))
+    .filter((model) => {
+      if (!query) return true
+      return `${model.name} ${model.provider}`.toLowerCase().includes(query)
+    })
+    .sort((a, b) => {
+      const customDiff = Number(hasCustomPricing(b.name)) - Number(hasCustomPricing(a.name))
+      return customDiff || a.name.localeCompare(b.name)
+    })
+})
+
+const loadPricingData = async () => {
+  if (!isMounted.value) return
+  pricingLoading.value = true
+  try {
+    const [pricingResult, statusResult, customResult] = await Promise.all([
+      apiClient.get('/admin/models/pricing', { signal: abortController.value.signal }),
+      apiClient.get('/admin/models/pricing/status', { signal: abortController.value.signal }),
+      apiClient.get('/admin/models/pricing/custom', { signal: abortController.value.signal })
+    ])
+
+    if (!isMounted.value) return
+
+    if (pricingResult.success) {
+      modelPricingData.value = pricingResult.data || {}
+      customPricing.value = pricingResult.customPricing || {}
+    }
+    if (statusResult.success) {
+      pricingStatus.value = statusResult.data || {}
+    }
+    if (customResult.success) {
+      customPricing.value = customResult.data || {}
+    }
+
+    syncPricingDrafts()
+  } catch (error) {
+    if (error.name === 'AbortError') return
+    if (!isMounted.value) return
+    showToast(getApiErrorMessage(error, '加载模型价格失败'), 'error')
+    console.error(error)
+  } finally {
+    if (isMounted.value) {
+      pricingLoading.value = false
+    }
+  }
+}
+
+const refreshOfficialPricing = async () => {
+  if (!isMounted.value) return
+  pricingRefreshing.value = true
+  try {
+    const result = await apiClient.post(
+      '/admin/models/pricing/refresh',
+      {},
+      {
+        signal: abortController.value.signal
+      }
+    )
+    if (result.success) {
+      showToast('官方价格已刷新', 'success')
+    } else {
+      showToast(result.message || '刷新失败，已保留可用价格', 'warning')
+    }
+    await loadPricingData()
+  } catch (error) {
+    if (error.name === 'AbortError') return
+    if (!isMounted.value) return
+    showToast(getApiErrorMessage(error, '刷新模型价格失败'), 'error')
+    console.error(error)
+  } finally {
+    if (isMounted.value) {
+      pricingRefreshing.value = false
+    }
+  }
+}
+
+const hasCustomPricing = (name) => Boolean(customPricing.value[name])
+
+const addCustomPricingModel = () => {
+  const name = newPricingModelName.value.trim()
+  if (!name) {
+    showToast('请输入模型名', 'error')
+    return
+  }
+
+  if (!modelPricingData.value[name]) {
+    modelPricingData.value = {
+      ...modelPricingData.value,
+      [name]: { litellm_provider: 'custom' }
+    }
+    syncPricingDrafts()
+  }
+
+  pricingSearch.value = name
+  newPricingModelName.value = ''
+}
+
+const canSavePricing = (name) => {
+  const draft = pricingDrafts.value[name]
+  if (!draft) return false
+
+  const parsed = {
+    input: parseMTokInput(draft.input),
+    output: parseMTokInput(draft.output),
+    cacheCreation: parseMTokInput(draft.cacheCreation),
+    cacheRead: parseMTokInput(draft.cacheRead)
+  }
+
+  if (Object.values(parsed).some((value) => Number.isNaN(value))) return false
+  if (Object.values(parsed).every((value) => value === null)) return false
+
+  const current = customPricing.value[name] || {}
+  return ['input', 'output', 'cacheCreation', 'cacheRead'].some(
+    (field) => !samePriceValue(parsed[field], current[field] ?? null)
+  )
+}
+
+const saveCustomPricing = async (name) => {
+  const draft = pricingDrafts.value[name]
+  if (!draft) return
+
+  const payload = {
+    input: parseMTokInput(draft.input),
+    output: parseMTokInput(draft.output),
+    cacheCreation: parseMTokInput(draft.cacheCreation),
+    cacheRead: parseMTokInput(draft.cacheRead)
+  }
+
+  if (Object.values(payload).some((value) => Number.isNaN(value))) {
+    showToast('请输入有效的非负数字', 'error')
+    return
+  }
+  if (Object.values(payload).every((value) => value === null)) {
+    showToast('请至少填写一个自定义价格', 'error')
+    return
+  }
+
+  pricingSavingModel.value = name
+  try {
+    const result = await apiClient.put(
+      `/admin/models/pricing/custom/${encodeURIComponent(name)}`,
+      payload,
+      { signal: abortController.value.signal }
+    )
+
+    if (result.success) {
+      customPricing.value = { ...customPricing.value, [name]: result.data }
+      syncPricingDrafts()
+      showToast('价格已保存', 'success')
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') return
+    showToast(getApiErrorMessage(error, '保存价格失败'), 'error')
+    console.error(error)
+  } finally {
+    pricingSavingModel.value = ''
+  }
+}
+
+const resetCustomPricing = async (name) => {
+  pricingSavingModel.value = name
+  try {
+    const result = await apiClient.delete(
+      `/admin/models/pricing/custom/${encodeURIComponent(name)}`,
+      {
+        signal: abortController.value.signal
+      }
+    )
+
+    if (result.success) {
+      const next = { ...customPricing.value }
+      delete next[name]
+      customPricing.value = next
+      syncPricingDrafts()
+      showToast('已重置为官方价格', 'success')
+    }
+  } catch (error) {
+    if (error.name === 'AbortError') return
+    showToast(getApiErrorMessage(error, '重置价格失败'), 'error')
+    console.error(error)
+  } finally {
+    pricingSavingModel.value = ''
+  }
+}
+
 // 页面加载时获取设置
 onMounted(async () => {
   try {
     await settingsStore.loadOemSettings()
     if (activeSection.value === 'webhook') {
       await loadWebhookConfig()
+    } else if (activeSection.value === 'pricing') {
+      await loadPricingData()
     }
   } catch (error) {
     showToast('加载设置失败', 'error')
@@ -2036,8 +2601,7 @@ const loadClaudeConfig = async () => {
         userMessageQueueEnabled: response.config?.userMessageQueueEnabled ?? false, // 与后端默认值保持一致
         userMessageQueueDelayMs: response.config?.userMessageQueueDelayMs ?? 200,
         userMessageQueueTimeoutMs: response.config?.userMessageQueueTimeoutMs ?? 5000, // 与后端默认值保持一致
-        stickySessionAutoRenewalEnabled:
-          response.config?.stickySessionAutoRenewalEnabled ?? true,
+        stickySessionAutoRenewalEnabled: response.config?.stickySessionAutoRenewalEnabled ?? true,
         concurrentRequestQueueEnabled: response.config?.concurrentRequestQueueEnabled ?? false,
         concurrentRequestQueueMaxSize: response.config?.concurrentRequestQueueMaxSize ?? 3,
         concurrentRequestQueueMaxSizeMultiplier:

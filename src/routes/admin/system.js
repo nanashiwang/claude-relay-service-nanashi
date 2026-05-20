@@ -4,6 +4,7 @@ const path = require('path')
 const axios = require('axios')
 const claudeCodeHeadersService = require('../../services/claudeCodeHeadersService')
 const claudeAccountService = require('../../services/claudeAccountService')
+const pricingService = require('../../services/pricingService')
 const redis = require('../../models/redis')
 const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
@@ -395,6 +396,101 @@ router.post('/claude-code-version/clear', authenticateAdmin, async (req, res) =>
       message: 'Failed to clear cache',
       error: error.message
     })
+  }
+})
+
+// ==================== 模型价格管理 ====================
+
+router.get('/models/pricing', authenticateAdmin, async (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      data: pricingService.getAllModelPricing(),
+      customPricing: pricingService.getCustomModelPricingMap()
+    })
+  } catch (error) {
+    logger.error('❌ Failed to get model pricing:', error)
+    return res.status(500).json({ error: 'Failed to get model pricing', message: error.message })
+  }
+})
+
+router.get('/models/pricing/status', authenticateAdmin, async (req, res) => {
+  try {
+    const customPricing = pricingService.getCustomModelPricingMap()
+    return res.json({
+      success: true,
+      data: {
+        ...pricingService.getStatus(),
+        customModelCount: Object.keys(customPricing).length
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Failed to get model pricing status:', error)
+    return res
+      .status(500)
+      .json({ error: 'Failed to get model pricing status', message: error.message })
+  }
+})
+
+router.post('/models/pricing/refresh', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await pricingService.forceUpdate()
+    return res.json(result)
+  } catch (error) {
+    logger.error('❌ Failed to refresh model pricing:', error)
+    return res
+      .status(500)
+      .json({ error: 'Failed to refresh model pricing', message: error.message })
+  }
+})
+
+router.get('/models/pricing/custom', authenticateAdmin, async (req, res) => {
+  try {
+    return res.json({ success: true, data: pricingService.getCustomModelPricingMap() })
+  } catch (error) {
+    logger.error('❌ Failed to get custom model pricing:', error)
+    return res
+      .status(500)
+      .json({ error: 'Failed to get custom model pricing', message: error.message })
+  }
+})
+
+router.put('/models/pricing/custom/:model', authenticateAdmin, async (req, res) => {
+  try {
+    const model = decodeURIComponent(req.params.model || '')
+    if (!model) {
+      return res.status(400).json({ error: 'Model name is required' })
+    }
+
+    const body = req.body || {}
+    const override = await pricingService.setCustomModelPricing(model, {
+      input: body.input,
+      output: body.output,
+      cacheCreation: body.cacheCreation,
+      cacheRead: body.cacheRead
+    })
+
+    return res.json({ success: true, data: override })
+  } catch (error) {
+    logger.warn('⚠️ Failed to set custom model pricing:', error.message)
+    return res.status(400).json({ error: 'Invalid custom model pricing', message: error.message })
+  }
+})
+
+router.delete('/models/pricing/custom/:model', authenticateAdmin, async (req, res) => {
+  try {
+    const model = decodeURIComponent(req.params.model || '')
+    if (!model) {
+      return res.status(400).json({ error: 'Model name is required' })
+    }
+
+    await pricingService.deleteCustomModelPricing(model)
+    return res.json({ success: true })
+  } catch (error) {
+    logger.error('❌ Failed to delete custom model pricing:', error)
+    return res
+      .status(500)
+      .json({ error: 'Failed to delete custom model pricing', message: error.message })
   }
 })
 

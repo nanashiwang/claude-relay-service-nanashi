@@ -20,6 +20,7 @@ class PricingService {
     this.localHashFile = path.join(this.dataDir, 'model_pricing.sha256')
     this.pricingData = null
     this.lastUpdated = null
+    this.customModelPricing = {} // 模型名 -> { input, output, cacheCreation, cacheRead, updatedAt }
     this.updateInterval = 24 * 60 * 60 * 1000 // 24小时
     this.hashCheckInterval = 10 * 60 * 1000 // 10分钟哈希校验
     this.fileWatcher = null // 文件监听器
@@ -90,6 +91,9 @@ class PricingService {
 
       // 初次启动时执行一次哈希校验，确保与远端保持一致
       await this.syncWithRemoteHash()
+
+      // 加载自定义模型价格覆盖
+      await this.loadCustomModelPricing()
 
       // 设置定时更新
       if (this.updateTimer) {
@@ -386,14 +390,26 @@ class PricingService {
 
   // 获取模型价格信息
   getModelPricing(modelName) {
-    if (!this.pricingData || !modelName) {
+    if (!modelName) {
       return null
+    }
+
+    if (!this.pricingData) {
+      return this.customModelPricing[modelName]
+        ? this.applyCustomModelPricingOverride({ litellm_provider: 'custom' }, modelName)
+        : null
     }
 
     // 尝试直接匹配
     if (this.pricingData[modelName]) {
       logger.debug(`💰 Found exact pricing match for ${modelName}`)
-      return this.pricingData[modelName]
+      return this.applyCustomModelPricingOverride(this.pricingData[modelName], modelName)
+    }
+
+    // 支持仅通过自定义价格新增的模型
+    if (this.customModelPricing[modelName]) {
+      logger.debug(`💰 Found custom-only pricing for ${modelName}`)
+      return this.applyCustomModelPricingOverride({ litellm_provider: 'custom' }, modelName)
     }
 
     // 特殊处理：gpt-5-codex 回退到 gpt-5
@@ -401,7 +417,7 @@ class PricingService {
       const fallbackPricing = this.pricingData['gpt-5']
       if (fallbackPricing) {
         logger.info(`💰 Using gpt-5 pricing as fallback for ${modelName}`)
-        return fallbackPricing
+        return this.applyCustomModelPricingOverride(fallbackPricing, 'gpt-5')
       }
     }
 
@@ -414,7 +430,7 @@ class PricingService {
         logger.debug(
           `💰 Found pricing for ${modelName} by removing region prefix: ${withoutRegion}`
         )
-        return this.pricingData[withoutRegion]
+        return this.applyCustomModelPricingOverride(this.pricingData[withoutRegion], withoutRegion)
       }
     }
 
@@ -425,7 +441,7 @@ class PricingService {
       const normalizedKey = key.toLowerCase().replace(/[_-]/g, '')
       if (normalizedKey.includes(normalizedModel) || normalizedModel.includes(normalizedKey)) {
         logger.debug(`💰 Found pricing for ${modelName} using fuzzy match: ${key}`)
-        return value
+        return this.applyCustomModelPricingOverride(value, key)
       }
     }
 
@@ -437,13 +453,131 @@ class PricingService {
       for (const [key, value] of Object.entries(this.pricingData)) {
         if (key.includes(coreModel) || key.replace('anthropic.', '').includes(coreModel)) {
           logger.debug(`💰 Found pricing for ${modelName} using Bedrock core model match: ${key}`)
-          return value
+          return this.applyCustomModelPricingOverride(value, key)
         }
       }
     }
 
     logger.debug(`💰 No pricing found for model: ${modelName}`)
     return null
+  }
+
+  // 将自定义模型价格覆盖应用到返回的价格对象
+  applyCustomModelPricingOverride(pricing, matchedKey) {
+    if (!pricing || !matchedKey) {
+      return pricing
+    }
+
+    const override = this.customModelPricing[matchedKey]
+    if (!override) {
+      return pricing
+    }
+
+    const fieldMap = {
+      input: 'input_cost_per_token',
+      output: 'output_cost_per_token',
+      cacheCreation: 'cache_creation_input_token_cost',
+      cacheRead: 'cache_read_input_token_cost'
+    }
+
+    const merged = { ...pricing, _customPriceOverride: {} }
+    let hasOverride = false
+
+    for (const [overrideField, pricingField] of Object.entries(fieldMap)) {
+      const value = override[overrideField]
+      if (Number.isFinite(value) && value >= 0) {
+        merged[pricingField] = value
+        merged._customPriceOverride[overrideField] = true
+        hasOverride = true
+      }
+    }
+
+    if (!hasOverride) {
+      return pricing
+    }
+
+    logger.debug(`💰 Custom model pricing override applied to ${matchedKey}`)
+    return merged
+  }
+
+  // 从 Redis 加载自定义模型价格覆盖
+  async loadCustomModelPricing() {
+    try {
+      const redis = require('../models/redis')
+      const overrides = await redis.getCustomModelPricing()
+      this.customModelPricing = overrides || {}
+      const count = Object.keys(this.customModelPricing).length
+      if (count > 0) {
+        logger.info(`💰 Loaded ${count} custom model pricing override(s)`)
+      }
+    } catch (error) {
+      logger.warn(`⚠️  Failed to load custom model pricing: ${error.message}`)
+      this.customModelPricing = {}
+    }
+  }
+
+  _normalizePricingOverrideField(value) {
+    if (value === null || value === undefined || value === '') {
+      return null
+    }
+
+    const num = typeof value === 'number' ? value : Number(value)
+    if (!Number.isFinite(num) || num < 0) {
+      throw new Error('Pricing override must be a finite non-negative number or null')
+    }
+
+    return num
+  }
+
+  async setCustomModelPricing(modelName, { input, output, cacheCreation, cacheRead } = {}) {
+    if (!modelName || typeof modelName !== 'string') {
+      throw new Error('Model name is required')
+    }
+
+    const normalized = {
+      input: this._normalizePricingOverrideField(input),
+      output: this._normalizePricingOverrideField(output),
+      cacheCreation: this._normalizePricingOverrideField(cacheCreation),
+      cacheRead: this._normalizePricingOverrideField(cacheRead)
+    }
+
+    const hasAnyOverride = Object.values(normalized).some((value) => value !== null)
+    if (!hasAnyOverride) {
+      throw new Error('At least one pricing field must be provided')
+    }
+
+    normalized.updatedAt = new Date().toISOString()
+
+    const redis = require('../models/redis')
+    await redis.setCustomModelPricing(modelName, normalized)
+    this.customModelPricing[modelName] = normalized
+    logger.info(`💰 Set custom model pricing for ${modelName}`)
+    return normalized
+  }
+
+  async deleteCustomModelPricing(modelName) {
+    if (!modelName || typeof modelName !== 'string') {
+      throw new Error('Model name is required')
+    }
+
+    const redis = require('../models/redis')
+    await redis.deleteCustomModelPricing(modelName)
+    delete this.customModelPricing[modelName]
+    logger.info(`💰 Removed custom model pricing for ${modelName}`)
+  }
+
+  getCustomModelPricingMap() {
+    return { ...this.customModelPricing }
+  }
+
+  getAllModelPricing() {
+    const data = this.pricingData ? { ...this.pricingData } : {}
+    for (const model of Object.keys(this.customModelPricing)) {
+      if (!data[model]) {
+        data[model] = { litellm_provider: 'custom' }
+      }
+    }
+    return data
   }
 
   // 确保价格对象包含缓存价格
@@ -453,10 +587,19 @@ class PricingService {
     }
 
     // 如果缺少缓存价格，根据输入价格计算（缓存创建价格通常是输入价格的1.25倍，缓存读取是0.1倍）
-    if (!pricing.cache_creation_input_token_cost && pricing.input_cost_per_token) {
+    const customOverride = pricing._customPriceOverride || {}
+    if (
+      !pricing.cache_creation_input_token_cost &&
+      !customOverride.cacheCreation &&
+      pricing.input_cost_per_token
+    ) {
       pricing.cache_creation_input_token_cost = pricing.input_cost_per_token * 1.25
     }
-    if (!pricing.cache_read_input_token_cost && pricing.input_cost_per_token) {
+    if (
+      !pricing.cache_read_input_token_cost &&
+      !customOverride.cacheRead &&
+      pricing.input_cost_per_token
+    ) {
       pricing.cache_read_input_token_cost = pricing.input_cost_per_token * 0.1
     }
     return pricing
@@ -547,23 +690,28 @@ class PricingService {
 
     let inputCost = 0
     let outputCost = 0
+    const customOverride = pricing?._customPriceOverride || {}
+    const longContextPrices = useLongContextPricing
+      ? this.longContextPricing[modelName] ||
+        this.longContextPricing[Object.keys(this.longContextPricing)[0]]
+      : null
+
+    const inputTokenPrice =
+      useLongContextPricing && !customOverride.input
+        ? longContextPrices.input
+        : pricing?.input_cost_per_token || 0
+    const outputTokenPrice =
+      useLongContextPricing && !customOverride.output
+        ? longContextPrices.output
+        : pricing?.output_cost_per_token || 0
+
+    inputCost = (usage.input_tokens || 0) * inputTokenPrice
+    outputCost = (usage.output_tokens || 0) * outputTokenPrice
 
     if (useLongContextPricing) {
-      // 使用 1M 上下文特殊价格（仅输入和输出价格改变）
-      const longContextPrices =
-        this.longContextPricing[modelName] ||
-        this.longContextPricing[Object.keys(this.longContextPricing)[0]]
-
-      inputCost = (usage.input_tokens || 0) * longContextPrices.input
-      outputCost = (usage.output_tokens || 0) * longContextPrices.output
-
       logger.info(
-        `💰 Using 1M context pricing for ${modelName}: input=$${longContextPrices.input}/token, output=$${longContextPrices.output}/token`
+        `💰 Using 1M context pricing for ${modelName}: input=$${inputTokenPrice}/token, output=$${outputTokenPrice}/token`
       )
-    } else {
-      // 使用正常价格
-      inputCost = (usage.input_tokens || 0) * (pricing?.input_cost_per_token || 0)
-      outputCost = (usage.output_tokens || 0) * (pricing?.output_cost_per_token || 0)
     }
 
     // 缓存价格保持不变（即使对于 1M 模型）
@@ -609,18 +757,8 @@ class PricingService {
       hasPricing: true,
       isLongContextRequest,
       pricing: {
-        input: useLongContextPricing
-          ? (
-              this.longContextPricing[modelName] ||
-              this.longContextPricing[Object.keys(this.longContextPricing)[0]]
-            )?.input || 0
-          : pricing?.input_cost_per_token || 0,
-        output: useLongContextPricing
-          ? (
-              this.longContextPricing[modelName] ||
-              this.longContextPricing[Object.keys(this.longContextPricing)[0]]
-            )?.output || 0
-          : pricing?.output_cost_per_token || 0,
+        input: inputTokenPrice,
+        output: outputTokenPrice,
         cacheCreate: pricing?.cache_creation_input_token_cost || 0,
         cacheRead: pricing?.cache_read_input_token_cost || 0,
         ephemeral1h: this.getEphemeral1hPricing(modelName)
