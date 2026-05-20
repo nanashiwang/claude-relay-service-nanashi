@@ -19,6 +19,10 @@ const {
   resolveStreamInterruptionReasonFromError,
   recordStreamInterruption
 } = require('../utils/streamInterruptionHelper')
+const {
+  shouldPassThroughCodexRequest,
+  isCodexClientUserAgent
+} = require('../utils/codexAutoReview')
 
 // 创建代理 Agent（使用统一的代理工具）
 function createProxyAgent(proxy) {
@@ -1078,11 +1082,12 @@ const handleResponses = async (req, res) => {
 
     // 判断是否为 Codex CLI 的请求（基于 User-Agent）
     const userAgent = req.headers['user-agent'] || ''
-    const codexCliPattern = /^(codex_vscode|codex_cli_rs)\/[\d.]+/i
-    const isCodexCLI = codexCliPattern.test(userAgent)
+    const isCodexCLI = isCodexClientUserAgent(userAgent)
+    // codex-auto-review 等语义模型即便不带 Codex UA 也必须按 Codex 透传，不能改写 instructions/text/model
+    const shouldPassThroughCodex = shouldPassThroughCodexRequest(req, requestedModel)
 
-    // 如果不是 Codex CLI 请求，则进行适配
-    if (!isCodexCLI && !isChatCompletionsCompat) {
+    // 如果不是 Codex 透传请求，则进行适配
+    if (!shouldPassThroughCodex && !isChatCompletionsCompat) {
       // 移除不需要的请求体字段
       const fieldsToRemove = [
         'temperature',
@@ -1105,8 +1110,12 @@ const handleResponses = async (req, res) => {
       logger.info('📝 Non-Codex CLI request detected, applying Codex CLI adaptation')
     } else if (isChatCompletionsCompat) {
       logger.info('✅ Chat Completions compatibility mode enabled for OpenAI relay')
-    } else {
+    } else if (isCodexCLI) {
       logger.info('✅ Codex CLI request detected, forwarding as-is')
+    } else {
+      logger.info(
+        `✅ Codex passthrough request detected, forwarding as-is for model: ${requestedModel || 'unknown'}`
+      )
     }
 
     // 使用调度器选择账户
