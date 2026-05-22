@@ -1,4 +1,5 @@
 const axios = require('axios')
+const crypto = require('crypto')
 const { Readable } = require('stream')
 const FormData = require('form-data')
 const config = require('../../config/config')
@@ -14,6 +15,8 @@ const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
 const CODEX_IMAGE_MAIN_MODEL = 'gpt-5.4-mini'
 const CODEX_RESPONSES_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses'
+const CODEX_IMAGE_USER_AGENT = 'codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9'
+const CODEX_IMAGE_ORIGINATOR = 'codex_cli_rs'
 function isWritableResponse(res) {
   return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
 }
@@ -122,6 +125,35 @@ function writeUpstreamHeaders(res, upstreamHeaders = {}) {
       res.setHeader(key, value)
     }
   }
+}
+
+function buildCodexImageHeaders(req, account, context, accessToken) {
+  const incoming = req.headers || {}
+  const headers = {
+    authorization: `Bearer ${accessToken}`,
+    'chatgpt-account-id': account.accountId || account.chatgptUserId || context.accountId,
+    host: 'chatgpt.com',
+    accept: 'text/event-stream',
+    'content-type': 'application/json',
+    connection: 'Keep-Alive',
+    'user-agent': incoming['user-agent']?.includes('codex_cli_rs')
+      ? incoming['user-agent']
+      : CODEX_IMAGE_USER_AGENT,
+    originator: incoming.originator || CODEX_IMAGE_ORIGINATOR,
+    Session_id: incoming.session_id || incoming['session-id'] || crypto.randomUUID()
+  }
+
+  for (const key of ['version', 'x-codex-beta-features', 'x-codex-turn-metadata']) {
+    if (incoming[key]) {
+      headers[key] = incoming[key]
+    }
+  }
+
+  if (incoming['x-client-request-id']) {
+    headers['x-client-request-id'] = incoming['x-client-request-id']
+  }
+
+  return headers
 }
 
 async function applyRateLimitTracking(req, usageSummary, model, context = '') {
@@ -790,13 +822,7 @@ class OpenAIImagesRelayService {
       return res.status(403).json({ error: { message: 'OpenAI OAuth account is not available' } })
     }
 
-    const headers = {
-      authorization: `Bearer ${accessToken}`,
-      'chatgpt-account-id': account.accountId || account.chatgptUserId || context.accountId,
-      host: 'chatgpt.com',
-      accept: 'text/event-stream',
-      'content-type': 'application/json'
-    }
+    const headers = buildCodexImageHeaders(req, account, context, accessToken)
 
     const response = await axios.post(CODEX_RESPONSES_ENDPOINT, responsesBody, {
       headers,

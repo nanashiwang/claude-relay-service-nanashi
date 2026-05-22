@@ -1047,10 +1047,14 @@ async function resolveOpenAIImageContext(req, res) {
 
   const requestedModel =
     req.body?.model || req.query?.model || openaiImagesRelayService.DEFAULT_IMAGE_MODEL
+
+  // gpt-image-2 is a tool model, not the Codex account's text model. Do not use it
+  // to filter account supportedModels, otherwise image-capable OAuth accounts are skipped.
+  const schedulerModel = null
   const { accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
     apiKeyData,
     sessionHash,
-    requestedModel
+    schedulerModel
   )
 
   return {
