@@ -204,6 +204,26 @@ class Application {
       // 📏 请求大小限制
       this.app.use(requestSizeLimit)
 
+      // OpenAI Images edits uses multipart/form-data and must be mounted before JSON body parsing.
+      this.app.use('/openai', (req, res, next) => {
+        const pathOnly = (req.path || '').split('?')[0]
+        const isImageEditRoute = pathOnly === '/v1/images/edits' || pathOnly === '/images/edits'
+        if (req.method === 'POST' && isImageEditRoute) {
+          return requestLogger(req, res, (logError) => {
+            if (logError) {
+              return next(logError)
+            }
+            return securityMiddleware(req, res, (securityError) => {
+              if (securityError) {
+                return next(securityError)
+              }
+              return openaiRoutes(req, res, next)
+            })
+          })
+        }
+        return next()
+      })
+
       // 📝 请求日志（使用自定义logger而不是morgan）
       this.app.use(requestLogger)
 

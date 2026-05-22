@@ -8,6 +8,7 @@ const unifiedOpenAIScheduler = require('../services/unifiedOpenAIScheduler')
 const openaiAccountService = require('../services/openaiAccountService')
 const openaiResponsesAccountService = require('../services/openaiResponsesAccountService')
 const openaiResponsesRelayService = require('../services/openaiResponsesRelayService')
+const openaiImagesRelayService = require('../services/openaiImagesRelayService')
 const apiKeyService = require('../services/apiKeyService')
 const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const redis = require('../models/redis')
@@ -134,6 +135,7 @@ async function applyRateLimitTracking(req, usageSummary, model, context = '') {
 const OPENAI_AUTH_RETRY_MAX_COUNT = 3
 const OPENAI_AUTH_RETRYABLE_STATUS = new Set([401, 402, 403])
 const DEFAULT_OPENAI_STREAM_HEARTBEAT_INTERVAL_MS = 15000
+const OPENAI_IMAGE_ENDPOINTS = new Set(['generations', 'edits'])
 
 function getOpenAIAuthRetryState(req) {
   if (!req._openaiAuthRetryState || typeof req._openaiAuthRetryState !== 'object') {
@@ -857,12 +859,14 @@ async function collectResponsesStreamResult(stream) {
       }
 
       if (eventData.type === 'response.completed' && eventData.response) {
-        completedResponse = eventData.response
-        if (eventData.response.model) {
-          model = eventData.response.model
+        const { response } = eventData
+        const { model: responseModel, usage } = response
+        completedResponse = response
+        if (responseModel) {
+          model = responseModel
         }
-        if (eventData.response.usage) {
-          usageData = eventData.response.usage
+        if (usage) {
+          usageData = usage
         }
       }
     }
@@ -1016,6 +1020,87 @@ async function getOpenAIAuthToken(apiKeyData, sessionHash = null, requestedModel
   }
 }
 
+async function resolveOpenAIImageContext(req, res) {
+  const apiKeyData = req.apiKey || {}
+
+  if (!checkOpenAIPermissions(apiKeyData)) {
+    logger.security(
+      `🚫 API Key ${apiKeyData.id || 'unknown'} 缺少 OpenAI 权限，拒绝访问 ${req.originalUrl}`
+    )
+    res.status(403).json({
+      error: {
+        message: 'This API key does not have permission to access OpenAI',
+        type: 'permission_denied',
+        code: 'permission_denied'
+      }
+    })
+    return null
+  }
+
+  const stickySession = resolveOpenAIStickySessionContext(req, apiKeyData.id)
+  const { sessionHash } = stickySession
+  if (sessionHash && stickySession.source) {
+    logger.debug(
+      `OpenAI image sticky session resolved from ${stickySession.source} (apiKeyScoped=${!!apiKeyData.id}): ${sessionHash.substring(0, 12)}...`
+    )
+  }
+
+  const requestedModel =
+    req.body?.model || req.query?.model || openaiImagesRelayService.DEFAULT_IMAGE_MODEL
+  const { accessToken, accountId, accountType, proxy, account } = await getOpenAIAuthToken(
+    apiKeyData,
+    sessionHash,
+    requestedModel
+  )
+
+  return {
+    apiKeyData,
+    sessionHash,
+    stickySession,
+    requestedModel,
+    accessToken,
+    accountId,
+    accountType,
+    proxy,
+    account
+  }
+}
+
+async function handleImageRequest(req, res, endpoint) {
+  if (!OPENAI_IMAGE_ENDPOINTS.has(endpoint)) {
+    return res.status(404).json({ error: { message: 'Image endpoint not found' } })
+  }
+
+  try {
+    const context = await resolveOpenAIImageContext(req, res)
+    if (!context) {
+      return
+    }
+
+    if (endpoint === 'generations') {
+      return await openaiImagesRelayService.handleGeneration(req, res, context)
+    }
+
+    return await openaiImagesRelayService.handleEdit(req, res, context)
+  } catch (error) {
+    logger.error(`OpenAI image ${endpoint} relay failed:`, error)
+    const status = error.statusCode || error.response?.status || 500
+    let payload = error.response?.data
+    if (!payload || typeof payload !== 'object' || Buffer.isBuffer(payload)) {
+      payload = {
+        error: {
+          message: error.message || 'OpenAI image relay failed',
+          type: status >= 500 ? 'server_error' : 'invalid_request_error'
+        }
+      }
+    }
+
+    if (!res.headersSent) {
+      res.status(status).json(payload)
+    }
+  }
+}
+
 // 主处理函数，供两个路由共享
 const handleResponses = async (req, res) => {
   let upstream = null
@@ -1045,8 +1130,8 @@ const handleResponses = async (req, res) => {
 
     // 从请求头或请求体中提取会话 ID
     const stickySession = resolveOpenAIStickySessionContext(req, apiKeyData.id)
-    const sessionId = stickySession.sessionId
-    sessionHash = stickySession.sessionHash
+    const { sessionId } = stickySession
+    ;({ sessionHash } = stickySession)
 
     if (sessionHash && stickySession.source) {
       logger.debug(
@@ -2065,6 +2150,18 @@ router.post('/responses', authenticateApiKey, handleResponses)
 router.post('/v1/responses', authenticateApiKey, handleResponses)
 router.post('/responses/compact', authenticateApiKey, handleResponses)
 router.post('/v1/responses/compact', authenticateApiKey, handleResponses)
+router.post('/images/generations', authenticateApiKey, (req, res) =>
+  handleImageRequest(req, res, 'generations')
+)
+router.post('/v1/images/generations', authenticateApiKey, (req, res) =>
+  handleImageRequest(req, res, 'generations')
+)
+router.post('/images/edits', authenticateApiKey, (req, res) =>
+  handleImageRequest(req, res, 'edits')
+)
+router.post('/v1/images/edits', authenticateApiKey, (req, res) =>
+  handleImageRequest(req, res, 'edits')
+)
 
 // 使用情况统计端点
 router.get('/usage', authenticateApiKey, async (req, res) => {
