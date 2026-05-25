@@ -143,6 +143,113 @@ is_systemd_ready() {
     command_exists systemctl && [ -d /run/systemd/system ]
 }
 
+
+# 判断 CRS 是否由 systemd 托管；托管时 crs start/stop/restart 统一委托给 systemd，避免双开占用端口
+crs_service_name() {
+    echo "${CRS_SERVICE_NAME:-crs.service}"
+}
+
+run_systemctl() {
+    if [ "$(id -u)" -eq 0 ]; then
+        systemctl "$@"
+    else
+        sudo systemctl "$@"
+    fi
+}
+
+is_crs_systemd_managed() {
+    [ "${CRS_DISABLE_SYSTEMD_MANAGEMENT:-}" = "1" ] && return 1
+    is_systemd_ready || return 1
+    run_systemctl cat "$(crs_service_name)" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+get_crs_systemd_main_pid() {
+    run_systemctl show -p MainPID --value "$(crs_service_name)" 2>/dev/null || echo 0
+}
+
+cleanup_stale_app_processes() {
+    local main_pid
+    main_pid="$(get_crs_systemd_main_pid)"
+    local pids
+    pids=$(pgrep -f "[n]ode .*${APP_DIR}/src/app.js" 2>/dev/null || true)
+
+    for pid in $pids; do
+        [ -z "$pid" ] && continue
+        [ "$pid" = "$main_pid" ] && continue
+        print_warning "发现非 systemd 托管的旧 CRS 进程，停止 PID: $pid"
+        kill -TERM "$pid" 2>/dev/null || true
+    done
+
+    sleep 2
+    pids=$(pgrep -f "[n]ode .*${APP_DIR}/src/app.js" 2>/dev/null || true)
+    for pid in $pids; do
+        [ -z "$pid" ] && continue
+        [ "$pid" = "$main_pid" ] && continue
+        print_warning "旧 CRS 进程未退出，强制停止 PID: $pid"
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+
+    rm -f "$APP_DIR/.pid" "$APP_DIR/claude-relay-service.pid" 2>/dev/null || true
+}
+
+ensure_app_port_available() {
+    local actual_port="$APP_PORT"
+    if [ -z "$actual_port" ] && [ -f "$APP_DIR/.env" ]; then
+        actual_port=$(grep "^PORT=" "$APP_DIR/.env" 2>/dev/null | tail -1 | cut -d'=' -f2)
+    fi
+    actual_port=${actual_port:-3000}
+
+    local port_owner
+    port_owner=$(ss -ltnp 2>/dev/null | grep -E ":${actual_port}[[:space:]]" | head -1 || true)
+    [ -z "$port_owner" ] && return 0
+
+    local main_pid
+    main_pid="$(get_crs_systemd_main_pid)"
+    if [ -n "$main_pid" ] && [ "$main_pid" != "0" ] && echo "$port_owner" | grep -q "pid=$main_pid,"; then
+        return 0
+    fi
+
+    print_error "端口 ${actual_port} 被非当前 systemd CRS 进程占用，拒绝启动: $port_owner"
+    return 1
+}
+
+run_crs_systemd_action() {
+    local action="$1"
+    local service
+    service="$(crs_service_name)"
+
+    if ! is_crs_systemd_managed; then
+        return 2
+    fi
+
+    case "$action" in
+        start|restart)
+            cleanup_stale_app_processes
+            if ! ensure_app_port_available; then
+                return 1
+            fi
+            run_systemctl reset-failed "$service" >/dev/null 2>&1 || true
+            print_info "使用 systemd 执行: systemctl $action $service"
+            if ! run_systemctl "$action" "$service"; then
+                return 1
+            fi
+            sleep 2
+            show_status
+            return 0
+            ;;
+        stop)
+            print_info "使用 systemd 执行: systemctl stop $service"
+            run_systemctl stop "$service" >/dev/null 2>&1 || true
+            cleanup_stale_app_processes
+            print_success "服务已停止"
+            return 0
+            ;;
+    esac
+
+    return 2
+}
+
 # 启动 Redis 服务（兼容 systemd / service / 直接进程）
 start_redis_service() {
     local started=false
@@ -987,6 +1094,14 @@ start_service() {
     print_info "启动服务..."
     
     cd "$APP_DIR"
+
+    run_crs_systemd_action start
+    local systemd_rc=$?
+    if [ $systemd_rc -eq 0 ]; then
+        return 0
+    elif [ $systemd_rc -eq 1 ]; then
+        return 1
+    fi
     
     # 检查是否已运行
     if pgrep -f "node.*src/app.js" > /dev/null; then
@@ -1064,6 +1179,14 @@ start_service_direct() {
 # 停止服务
 stop_service() {
     print_info "停止服务..."
+
+    run_crs_systemd_action stop
+    local systemd_rc=$?
+    if [ $systemd_rc -eq 0 ]; then
+        return 0
+    elif [ $systemd_rc -eq 1 ]; then
+        return 1
+    fi
     
     # 尝试使用pm2停止
     if command_exists pm2 && [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ]; then
@@ -1109,6 +1232,14 @@ stop_service() {
 # 重启服务
 restart_service() {
     print_info "重启服务..."
+
+    run_crs_systemd_action restart
+    local systemd_rc=$?
+    if [ $systemd_rc -eq 0 ]; then
+        return 0
+    elif [ $systemd_rc -eq 1 ]; then
+        return 1
+    fi
     
     # 停止服务并检查结果
     if ! stop_service; then
