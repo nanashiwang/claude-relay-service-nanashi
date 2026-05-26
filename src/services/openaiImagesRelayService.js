@@ -17,8 +17,9 @@ const CODEX_IMAGE_MAIN_MODEL = 'gpt-5.4-mini'
 const CODEX_RESPONSES_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses'
 const CODEX_IMAGE_USER_AGENT = 'codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9'
 const CODEX_IMAGE_ORIGINATOR = 'codex_cli_rs'
-const DEFAULT_CODEX_IMAGE_MAX_COUNT = 4
+const DEFAULT_CODEX_IMAGE_MAX_COUNT = 10
 const DEFAULT_CODEX_IMAGE_PARALLELISM = 2
+const DEFAULT_CODEX_IMAGE_RETRIES = 1
 function isWritableResponse(res) {
   return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
 }
@@ -93,9 +94,17 @@ function getPositiveIntegerConfig(value, fallback, max = Number.MAX_SAFE_INTEGER
   return Math.max(1, Math.min(parsed, max))
 }
 
+function getNonNegativeIntegerConfig(value, fallback, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = toInteger(value, fallback)
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback
+  }
+  return Math.max(0, Math.min(parsed, max))
+}
+
 function getCodexImageMaxCount() {
   return getPositiveIntegerConfig(
-    config.openaiImages?.maxCodexN || process.env.OPENAI_IMAGES_MAX_CODEX_N,
+    config.openaiImages?.maxCodexN ?? process.env.OPENAI_IMAGES_MAX_CODEX_N,
     DEFAULT_CODEX_IMAGE_MAX_COUNT,
     10
   )
@@ -103,9 +112,17 @@ function getCodexImageMaxCount() {
 
 function getCodexImageParallelism() {
   return getPositiveIntegerConfig(
-    config.openaiImages?.codexParallelism || process.env.OPENAI_IMAGES_CODEX_PARALLELISM,
+    config.openaiImages?.codexParallelism ?? process.env.OPENAI_IMAGES_CODEX_PARALLELISM,
     DEFAULT_CODEX_IMAGE_PARALLELISM,
     getCodexImageMaxCount()
+  )
+}
+
+function getCodexImageRetryCount() {
+  return getNonNegativeIntegerConfig(
+    config.openaiImages?.codexRetries ?? process.env.OPENAI_IMAGES_CODEX_RETRIES,
+    DEFAULT_CODEX_IMAGE_RETRIES,
+    3
   )
 }
 
@@ -557,6 +574,21 @@ function createRelayError(statusCode, errorData, fallbackMessage, fallbackType =
     data: payload
   }
   return error
+}
+
+function isRetryableCodexImageError(error, signal) {
+  if (signal?.aborted || error?.code === 'ERR_CANCELED') {
+    return false
+  }
+
+  const status = error?.statusCode || error?.response?.status
+  if (!status) {
+    return true
+  }
+  if (status === 408 || status === 409 || status === 425) {
+    return true
+  }
+  return status >= 500
 }
 
 function bindAbortSignalToStream(signal, stream) {
@@ -1367,6 +1399,42 @@ class OpenAIImagesRelayService {
     return res.json(buildImagesApiResponse(completed, context.responseFormat))
   }
 
+  async _collectCodexImageBatchItem(req, context, responsesBody, index, signal) {
+    const maxAttempts = getCodexImageRetryCount() + 1
+    let lastError
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      let output
+      try {
+        const response = await this._requestCodexImageResponses(req, context, responsesBody, {
+          signal
+        })
+        const completed = await this._collectCodexImageCompleted(response, context)
+        output = { completed, headers: response.headers }
+      } catch (error) {
+        lastError = error
+        if (attempt >= maxAttempts || !isRetryableCodexImageError(error, signal)) {
+          throw error
+        }
+        logger.warn(
+          `OpenAI OAuth image batch item ${index + 1} failed, retrying (${attempt}/${maxAttempts - 1}): ${error.message}`
+        )
+        continue
+      }
+
+      // Usage recording happens after generation succeeds; do not retry a paid image on stats errors.
+      await this._recordCodexImageUsage(
+        req,
+        context,
+        output.completed,
+        `openai-oauth-image-batch-${index + 1}`
+      )
+      return output
+    }
+
+    throw lastError
+  }
+
   async _collectCodexImageResponsesBatch(req, res, context, responsesBody, imageCount) {
     const abortController = new AbortController()
     let settled = false
@@ -1384,19 +1452,11 @@ class OpenAIImagesRelayService {
     req.on('aborted', abortIfPending)
     res.on('close', abortOnResponseClose)
 
-    const tasks = Array.from({ length: imageCount }, (_, index) => async () => {
-      const response = await this._requestCodexImageResponses(req, context, responsesBody, {
-        signal: abortController.signal
-      })
-      const completed = await this._collectCodexImageCompleted(response, context)
-      await this._recordCodexImageUsage(
-        req,
-        context,
-        completed,
-        `openai-oauth-image-batch-${index + 1}`
-      )
-      return { completed, headers: response.headers }
-    })
+    const tasks = Array.from(
+      { length: imageCount },
+      (_, index) => () =>
+        this._collectCodexImageBatchItem(req, context, responsesBody, index, abortController.signal)
+    )
 
     try {
       const outputs = await runLimitedTasks(tasks, getCodexImageParallelism(), abortIfPending)

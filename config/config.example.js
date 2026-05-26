@@ -108,8 +108,12 @@ const config = {
 
   // 🖼️ OpenAI 图片代理配置
   openaiImages: {
-    maxCodexN: parseInt(process.env.OPENAI_IMAGES_MAX_CODEX_N) || 4,
-    codexParallelism: parseInt(process.env.OPENAI_IMAGES_CODEX_PARALLELISM) || 2
+    maxCodexN: parseInt(process.env.OPENAI_IMAGES_MAX_CODEX_N) || 10,
+    codexParallelism: parseInt(process.env.OPENAI_IMAGES_CODEX_PARALLELISM) || 2,
+    codexRetries: (() => {
+      const retries = parseInt(process.env.OPENAI_IMAGES_CODEX_RETRIES)
+      return Number.isFinite(retries) && retries >= 0 ? retries : 1
+    })()
   },
 
   // 📈 使用限制
