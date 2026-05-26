@@ -17,6 +17,8 @@ const CODEX_IMAGE_MAIN_MODEL = 'gpt-5.4-mini'
 const CODEX_RESPONSES_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses'
 const CODEX_IMAGE_USER_AGENT = 'codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9'
 const CODEX_IMAGE_ORIGINATOR = 'codex_cli_rs'
+const DEFAULT_CODEX_IMAGE_MAX_COUNT = 4
+const DEFAULT_CODEX_IMAGE_PARALLELISM = 2
 function isWritableResponse(res) {
   return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
 }
@@ -81,6 +83,56 @@ function toInteger(value, fallback = null) {
   }
   const parsed = Number.parseInt(value, 10)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function getPositiveIntegerConfig(value, fallback, max = Number.MAX_SAFE_INTEGER) {
+  const parsed = toInteger(value, fallback)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback
+  }
+  return Math.max(1, Math.min(parsed, max))
+}
+
+function getCodexImageMaxCount() {
+  return getPositiveIntegerConfig(
+    config.openaiImages?.maxCodexN || process.env.OPENAI_IMAGES_MAX_CODEX_N,
+    DEFAULT_CODEX_IMAGE_MAX_COUNT,
+    10
+  )
+}
+
+function getCodexImageParallelism() {
+  return getPositiveIntegerConfig(
+    config.openaiImages?.codexParallelism || process.env.OPENAI_IMAGES_CODEX_PARALLELISM,
+    DEFAULT_CODEX_IMAGE_PARALLELISM,
+    getCodexImageMaxCount()
+  )
+}
+
+function parseCodexImageCount(value) {
+  if (value === undefined || value === null || value === '') {
+    return 1
+  }
+
+  const parsed = Number(value)
+  const maxCount = getCodexImageMaxCount()
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > maxCount) {
+    const error = new Error(`n must be an integer between 1 and ${maxCount}`)
+    error.statusCode = 400
+    error.response = {
+      status: 400,
+      data: {
+        error: {
+          message: error.message,
+          type: 'invalid_request_error',
+          param: 'n'
+        }
+      }
+    }
+    throw error
+  }
+
+  return parsed
 }
 
 function getFirstFormValue(formData, key) {
@@ -402,6 +454,129 @@ function buildImagesApiResponse(completed, responseFormat) {
   return response
 }
 
+function mergeUsageData(usages) {
+  const mergeValue = (left, right) => {
+    if (typeof right === 'number') {
+      return (typeof left === 'number' ? left : 0) + right
+    }
+    if (right && typeof right === 'object' && !Array.isArray(right)) {
+      const out = left && typeof left === 'object' && !Array.isArray(left) ? { ...left } : {}
+      for (const [key, value] of Object.entries(right)) {
+        out[key] = mergeValue(out[key], value)
+      }
+      return out
+    }
+    return left === undefined ? right : left
+  }
+
+  let merged = null
+  for (const usage of usages || []) {
+    if (!usage || typeof usage !== 'object') {
+      continue
+    }
+    merged = mergeValue(merged || {}, usage)
+  }
+  return merged
+}
+
+function mergeCompletedImages(completedItems, model) {
+  const results = []
+  const usages = []
+  let createdAt = Math.floor(Date.now() / 1000)
+
+  for (const completed of completedItems || []) {
+    if (!completed) {
+      continue
+    }
+    const { createdAt: itemCreatedAt, usage, results: itemResults } = completed
+    if (itemCreatedAt && itemCreatedAt < createdAt) {
+      createdAt = itemCreatedAt
+    }
+    if (usage) {
+      usages.push(usage)
+    }
+    for (const result of itemResults || []) {
+      results.push(result)
+    }
+  }
+
+  return {
+    createdAt,
+    model,
+    usage: mergeUsageData(usages),
+    results
+  }
+}
+
+async function runLimitedTasks(tasks, limit, onFirstError) {
+  const results = new Array(tasks.length)
+  let nextIndex = 0
+  let firstError = null
+
+  const worker = async () => {
+    while (nextIndex < tasks.length && !firstError) {
+      const currentIndex = nextIndex
+      nextIndex += 1
+      try {
+        results[currentIndex] = await tasks[currentIndex]()
+      } catch (error) {
+        if (!firstError) {
+          firstError = error
+          if (typeof onFirstError === 'function') {
+            onFirstError(error)
+          }
+        }
+      }
+    }
+  }
+
+  const workerCount = Math.min(Math.max(1, limit), tasks.length)
+  await Promise.all(Array.from({ length: workerCount }, worker))
+
+  if (firstError) {
+    throw firstError
+  }
+  return results
+}
+
+function createRelayError(statusCode, errorData, fallbackMessage, fallbackType = 'server_error') {
+  const payload =
+    errorData && typeof errorData === 'object'
+      ? errorData
+      : {
+          error: {
+            message: fallbackMessage,
+            type: fallbackType
+          }
+        }
+  const message = payload.error?.message || payload.message || fallbackMessage
+  const error = new Error(message)
+  error.statusCode = statusCode
+  error.response = {
+    status: statusCode,
+    data: payload
+  }
+  return error
+}
+
+function bindAbortSignalToStream(signal, stream) {
+  if (!signal || !stream || typeof stream.destroy !== 'function') {
+    return
+  }
+
+  const destroyStream = () => stream.destroy(new Error('OpenAI image request aborted'))
+  if (signal.aborted) {
+    destroyStream()
+    return
+  }
+
+  signal.addEventListener('abort', destroyStream, { once: true })
+  const cleanup = () => signal.removeEventListener('abort', destroyStream)
+  stream.once('end', cleanup)
+  stream.once('error', cleanup)
+  stream.once('close', cleanup)
+}
+
 function buildImageStreamEventData({ itemId, b64, outputFormat, responseFormat, partial = false }) {
   const normalizedFormat = normalizeImageResponseFormat(responseFormat)
   const data = {
@@ -515,9 +690,25 @@ class OpenAIImagesRelayService {
       return this._forwardOpenAIResponsesJSON(req, res, imageContext)
     }
 
+    const imageCount = parseCodexImageCount(body.n)
+    if (imageContext.stream && imageCount > 1) {
+      return res.status(400).json({
+        error: {
+          message: 'stream=true with n>1 is not supported for OpenAI OAuth image accounts',
+          type: 'invalid_request_error',
+          param: 'n'
+        }
+      })
+    }
+
     const tool = createImageTool(body, 'generate', imageContext.model)
     const responsesBody = buildImagesResponsesRequest(String(body.prompt).trim(), [], tool)
-    return this._forwardCodexImageResponses(req, res, imageContext, responsesBody)
+    return this._forwardCodexImageResponses(
+      req,
+      res,
+      { ...imageContext, imageCount },
+      responsesBody
+    )
   }
 
   async handleEdit(req, res, context) {
@@ -599,7 +790,18 @@ class OpenAIImagesRelayService {
       model,
       responseFormat: normalizeImageResponseFormat(body.response_format),
       stream: body.stream === true,
+      imageCount: parseCodexImageCount(body.n),
       body
+    }
+
+    if (imageContext.stream && imageContext.imageCount > 1) {
+      return res.status(400).json({
+        error: {
+          message: 'stream=true with n>1 is not supported for OpenAI OAuth image accounts',
+          type: 'invalid_request_error',
+          param: 'n'
+        }
+      })
     }
 
     const responsesBody = buildImagesResponsesRequest(prompt, images, tool)
@@ -658,7 +860,18 @@ class OpenAIImagesRelayService {
       model,
       responseFormat: normalizeImageResponseFormat(getFirstFormValue(formData, 'response_format')),
       stream: toBool(getFirstFormValue(formData, 'stream'), false),
+      imageCount: parseCodexImageCount(getFirstFormValue(formData, 'n')),
       body: source
+    }
+
+    if (imageContext.stream && imageContext.imageCount > 1) {
+      return res.status(400).json({
+        error: {
+          message: 'stream=true with n>1 is not supported for OpenAI OAuth image accounts',
+          type: 'invalid_request_error',
+          param: 'n'
+        }
+      })
     }
 
     const responsesBody = buildImagesResponsesRequest(prompt, images, tool)
@@ -816,21 +1029,27 @@ class OpenAIImagesRelayService {
     return res.status(response.status).json(responseData)
   }
 
-  async _forwardCodexImageResponses(req, res, context, responsesBody) {
+  async _requestCodexImageResponses(req, context, responsesBody, options = {}) {
     const { account, accessToken } = context
     if (!account || !accessToken) {
-      return res.status(403).json({ error: { message: 'OpenAI OAuth account is not available' } })
+      throw createRelayError(403, null, 'OpenAI OAuth account is not available', 'forbidden')
     }
 
     const headers = buildCodexImageHeaders(req, account, context, accessToken)
 
-    const response = await axios.post(CODEX_RESPONSES_ENDPOINT, responsesBody, {
+    const axiosConfig = {
       headers,
       timeout: config.requestTimeout || 600000,
       responseType: 'stream',
       validateStatus: () => true,
       ...this._getProxyOptions(context.proxy, 'OpenAI OAuth image')
-    })
+    }
+    if (options.signal) {
+      axiosConfig.signal = options.signal
+    }
+
+    const response = await axios.post(CODEX_RESPONSES_ENDPOINT, responsesBody, axiosConfig)
+    bindAbortSignalToStream(options.signal, response.data)
 
     const usageSnapshot = this._extractCodexUsageHeaders(response.headers)
     if (usageSnapshot) {
@@ -847,7 +1066,8 @@ class OpenAIImagesRelayService {
         context.sessionHash,
         resetsInSeconds
       )
-      return res.status(429).json(
+      throw createRelayError(
+        429,
         errorData || {
           error: {
             message: 'Rate limit exceeded',
@@ -855,7 +1075,9 @@ class OpenAIImagesRelayService {
             code: 'rate_limit_exceeded',
             resets_in_seconds: resetsInSeconds
           }
-        }
+        },
+        'Rate limit exceeded',
+        'rate_limit_error'
       )
     }
 
@@ -875,7 +1097,8 @@ class OpenAIImagesRelayService {
         context.sessionHash,
         `OpenAI image authentication failed (${response.status}): ${message}`
       )
-      return res.status(response.status).json(
+      throw createRelayError(
+        response.status,
         errorData || {
           error: {
             message,
@@ -886,22 +1109,35 @@ class OpenAIImagesRelayService {
                   ? 'forbidden'
                   : 'unauthorized'
           }
-        }
+        },
+        message
       )
     }
 
     if (response.status >= 400) {
       const errorData = await collectStreamToErrorData(response.data)
-      return res.status(response.status).json(
+      throw createRelayError(
+        response.status,
         errorData || {
           error: {
             message: `Codex image request failed (${response.status})`
           }
-        }
+        },
+        `Codex image request failed (${response.status})`
       )
     }
 
     await openaiAccountService.recordUsage(context.accountId, 0)
+    return response
+  }
+
+  async _forwardCodexImageResponses(req, res, context, responsesBody) {
+    const imageCount = context.imageCount || 1
+    if (imageCount > 1) {
+      return this._collectCodexImageResponsesBatch(req, res, context, responsesBody, imageCount)
+    }
+
+    const response = await this._requestCodexImageResponses(req, context, responsesBody)
 
     if (context.stream) {
       return this._streamCodexImageResponse(req, res, response, context)
@@ -1043,7 +1279,7 @@ class OpenAIImagesRelayService {
     })
   }
 
-  async _collectCodexImageResponse(req, res, response, context) {
+  async _collectCodexImageCompleted(response, context) {
     let buffer = ''
     let completed = null
     const outputItemResults = []
@@ -1100,18 +1336,17 @@ class OpenAIImagesRelayService {
     }
 
     if (upstreamError && !completed) {
-      return res.status(502).json(upstreamError)
+      throw createRelayError(502, upstreamError, 'Codex image stream returned an error')
     }
 
     if (!completed || !completed.results || completed.results.length === 0) {
-      return res.status(502).json({
-        error: {
-          message: 'Upstream did not return image output',
-          type: 'bad_gateway'
-        }
-      })
+      throw createRelayError(502, null, 'Upstream did not return image output', 'bad_gateway')
     }
 
+    return completed
+  }
+
+  async _recordCodexImageUsage(req, context, completed, usageContext) {
     if (completed.usage) {
       await recordUsageFromUsageData({
         apiKeyData: context.apiKeyData,
@@ -1119,12 +1354,69 @@ class OpenAIImagesRelayService {
         usageData: completed.usage,
         model: context.model || completed.model,
         req,
-        context: 'openai-oauth-image'
+        context: usageContext
       })
     }
+  }
+
+  async _collectCodexImageResponse(req, res, response, context) {
+    const completed = await this._collectCodexImageCompleted(response, context)
+    await this._recordCodexImageUsage(req, context, completed, 'openai-oauth-image')
 
     writeUpstreamHeaders(res, response.headers)
     return res.json(buildImagesApiResponse(completed, context.responseFormat))
+  }
+
+  async _collectCodexImageResponsesBatch(req, res, context, responsesBody, imageCount) {
+    const abortController = new AbortController()
+    let settled = false
+    const abortIfPending = () => {
+      if (!settled && !abortController.signal.aborted) {
+        abortController.abort()
+      }
+    }
+    const abortOnResponseClose = () => {
+      if (!res.writableEnded) {
+        abortIfPending()
+      }
+    }
+
+    req.on('aborted', abortIfPending)
+    res.on('close', abortOnResponseClose)
+
+    const tasks = Array.from({ length: imageCount }, (_, index) => async () => {
+      const response = await this._requestCodexImageResponses(req, context, responsesBody, {
+        signal: abortController.signal
+      })
+      const completed = await this._collectCodexImageCompleted(response, context)
+      await this._recordCodexImageUsage(
+        req,
+        context,
+        completed,
+        `openai-oauth-image-batch-${index + 1}`
+      )
+      return { completed, headers: response.headers }
+    })
+
+    try {
+      const outputs = await runLimitedTasks(tasks, getCodexImageParallelism(), abortIfPending)
+      settled = true
+
+      const merged = mergeCompletedImages(
+        outputs.map((item) => item.completed),
+        context.model
+      )
+      if (!merged.results.length) {
+        throw createRelayError(502, null, 'Upstream did not return image output', 'bad_gateway')
+      }
+
+      writeUpstreamHeaders(res, outputs[0]?.headers || {})
+      return res.json(buildImagesApiResponse(merged, context.responseFormat))
+    } finally {
+      settled = true
+      req.removeListener('aborted', abortIfPending)
+      res.removeListener('close', abortOnResponseClose)
+    }
   }
 
   _getProxyOptions(proxy, label) {

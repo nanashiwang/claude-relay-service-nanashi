@@ -106,6 +106,12 @@ const config = {
   // ⏱️ 请求超时配置
   requestTimeout: parseInt(process.env.REQUEST_TIMEOUT) || 600000, // 默认 10 分钟
 
+  // 🖼️ OpenAI 图片代理配置
+  openaiImages: {
+    maxCodexN: parseInt(process.env.OPENAI_IMAGES_MAX_CODEX_N) || 4,
+    codexParallelism: parseInt(process.env.OPENAI_IMAGES_CODEX_PARALLELISM) || 2
+  },
+
   // 📈 使用限制
   limits: {
     defaultTokenLimit: parseInt(process.env.DEFAULT_TOKEN_LIMIT) || 1000000
