@@ -9,6 +9,7 @@ class AccountBalanceService {
   constructor(options = {}) {
     this.redis = options.redis || redis
     this.logger = options.logger || logger
+    this.accountQuotaService = options.accountQuotaService || null
 
     this.providers = new Map()
 
@@ -296,7 +297,7 @@ class AccountBalanceService {
     const localBalance = await this._getBalanceFromLocal(accountId, platform)
     const localStatistics = localBalance.statistics || {}
 
-    const quotaFromLocal = this._buildQuotaFromLocal(account, localStatistics)
+    const quotaFromLocal = await this._buildQuotaFromLocal(account, localStatistics, platform)
 
     // 安全限制：queryApi=auto 仅用于 Antigravity（gemini + oauthProvider=antigravity）账户
     const effectiveQueryMode =
@@ -601,9 +602,48 @@ class AccountBalanceService {
     }
   }
 
-  _buildQuotaFromLocal(account, statistics) {
+  async _buildQuotaFromLocal(account, statistics, platform = null) {
     if (!account || !Object.prototype.hasOwnProperty.call(account, 'dailyQuota')) {
       return { balance: null, currency: null, quota: null }
+    }
+
+    if (platform && account.id) {
+      try {
+        const quotaService = this.accountQuotaService || require('./accountQuotaService')
+        const quotaStatus = await quotaService.getQuotaStatus(account.id, platform)
+        if (quotaStatus?.success && quotaStatus.usage) {
+          const { usage } = quotaStatus
+          const config = quotaStatus.config || {}
+          const isPercent = usage.limitMode === 'percent' || config.quotaLimitMode === 'percent'
+          const limit = Number(config.quotaLimit || 0)
+          const used = Number(usage.value ?? usage.cost ?? 0)
+          const remaining =
+            limit > 0 && Number.isFinite(used) && !isPercent ? Math.max(0, limit - used) : null
+
+          return {
+            balance: remaining,
+            currency: 'USD',
+            quota: {
+              daily: config.quotaPeriod === 'daily' ? limit : undefined,
+              limit,
+              mode: isPercent ? 'percent' : 'cost',
+              period: usage.period || config.quotaPeriod || 'daily',
+              periodKey: usage.periodKey || '',
+              used: Number.isFinite(used) ? used : 0,
+              cost: Number(usage.cost || 0),
+              remaining,
+              percentage: Number(usage.percentage || 0),
+              resetAt: usage.resetAt || this._computeNextResetAt(account.quotaResetTime || '00:00'),
+              remainingSeconds: usage.remainingSeconds ?? null,
+              windowMinutes: usage.windowMinutes ?? null,
+              windowAvailable: usage.windowAvailable,
+              rules: quotaStatus.rules || []
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.debug(`统一额度状态读取失败，使用本地余额降级: ${account.id}`, error)
+      }
     }
 
     const dailyQuota = Number(account.dailyQuota || 0)

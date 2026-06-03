@@ -5,6 +5,15 @@ jest.mock('../src/utils/logger', () => ({
   warn: jest.fn(),
   error: jest.fn()
 }))
+jest.mock(
+  '../config/config',
+  () => ({
+    system: {
+      timezoneOffset: 8
+    }
+  }),
+  { virtual: true }
+)
 
 const accountBalanceServiceModule = require('../src/services/accountBalanceService')
 

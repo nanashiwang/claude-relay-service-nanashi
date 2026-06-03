@@ -2032,7 +2032,7 @@
           <i class="fas fa-spinner fa-spin mr-2" />加载中...
         </div>
         <div v-else class="space-y-5">
-          <div class="grid gap-4 sm:grid-cols-2">
+          <div class="grid gap-4 sm:grid-cols-3">
             <div>
               <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
                 周期
@@ -2049,11 +2049,24 @@
             </div>
             <div>
               <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
-                额度 ($)
+                方式
+              </label>
+              <select
+                v-model="quotaForm.quotaLimitMode"
+                class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+              >
+                <option value="cost">金额</option>
+                <option value="percent">百分比</option>
+              </select>
+            </div>
+            <div>
+              <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                {{ getQuotaLimitInputLabel(quotaForm.quotaLimitMode) }}
               </label>
               <input
                 v-model.number="quotaForm.quotaLimit"
                 class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                :max="quotaForm.quotaLimitMode === 'percent' ? 100 : undefined"
                 min="0"
                 placeholder="0 表示不限制"
                 step="0.01"
@@ -2073,15 +2086,64 @@
             />
           </div>
 
+          <div
+            v-if="isQuotaCodexAccount"
+            class="rounded-xl border border-gray-200 p-4 dark:border-gray-700"
+          >
+            <div class="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">5h 限制</div>
+            <div class="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  方式
+                </label>
+                <select
+                  v-model="quotaForm.codexFiveHourQuotaMode"
+                  class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                >
+                  <option value="cost">金额</option>
+                  <option value="percent">百分比</option>
+                </select>
+              </div>
+              <div>
+                <label class="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  {{ getQuotaLimitInputLabel(quotaForm.codexFiveHourQuotaMode) }}
+                </label>
+                <input
+                  v-model.number="quotaForm.codexFiveHourQuotaLimit"
+                  class="form-input w-full border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  :max="quotaForm.codexFiveHourQuotaMode === 'percent' ? 100 : undefined"
+                  min="0"
+                  placeholder="0 表示不限制"
+                  step="0.01"
+                  type="number"
+                />
+              </div>
+            </div>
+            <div
+              v-if="getQuotaRule('codex_5h')"
+              class="mt-3 flex items-center justify-between text-xs text-gray-500 dark:text-gray-400"
+            >
+              <span>{{ getQuotaRule('codex_5h')?.usage?.periodKey || '-' }}</span>
+              <span>
+                {{
+                  formatQuotaUsageValue(
+                    getQuotaRule('codex_5h')?.usage,
+                    quotaForm.codexFiveHourQuotaMode
+                  )
+                }}
+              </span>
+            </div>
+          </div>
+
           <div class="rounded-xl bg-gray-50 p-4 dark:bg-gray-900/40">
             <div class="mb-2 flex items-center justify-between text-sm">
               <span class="font-medium text-gray-700 dark:text-gray-300">
                 当前{{ getQuotaPeriodLabel(quotaForm.quotaPeriod) }}使用
               </span>
               <span class="font-semibold text-gray-900 dark:text-gray-100">
-                ${{ formatCost(quotaStatus?.usage?.cost || 0) }}
+                {{ formatQuotaUsageValue(quotaStatus?.usage, quotaForm.quotaLimitMode) }}
                 <template v-if="Number(quotaForm.quotaLimit) > 0">
-                  / ${{ Number(quotaForm.quotaLimit).toFixed(2) }}
+                  / {{ formatQuotaLimitValue(quotaForm.quotaLimit, quotaForm.quotaLimitMode) }}
                 </template>
               </span>
             </div>
@@ -2477,8 +2539,12 @@ const quotaStatus = ref(null)
 const quotaForm = ref({
   quotaLimit: 0,
   quotaPeriod: 'daily',
-  quotaResetTime: '00:00'
+  quotaLimitMode: 'cost',
+  quotaResetTime: '00:00',
+  codexFiveHourQuotaLimit: 0,
+  codexFiveHourQuotaMode: 'cost'
 })
+const isQuotaCodexAccount = computed(() => quotaAccount.value?.platform === 'openai')
 
 // 定时测试配置弹窗状态
 const showScheduledTestModal = ref(false)
@@ -2857,9 +2923,37 @@ const getQuotaPeriodLabel = (period) => {
     daily: '每日',
     weekly: '每周',
     monthly: '每月',
-    total: '总计'
+    total: '总计',
+    codex_5h: '5h'
   }
   return labels[period] || '每日'
+}
+
+const getQuotaLimitInputLabel = (mode) => (mode === 'percent' ? '额度 (%)' : '额度 ($)')
+
+const formatQuotaLimitValue = (value, mode) => {
+  const number = Number(value || 0)
+  if (mode === 'percent') {
+    return `${number.toFixed(2)}%`
+  }
+  return `$${number.toFixed(2)}`
+}
+
+const formatQuotaUsageValue = (usage, mode) => {
+  if (!usage) {
+    return mode === 'percent' ? '0.00%' : '$0.0000'
+  }
+
+  if (mode === 'percent') {
+    const value = Number(usage.value ?? usage.usedPercent ?? 0)
+    return `${value.toFixed(2)}%`
+  }
+
+  return `$${formatCost(Number(usage.cost ?? usage.value ?? 0))}`
+}
+
+const getQuotaRule = (ruleId) => {
+  return quotaStatus.value?.rules?.find((rule) => rule.id === ruleId) || null
 }
 
 const openQuotaModal = async (account) => {
@@ -2867,7 +2961,11 @@ const openQuotaModal = async (account) => {
   quotaForm.value = {
     quotaLimit: Number(account?.quotaLimit ?? account?.dailyQuota ?? 0),
     quotaPeriod: account?.quotaPeriod || 'daily',
-    quotaResetTime: account?.quotaResetTime || '00:00'
+    quotaLimitMode: account?.quotaLimitMode || 'cost',
+    quotaResetTime: account?.quotaResetTime || '00:00',
+    codexFiveHourQuotaLimit: Number(account?.codexFiveHourQuotaLimit || 0),
+    codexFiveHourQuotaMode:
+      account?.codexFiveHourQuotaMode || account?.codexFiveHourQuotaLimitMode || 'cost'
   }
   quotaStatus.value = null
   showQuotaModal.value = true
@@ -2882,7 +2980,10 @@ const openQuotaModal = async (account) => {
       quotaForm.value = {
         quotaLimit: Number(response.config?.quotaLimit || 0),
         quotaPeriod: response.config?.quotaPeriod || 'daily',
-        quotaResetTime: response.config?.quotaResetTime || '00:00'
+        quotaLimitMode: response.config?.quotaLimitMode || 'cost',
+        quotaResetTime: response.config?.quotaResetTime || '00:00',
+        codexFiveHourQuotaLimit: Number(response.config?.codexFiveHourQuotaLimit || 0),
+        codexFiveHourQuotaMode: response.config?.codexFiveHourQuotaMode || 'cost'
       }
     }
   } catch (error) {
@@ -2907,7 +3008,10 @@ const saveQuotaConfig = async () => {
       platform: quotaAccount.value.platform,
       quotaLimit: Number(quotaForm.value.quotaLimit || 0),
       quotaPeriod: quotaForm.value.quotaPeriod || 'daily',
-      quotaResetTime: quotaForm.value.quotaResetTime || '00:00'
+      quotaLimitMode: quotaForm.value.quotaLimitMode || 'cost',
+      quotaResetTime: quotaForm.value.quotaResetTime || '00:00',
+      codexFiveHourQuotaLimit: Number(quotaForm.value.codexFiveHourQuotaLimit || 0),
+      codexFiveHourQuotaMode: quotaForm.value.codexFiveHourQuotaMode || 'cost'
     })
 
     if (response.success) {
@@ -2917,7 +3021,10 @@ const saveQuotaConfig = async () => {
         target.quotaLimit = response.config?.quotaLimit || 0
         target.dailyQuota = response.config?.quotaLimit || 0
         target.quotaPeriod = response.config?.quotaPeriod || 'daily'
+        target.quotaLimitMode = response.config?.quotaLimitMode || 'cost'
         target.quotaResetTime = response.config?.quotaResetTime || '00:00'
+        target.codexFiveHourQuotaLimit = response.config?.codexFiveHourQuotaLimit || 0
+        target.codexFiveHourQuotaMode = response.config?.codexFiveHourQuotaMode || 'cost'
         target.quotaStoppedAt = response.stopped?.quotaStoppedAt || ''
       }
       showToast('账号额度已保存', 'success')

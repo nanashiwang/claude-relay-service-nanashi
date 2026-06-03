@@ -6,7 +6,11 @@ const {
   isReservedRedisEntityId
 } = require('../utils/redisKeyFilter')
 
-const VALID_PERIODS = new Set(['daily', 'weekly', 'monthly', 'total'])
+const VALID_PERIODS = new Set(['daily', 'weekly', 'monthly', 'total', 'codex_5h'])
+const VALID_LIMIT_MODES = new Set(['cost', 'percent'])
+const CODEX_WEEKLY_MINUTES = 7 * 24 * 60
+const CODEX_FIVE_HOUR_MINUTES = 5 * 60
+const CODEX_WINDOW_PERIODS = new Set(['weekly', 'codex_5h'])
 
 const ACCOUNT_STORES = [
   {
@@ -91,6 +95,17 @@ class AccountQuotaService {
       .trim()
       .toLowerCase()
     return VALID_PERIODS.has(normalized) ? normalized : 'daily'
+  }
+
+  _normalizeLimitMode(mode) {
+    const normalized = String(mode || 'cost')
+      .trim()
+      .toLowerCase()
+    return VALID_LIMIT_MODES.has(normalized) ? normalized : 'cost'
+  }
+
+  _isOpenAICodexWindow(platform, period) {
+    return this.normalizePlatform(platform) === 'openai' && CODEX_WINDOW_PERIODS.has(period)
   }
 
   _getStore(platform) {
@@ -187,16 +202,63 @@ class AccountQuotaService {
         ? account.dailyQuota
         : account.quotaLimit
     const quotaLimit = Number(rawLimit || 0)
+    const codexFiveHourQuotaLimit = Number(account.codexFiveHourQuotaLimit || 0)
 
     return {
+      id: 'primary',
+      label: '账号额度',
       enabled: Number.isFinite(quotaLimit) && quotaLimit > 0,
       quotaLimit: Number.isFinite(quotaLimit) && quotaLimit > 0 ? quotaLimit : 0,
       quotaPeriod: this._normalizePeriod(account.quotaPeriod || 'daily'),
+      quotaLimitMode: this._normalizeLimitMode(account.quotaLimitMode || 'cost'),
       quotaResetTime: account.quotaResetTime || '00:00',
       quotaStoppedAt: account.quotaStoppedAt || null,
       quotaAutoStopped: account.quotaAutoStopped === true || account.quotaAutoStopped === 'true',
-      quotaLastPeriodKey: account.quotaLastPeriodKey || ''
+      quotaLastPeriodKey: account.quotaLastPeriodKey || '',
+      quotaStoppedPeriod: account.quotaStoppedPeriod || '',
+      codexFiveHourQuotaLimit:
+        Number.isFinite(codexFiveHourQuotaLimit) && codexFiveHourQuotaLimit > 0
+          ? codexFiveHourQuotaLimit
+          : 0,
+      codexFiveHourQuotaMode: this._normalizeLimitMode(
+        account.codexFiveHourQuotaMode || account.codexFiveHourQuotaLimitMode || 'cost'
+      )
     }
+  }
+
+  _getCodexFiveHourQuotaConfig(account = {}, platform = null) {
+    if (this.normalizePlatform(platform) !== 'openai') {
+      return null
+    }
+
+    const quotaLimit = Number(account.codexFiveHourQuotaLimit || 0)
+    return {
+      id: 'codex_5h',
+      label: 'Codex 5h 限制',
+      enabled: Number.isFinite(quotaLimit) && quotaLimit > 0,
+      quotaLimit: Number.isFinite(quotaLimit) && quotaLimit > 0 ? quotaLimit : 0,
+      quotaPeriod: 'codex_5h',
+      quotaLimitMode: this._normalizeLimitMode(
+        account.codexFiveHourQuotaMode || account.codexFiveHourQuotaLimitMode || 'cost'
+      ),
+      quotaResetTime: account.quotaResetTime || '00:00',
+      quotaStoppedAt: account.quotaStoppedAt || null,
+      quotaAutoStopped: account.quotaAutoStopped === true || account.quotaAutoStopped === 'true',
+      quotaLastPeriodKey: account.quotaLastPeriodKey || '',
+      quotaStoppedPeriod: account.quotaStoppedPeriod || ''
+    }
+  }
+
+  _getEnabledQuotaConfigs(account = {}, platform = null) {
+    const mainConfig = this._getQuotaConfig(account)
+    const configs = mainConfig.enabled ? [mainConfig] : []
+    const codexFiveHourConfig = this._getCodexFiveHourQuotaConfig(account, platform)
+
+    if (codexFiveHourConfig?.enabled) {
+      configs.push(codexFiveHourConfig)
+    }
+
+    return { mainConfig, configs }
   }
 
   _formatDate(date) {
@@ -238,6 +300,66 @@ class AccountQuotaService {
     return dates
   }
 
+  _getHourKeyInTimezone(date) {
+    const dateKey = redis.getDateStringInTimezone(date)
+    const tzDate = redis.getDateInTimezone(date)
+    return `${dateKey}:${String(tzDate.getUTCHours()).padStart(2, '0')}`
+  }
+
+  _getCodexWindowSnapshot(account = {}, period = 'weekly') {
+    const isFiveHour = period === 'codex_5h'
+    const prefix = isFiveHour ? 'Primary' : 'Secondary'
+    const defaultWindowMinutes = isFiveHour ? CODEX_FIVE_HOUR_MINUTES : CODEX_WEEKLY_MINUTES
+
+    const updatedAt = account.codexUsageUpdatedAt
+    const usedPercent = Number(account[`codex${prefix}UsedPercent`])
+    const resetAfterSeconds = Number(account[`codex${prefix}ResetAfterSeconds`])
+    const windowMinutes = Number(account[`codex${prefix}WindowMinutes`] || defaultWindowMinutes)
+
+    const updatedMs = Date.parse(updatedAt)
+    if (
+      !updatedAt ||
+      Number.isNaN(updatedMs) ||
+      !Number.isFinite(resetAfterSeconds) ||
+      resetAfterSeconds < 0
+    ) {
+      return {
+        available: false,
+        periodKey: `${period}:pending`,
+        resetAt: null,
+        remainingSeconds: null,
+        usedPercent: null,
+        windowMinutes: Number.isFinite(windowMinutes) ? windowMinutes : defaultWindowMinutes
+      }
+    }
+
+    const safeWindowMinutes =
+      Number.isFinite(windowMinutes) && windowMinutes > 0 ? windowMinutes : defaultWindowMinutes
+    const resetAtMs = updatedMs + resetAfterSeconds * 1000
+    const nowMs = Date.now()
+    const expired = resetAtMs <= nowMs
+    const resetAt = new Date(resetAtMs).toISOString()
+    const startAtMs = resetAtMs - safeWindowMinutes * 60 * 1000
+
+    return {
+      available: true,
+      expired,
+      periodKey: `${period}:${expired ? 'expired:' : ''}${resetAt}`,
+      startAt: new Date(startAtMs),
+      resetAt,
+      remainingSeconds: Math.max(0, Math.round((resetAtMs - nowMs) / 1000)),
+      usedPercent: expired || !Number.isFinite(usedPercent) ? 0 : Math.max(0, usedPercent),
+      windowMinutes: safeWindowMinutes
+    }
+  }
+
+  _roundCost(value) {
+    if (value === null || value === undefined || value === '') {
+      return null
+    }
+    return Math.round(Number(value || 0) * 1_000_000) / 1_000_000
+  }
+
   _buildUsageFromHash(data = {}) {
     return {
       input_tokens: parseInt(data.inputTokens || data.totalInputTokens || 0, 10) || 0,
@@ -277,6 +399,47 @@ class AccountQuotaService {
     }
 
     return { totalCost, requests, allTokens, usedModelBreakdown: filteredKeys.length > 0 }
+  }
+
+  async _sumCodexWindowUsage(accountId, snapshot) {
+    if (!snapshot?.available || snapshot.expired || !snapshot.startAt) {
+      return {
+        totalCost: 0,
+        requests: 0,
+        allTokens: 0,
+        usedModelBreakdown: false
+      }
+    }
+
+    const client = redis.getClientSafe()
+    const endMs = Math.min(Date.now(), Date.parse(snapshot.resetAt))
+    const cursorHour = new Date(snapshot.startAt)
+    cursorHour.setMinutes(0, 0, 0)
+
+    let modelKeys = []
+    while (cursorHour.getTime() <= endMs) {
+      const hourKey = this._getHourKeyInTimezone(cursorHour)
+      const keys = await client.keys(`account_usage:model:hourly:${accountId}:*:${hourKey}`)
+      modelKeys = modelKeys.concat(keys)
+      cursorHour.setHours(cursorHour.getHours() + 1)
+    }
+
+    const result = await this._sumModelKeys(modelKeys, 'hourly')
+    if (result.usedModelBreakdown) {
+      return result
+    }
+
+    const aggregateKeys = []
+    const aggregateCursor = new Date(snapshot.startAt)
+    aggregateCursor.setMinutes(0, 0, 0)
+    while (aggregateCursor.getTime() <= endMs) {
+      aggregateKeys.push(
+        `account_usage:hourly:${accountId}:${this._getHourKeyInTimezone(aggregateCursor)}`
+      )
+      aggregateCursor.setHours(aggregateCursor.getHours() + 1)
+    }
+
+    return await this._fallbackAggregateCost(accountId, aggregateKeys)
   }
 
   async _fallbackAggregateCost(accountId, aggregateKeys) {
@@ -374,39 +537,156 @@ class AccountQuotaService {
     return { ...result, period, periodKey: 'total' }
   }
 
-  _buildStatus(record, config, usage, state = 'active') {
-    const used = Number(usage?.totalCost || 0)
-    const limit = Number(config.quotaLimit || 0)
-    const remaining = limit > 0 ? Math.max(0, limit - used) : null
+  async _getUsageForConfig(record, config) {
+    const period = this._normalizePeriod(config.quotaPeriod)
 
+    if (this._isOpenAICodexWindow(record.store.platform, period)) {
+      const snapshot = this._getCodexWindowSnapshot(record.account, period)
+      const baseUsage = {
+        period,
+        periodKey: snapshot.periodKey,
+        totalCost: 0,
+        requests: 0,
+        allTokens: 0,
+        usedPercent: snapshot.usedPercent,
+        resetAt: snapshot.resetAt,
+        remainingSeconds: snapshot.remainingSeconds,
+        windowMinutes: snapshot.windowMinutes,
+        windowAvailable: snapshot.available,
+        windowExpired: snapshot.expired === true
+      }
+
+      if (config.quotaLimitMode === 'percent') {
+        return {
+          ...baseUsage,
+          value:
+            snapshot.usedPercent === null || snapshot.usedPercent === undefined
+              ? null
+              : Number(snapshot.usedPercent),
+          unit: 'percent'
+        }
+      }
+
+      const windowUsage = await this._sumCodexWindowUsage(record.account.id, snapshot)
+      return {
+        ...baseUsage,
+        ...windowUsage,
+        period,
+        periodKey: snapshot.periodKey,
+        value: this._roundCost(windowUsage.totalCost),
+        unit: 'cost'
+      }
+    }
+
+    const usage = await this.getPeriodUsage(record.account.id, period)
+    return {
+      ...usage,
+      value: this._roundCost(usage.totalCost),
+      unit: 'cost'
+    }
+  }
+
+  _getUsageValue(config, usage) {
+    if (config.quotaLimitMode === 'percent') {
+      const rawPercent =
+        usage?.value !== null && usage?.value !== undefined ? usage.value : usage?.usedPercent
+      if (rawPercent === null || rawPercent === undefined || rawPercent === '') {
+        return null
+      }
+      const percent = Number(rawPercent)
+      return Number.isFinite(percent) ? percent : null
+    }
+
+    const rawCost =
+      usage?.value !== null && usage?.value !== undefined ? usage.value : usage?.totalCost
+    if (rawCost === null || rawCost === undefined || rawCost === '') {
+      return null
+    }
+    const cost = Number(rawCost)
+    return Number.isFinite(cost) ? cost : null
+  }
+
+  _isConfigExceeded(config, usage) {
+    if (!config.enabled) {
+      return false
+    }
+
+    const limit = Number(config.quotaLimit || 0)
+    const used = this._getUsageValue(config, usage)
+    return Number.isFinite(limit) && limit > 0 && Number.isFinite(used) && used >= limit
+  }
+
+  _formatQuotaValue(config, value) {
+    const safeValue = Number(value || 0)
+    if (config.quotaLimitMode === 'percent') {
+      return `${safeValue.toFixed(2)}%`
+    }
+    return `$${safeValue.toFixed(2)}`
+  }
+
+  _buildUsageStatus(config, usage = {}) {
+    const used = this._getUsageValue(config, usage)
+    const limit = Number(config.quotaLimit || 0)
+    const safeUsed = Number.isFinite(used) ? used : 0
+    const remaining = limit > 0 && Number.isFinite(used) ? Math.max(0, limit - used) : null
+
+    return {
+      period: usage.period || config.quotaPeriod,
+      periodKey: usage.periodKey || '',
+      cost: this._roundCost(usage.totalCost) || 0,
+      requests: usage.requests || 0,
+      allTokens: usage.allTokens || 0,
+      used: Number.isFinite(used) ? this._roundCost(used) : null,
+      value: Number.isFinite(used) ? this._roundCost(used) : null,
+      unit: config.quotaLimitMode === 'percent' ? 'percent' : 'cost',
+      limitMode: config.quotaLimitMode,
+      remaining,
+      percentage:
+        limit > 0 && Number.isFinite(used) ? Math.round((safeUsed / limit) * 10000) / 100 : 0,
+      usedPercent:
+        usage.usedPercent === null || usage.usedPercent === undefined
+          ? null
+          : Math.round(Number(usage.usedPercent) * 100) / 100,
+      resetAt: usage.resetAt || null,
+      remainingSeconds: usage.remainingSeconds ?? null,
+      windowMinutes: usage.windowMinutes ?? null,
+      windowAvailable: usage.windowAvailable,
+      windowExpired: usage.windowExpired
+    }
+  }
+
+  _buildStatus(record, config, usage, state = 'active', evaluations = []) {
     return {
       success: true,
       accountId: record.account.id,
       platform: record.store.platform,
       state,
       config,
-      usage: {
-        period: usage.period,
-        periodKey: usage.periodKey,
-        cost: Math.round(used * 1_000_000) / 1_000_000,
-        requests: usage.requests || 0,
-        allTokens: usage.allTokens || 0,
-        remaining,
-        percentage: limit > 0 ? Math.round((used / limit) * 10000) / 100 : 0
-      },
+      usage: this._buildUsageStatus(config, usage),
+      rules: evaluations.map((evaluation) => ({
+        id: evaluation.config.id,
+        label: evaluation.config.label,
+        config: evaluation.config,
+        usage: this._buildUsageStatus(evaluation.config, evaluation.usage),
+        exceeded: evaluation.exceeded
+      })),
       stopped: {
         quotaStoppedAt: record.account.quotaStoppedAt || null,
-        quotaAutoStopped: config.quotaAutoStopped
+        quotaAutoStopped: config.quotaAutoStopped,
+        quotaStoppedPeriod: record.account.quotaStoppedPeriod || '',
+        quotaStoppedRule: record.account.quotaStoppedRule || '',
+        quotaLastPeriodKey: record.account.quotaLastPeriodKey || ''
       }
     }
   }
 
   async _stopAccount(record, config, usage) {
-    const used = Number(usage.totalCost || 0)
+    const used = this._getUsageValue(config, usage)
     const limit = Number(config.quotaLimit || 0)
-    const message = `Quota exceeded (${config.quotaPeriod}): $${used.toFixed(2)} / $${limit.toFixed(
-      2
-    )}`
+    const message = `Quota exceeded (${config.label || config.quotaPeriod}): ${this._formatQuotaValue(
+      config,
+      used
+    )} / ${this._formatQuotaValue(config, limit)}`
 
     await this._writeFields(record, {
       isActive: false,
@@ -416,7 +696,10 @@ class AccountQuotaService {
       quotaStoppedAt: new Date().toISOString(),
       quotaAutoStopped: true,
       quotaLastPeriodKey: usage.periodKey,
-      dailyUsage: used
+      quotaStoppedPeriod: usage.period || config.quotaPeriod,
+      quotaStoppedRule: config.id,
+      dailyUsage:
+        config.quotaLimitMode === 'cost' ? Number(used || 0) : record.account.dailyUsage || 0
     })
 
     logger.warn(
@@ -447,7 +730,9 @@ class AccountQuotaService {
       errorMessage: '',
       quotaStoppedAt: '',
       quotaAutoStopped: '',
-      quotaLastPeriodKey: usage.periodKey
+      quotaLastPeriodKey: usage?.periodKey || '',
+      quotaStoppedPeriod: '',
+      quotaStoppedRule: ''
     })
 
     logger.info(`✅ Account quota restored: ${record.store.platform}:${record.account.id}`)
@@ -460,8 +745,25 @@ class AccountQuotaService {
     }
 
     const config = this._getQuotaConfig(record.account)
-    const usage = await this.getPeriodUsage(record.account.id, config.quotaPeriod)
-    return this._buildStatus(record, config, usage, config.enabled ? 'active' : 'disabled')
+    const { configs } = this._getEnabledQuotaConfigs(record.account, record.store.platform)
+    const usage = await this._getUsageForConfig(record, config)
+    const evaluations = []
+    for (const quotaConfig of configs) {
+      const ruleUsage =
+        quotaConfig.id === config.id ? usage : await this._getUsageForConfig(record, quotaConfig)
+      evaluations.push({
+        config: quotaConfig,
+        usage: ruleUsage,
+        exceeded: this._isConfigExceeded(quotaConfig, ruleUsage)
+      })
+    }
+    return this._buildStatus(
+      record,
+      config,
+      usage,
+      configs.length > 0 ? 'active' : 'disabled',
+      evaluations
+    )
   }
 
   async updateQuotaConfig(accountId, platform, payload = {}) {
@@ -476,17 +778,35 @@ class AccountQuotaService {
     }
 
     const quotaPeriod = this._normalizePeriod(payload.quotaPeriod || 'daily')
+    const quotaLimitMode = this._normalizeLimitMode(payload.quotaLimitMode || 'cost')
+    if (quotaLimitMode === 'percent' && quotaLimit > 100) {
+      return { success: false, error: '百分比额度必须小于等于 100' }
+    }
+
+    const codexFiveHourQuotaLimit = Number(payload.codexFiveHourQuotaLimit || 0)
+    if (!Number.isFinite(codexFiveHourQuotaLimit) || codexFiveHourQuotaLimit < 0) {
+      return { success: false, error: '5h 额度必须是大于等于 0 的数字' }
+    }
+
+    const codexFiveHourQuotaMode = this._normalizeLimitMode(
+      payload.codexFiveHourQuotaMode || payload.codexFiveHourQuotaLimitMode || 'cost'
+    )
+    if (codexFiveHourQuotaMode === 'percent' && codexFiveHourQuotaLimit > 100) {
+      return { success: false, error: '5h 百分比额度必须小于等于 100' }
+    }
+
     const quotaResetTime = payload.quotaResetTime || '00:00'
-    const usage = await this.getPeriodUsage(record.account.id, quotaPeriod)
 
     await this._writeFields(record, {
       quotaLimit,
       quotaPeriod,
+      quotaLimitMode,
       quotaResetTime,
+      codexFiveHourQuotaLimit,
+      codexFiveHourQuotaMode,
       // 兼容旧字段和已有余额展示逻辑。
       dailyQuota: quotaLimit,
-      lastResetDate: redis.getDateStringInTimezone(),
-      quotaLastPeriodKey: usage.periodKey
+      lastResetDate: redis.getDateStringInTimezone()
     })
 
     return this.checkAndEnforceQuota(accountId, record.store.platform)
@@ -498,8 +818,12 @@ class AccountQuotaService {
       return { success: false, error: 'Account not found' }
     }
 
-    const config = this._getQuotaConfig(record.account)
-    if (!config.enabled && !config.quotaAutoStopped) {
+    const { mainConfig: config, configs } = this._getEnabledQuotaConfigs(
+      record.account,
+      record.store.platform
+    )
+
+    if (configs.length === 0 && !config.quotaAutoStopped) {
       return this._buildStatus(
         record,
         config,
@@ -514,36 +838,50 @@ class AccountQuotaService {
       )
     }
 
-    const usage = await this.getPeriodUsage(record.account.id, config.quotaPeriod)
-    const used = Number(usage.totalCost || 0)
-    const limit = Number(config.quotaLimit || 0)
+    const evaluations = []
+    for (const quotaConfig of configs) {
+      const usage = await this._getUsageForConfig(record, quotaConfig)
+      evaluations.push({
+        config: quotaConfig,
+        usage,
+        exceeded: this._isConfigExceeded(quotaConfig, usage)
+      })
+    }
 
-    if (!config.enabled) {
+    const mainEvaluation = evaluations.find((evaluation) => evaluation.config.id === config.id) || {
+      config,
+      usage: await this._getUsageForConfig(record, config),
+      exceeded: false
+    }
+    const exceededEvaluation = evaluations.find((evaluation) => evaluation.exceeded)
+
+    if (configs.length === 0) {
       if (config.quotaAutoStopped) {
-        await this._recoverAccount(record, usage)
-        return this._buildStatus(record, config, usage, 'recovered')
+        await this._recoverAccount(record, mainEvaluation.usage)
+        return this._buildStatus(record, config, mainEvaluation.usage, 'recovered', evaluations)
       }
-      return this._buildStatus(record, config, usage, 'disabled')
+      return this._buildStatus(record, config, mainEvaluation.usage, 'disabled', evaluations)
     }
 
-    if (config.quotaAutoStopped && config.quotaLastPeriodKey !== usage.periodKey && used < limit) {
-      await this._recoverAccount(record, usage)
-      return this._buildStatus(record, config, usage, 'recovered')
-    }
-
-    if (used >= limit) {
-      if (!config.quotaAutoStopped || config.quotaLastPeriodKey !== usage.periodKey) {
-        await this._stopAccount(record, config, usage)
+    if (exceededEvaluation) {
+      const stoppedRule = record.account.quotaStoppedRule || ''
+      const stoppedPeriodKey = record.account.quotaLastPeriodKey || ''
+      if (
+        !config.quotaAutoStopped ||
+        stoppedRule !== exceededEvaluation.config.id ||
+        stoppedPeriodKey !== exceededEvaluation.usage.periodKey
+      ) {
+        await this._stopAccount(record, exceededEvaluation.config, exceededEvaluation.usage)
       }
-      return this._buildStatus(record, config, usage, 'exceeded')
+      return this._buildStatus(record, config, mainEvaluation.usage, 'exceeded', evaluations)
     }
 
     if (config.quotaAutoStopped) {
-      await this._recoverAccount(record, usage)
-      return this._buildStatus(record, config, usage, 'recovered')
+      await this._recoverAccount(record, mainEvaluation.usage)
+      return this._buildStatus(record, config, mainEvaluation.usage, 'recovered', evaluations)
     }
 
-    return this._buildStatus(record, config, usage, 'active')
+    return this._buildStatus(record, config, mainEvaluation.usage, 'active', evaluations)
   }
 
   async refreshQuotaStates() {
@@ -560,7 +898,9 @@ class AccountQuotaService {
 
         try {
           const result = await this.checkAndEnforceQuota(accountId, store.platform)
-          if (!result.success || (!result.config.enabled && !result.stopped.quotaAutoStopped)) {
+          const hasEnabledRule =
+            result.config.enabled || result.rules?.some((rule) => rule.config?.enabled)
+          if (!result.success || (!hasEnabledRule && !result.stopped.quotaAutoStopped)) {
             continue
           }
 
