@@ -1,4 +1,5 @@
 const { v4: uuidv4 } = require('uuid')
+const v8 = require('v8')
 const config = require('../../config/config')
 const apiKeyService = require('../services/apiKeyService')
 const userService = require('../services/userService')
@@ -10,9 +11,42 @@ const ClaudeCodeValidator = require('../validators/clients/claudeCodeValidator')
 const claudeRelayConfigService = require('../services/claudeRelayConfigService')
 const { calculateWaitTimeStats } = require('../utils/statsHelper')
 
+const BYTES_PER_MB = 1024 * 1024
+const DEFAULT_REQUEST_MAX_SIZE_MB = 30
+const DEFAULT_LARGE_REQUEST_SIZE_MB = 8
+const DEFAULT_MEMORY_SOFT_RATIO = 0.7
+const DEFAULT_MEMORY_HARD_RATIO = 0.85
+
 // 工具函数
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function parsePositiveNumber(value, fallback) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+}
+
+function getRequestMaxSizeMB() {
+  return parsePositiveNumber(process.env.REQUEST_MAX_SIZE_MB, DEFAULT_REQUEST_MAX_SIZE_MB)
+}
+
+function getRequestBodyLimit() {
+  return `${getRequestMaxSizeMB()}mb`
+}
+
+function buildMemorySnapshot() {
+  const memoryUsage = process.memoryUsage()
+  const heapLimit = v8.getHeapStatistics().heap_size_limit
+  return {
+    heapUsed: memoryUsage.heapUsed,
+    heapTotal: memoryUsage.heapTotal,
+    rss: memoryUsage.rss,
+    heapLimit,
+    heapUsedMB: Math.round(memoryUsage.heapUsed / BYTES_PER_MB),
+    rssMB: Math.round(memoryUsage.rss / BYTES_PER_MB),
+    heapLimitMB: Math.round(heapLimit / BYTES_PER_MB)
+  }
 }
 
 /**
@@ -1792,6 +1826,7 @@ const requestLogger = (req, res, next) => {
       status: res.statusCode,
       duration,
       contentLength,
+      requestContentLength: req.get('Content-Length') || '0',
       ip: clientIP,
       userAgent,
       referer
@@ -2058,7 +2093,7 @@ const globalRateLimit = async (req, res, next) =>
 
 // 📊 请求大小限制中间件
 const requestSizeLimit = (req, res, next) => {
-  const MAX_SIZE_MB = parseInt(process.env.REQUEST_MAX_SIZE_MB || '100', 10)
+  const MAX_SIZE_MB = getRequestMaxSizeMB()
   const maxSize = MAX_SIZE_MB * 1024 * 1024
   const contentLength = parseInt(req.headers['content-length'] || '0')
 
@@ -2069,6 +2104,45 @@ const requestSizeLimit = (req, res, next) => {
       message: 'Request body size exceeds limit',
       limit: `${MAX_SIZE_MB}MB`
     })
+  }
+
+  if (process.env.REQUEST_MEMORY_GUARD_ENABLED !== 'false') {
+    const largeRequestSizeMB = parsePositiveNumber(
+      process.env.REQUEST_MEMORY_GUARD_LARGE_REQUEST_MB,
+      DEFAULT_LARGE_REQUEST_SIZE_MB
+    )
+    const softRatio = parsePositiveNumber(
+      process.env.REQUEST_MEMORY_GUARD_SOFT_RATIO,
+      DEFAULT_MEMORY_SOFT_RATIO
+    )
+    const hardRatio = parsePositiveNumber(
+      process.env.REQUEST_MEMORY_GUARD_HARD_RATIO,
+      DEFAULT_MEMORY_HARD_RATIO
+    )
+    const memory = buildMemorySnapshot()
+    const isLargeRequest = contentLength >= largeRequestSizeMB * BYTES_PER_MB
+    const hardLimit = memory.heapLimit * Math.min(hardRatio, 0.95)
+    const softLimit = memory.heapLimit * Math.min(softRatio, 0.9)
+    const shouldReject =
+      memory.heapUsed >= hardLimit || (isLargeRequest && memory.heapUsed >= softLimit)
+
+    if (shouldReject) {
+      logger.warn('🚦 Rejecting request due to CRS memory pressure', {
+        contentLength,
+        maxSizeMB: MAX_SIZE_MB,
+        largeRequestSizeMB,
+        heapUsedMB: memory.heapUsedMB,
+        rssMB: memory.rssMB,
+        heapLimitMB: memory.heapLimitMB,
+        url: req.originalUrl || req.url,
+        method: req.method
+      })
+      return res.status(503).json({
+        error: 'Service Unavailable',
+        message: 'CRS is under memory pressure, please retry later',
+        retryAfter: 5
+      })
+    }
   }
 
   return next()
@@ -2086,5 +2160,6 @@ module.exports = {
   securityMiddleware,
   errorHandler,
   globalRateLimit,
-  requestSizeLimit
+  requestSizeLimit,
+  getRequestBodyLimit
 }
