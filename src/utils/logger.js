@@ -6,32 +6,166 @@ const path = require('path')
 const fs = require('fs')
 const os = require('os')
 
-// 安全的 JSON 序列化函数，处理循环引用和特殊字符
+const SENSITIVE_KEY_PATTERN =
+  /authorization|cookie|set-cookie|access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|secret|password|passwd|session[_-]?id|jwt|bearer/i
+const MAX_LOG_STRING_LENGTH = 1000
+
+function isSensitiveKey(key) {
+  return typeof key === 'string' && SENSITIVE_KEY_PATTERN.test(key)
+}
+
+function describeBinaryValue(value) {
+  if (Buffer.isBuffer(value)) {
+    return `[Buffer ${value.length} bytes]`
+  }
+  if (value instanceof ArrayBuffer) {
+    return `[ArrayBuffer ${value.byteLength} bytes]`
+  }
+  if (ArrayBuffer.isView(value)) {
+    return `[${value.constructor?.name || 'TypedArray'} ${value.byteLength} bytes]`
+  }
+  return null
+}
+
+function getPayloadLength(value) {
+  if (value === null || value === undefined) {
+    return undefined
+  }
+  if (typeof value === 'string') {
+    return Buffer.byteLength(value)
+  }
+  const binaryDescription = describeBinaryValue(value)
+  if (binaryDescription) {
+    return value.byteLength ?? value.length
+  }
+  if (Array.isArray(value)) {
+    let total = 0
+    let hasLength = false
+    for (const item of value) {
+      const itemLength = getPayloadLength(item?.data ?? item)
+      if (typeof itemLength === 'number') {
+        total += itemLength
+        hasLength = true
+      }
+    }
+    return hasLength ? total : undefined
+  }
+  if (typeof value === 'object' && typeof value.length === 'number') {
+    return value.length
+  }
+  return undefined
+}
+
+function getRequestBodyLength(error) {
+  const configLength = getPayloadLength(error?.config?.data)
+  if (typeof configLength === 'number') {
+    return configLength
+  }
+  const requestLength = error?.request?._requestBodyLength
+  if (
+    requestLength !== null &&
+    requestLength !== undefined &&
+    !Number.isNaN(Number(requestLength))
+  ) {
+    return Number(requestLength)
+  }
+  const currentRequestLength = error?.request?._currentRequest?._requestBodyLength
+  if (
+    currentRequestLength !== null &&
+    currentRequestLength !== undefined &&
+    !Number.isNaN(Number(currentRequestLength))
+  ) {
+    return Number(currentRequestLength)
+  }
+  return undefined
+}
+
+function sanitizeAxiosError(error) {
+  if (!error || typeof error !== 'object') {
+    return error
+  }
+
+  const axiosConfig = error.config || {}
+  const request = error.request || {}
+  const response = error.response || {}
+  const responseHeaders = response.headers || {}
+
+  const summary = {
+    name: error.name,
+    message: error.message,
+    code: error.code || error.cause?.code,
+    status: response.status || error.status,
+    method: axiosConfig.method || request.method,
+    url: axiosConfig.url || request._currentUrl || request.path,
+    timeout: axiosConfig.timeout,
+    responseType: axiosConfig.responseType,
+    requestBodyLength: getRequestBodyLength(error),
+    responseContentLength: responseHeaders['content-length'],
+    responseContentType: responseHeaders['content-type']
+  }
+
+  return Object.fromEntries(Object.entries(summary).filter(([, value]) => value !== undefined))
+}
+
+function isAxiosLikeError(value) {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      (value.isAxiosError || (value.config && (value.request || value.response || value.code)))
+  )
+}
+
+function sanitizeErrorObject(error) {
+  if (isAxiosLikeError(error)) {
+    return sanitizeAxiosError(error)
+  }
+  return {
+    name: error.name,
+    message: error.message,
+    code: error.code,
+    stack:
+      typeof error.stack === 'string' ? error.stack.split('\n').slice(0, 8).join('\n') : undefined
+  }
+}
+
+// 安全的 JSON 序列化函数，处理循环引用、二进制大对象和敏感字段
 const safeStringify = (obj, maxDepth = 3, fullDepth = false) => {
   const seen = new WeakSet()
   // 如果是fullDepth模式，增加深度限制
   const actualMaxDepth = fullDepth ? 10 : maxDepth
 
   const replacer = (key, value, depth = 0) => {
+    if (isSensitiveKey(key)) {
+      return '[REDACTED]'
+    }
+
     if (depth > actualMaxDepth) {
       return '[Max Depth Reached]'
+    }
+
+    const binaryDescription = describeBinaryValue(value)
+    if (binaryDescription) {
+      return binaryDescription
+    }
+
+    if (value instanceof Error || isAxiosLikeError(value)) {
+      return sanitizeErrorObject(value)
     }
 
     // 处理字符串值，清理可能导致JSON解析错误的特殊字符
     if (typeof value === 'string') {
       try {
-        // 移除或转义可能导致JSON解析错误的字符
         let cleanValue = value
+        if (cleanValue.length > MAX_LOG_STRING_LENGTH) {
+          cleanValue = `${cleanValue.substring(0, MAX_LOG_STRING_LENGTH - 3)}...`
+        }
+        // 移除或转义可能导致JSON解析错误的字符
+        cleanValue = cleanValue
           // eslint-disable-next-line no-control-regex
           .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // 移除控制字符
           .replace(/[\uD800-\uDFFF]/g, '') // 移除孤立的代理对字符
           // eslint-disable-next-line no-control-regex
           .replace(/\u0000/g, '') // 移除NUL字节
-
-        // 如果字符串过长，截断并添加省略号
-        if (cleanValue.length > 1000) {
-          cleanValue = `${cleanValue.substring(0, 997)}...`
-        }
 
         return cleanValue
       } catch (error) {
@@ -49,9 +183,16 @@ const safeStringify = (obj, maxDepth = 3, fullDepth = false) => {
       if (value.constructor) {
         const constructorName = value.constructor.name
         if (
-          ['Socket', 'TLSSocket', 'HTTPParser', 'IncomingMessage', 'ServerResponse'].includes(
-            constructorName
-          )
+          [
+            'Socket',
+            'TLSSocket',
+            'HTTPParser',
+            'IncomingMessage',
+            'ServerResponse',
+            'ClientRequest',
+            'Agent',
+            'FormData'
+          ].includes(constructorName)
         ) {
           return `[${constructorName} Object]`
         }
@@ -195,8 +336,8 @@ const authDetailLogger = winston.createLogger({
   format: winston.format.combine(
     winston.format.timestamp({ format: () => formatDateWithTimezone(new Date(), false) }),
     winston.format.printf(({ level, message, timestamp, data }) => {
-      // 使用更深的深度和格式化的JSON输出
-      const jsonData = data ? JSON.stringify(data, null, 2) : '{}'
+      // 认证详情也必须走统一脱敏，避免 token 泄露到日志。
+      const jsonData = data ? safeStringify(data, 10, true) : '{}'
       return `[${timestamp}] ${level.toUpperCase()}: ${message}\n${jsonData}\n${'='.repeat(80)}`
     })
   ),
@@ -367,6 +508,9 @@ logger.resetStats = () => {
   logger.stats.errors = 0
   logger.stats.warnings = 0
 }
+
+logger.safeStringify = safeStringify
+logger.sanitizeAxiosError = sanitizeAxiosError
 
 // 📡 健康检查
 logger.healthCheck = () => {
