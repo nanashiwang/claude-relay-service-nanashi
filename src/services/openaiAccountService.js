@@ -767,9 +767,12 @@ async function updateAccount(accountId, updates) {
   }
 
   // 澶勭悊浠ｇ悊閰嶇疆
-  if (updates.proxy) {
-    updates.proxy =
-      typeof updates.proxy === 'string' ? updates.proxy : JSON.stringify(updates.proxy)
+  if (updates.proxy !== undefined) {
+    updates.proxy = updates.proxy
+      ? typeof updates.proxy === 'string'
+        ? updates.proxy
+        : JSON.stringify(updates.proxy)
+      : ''
   }
 
   // 鉁?濡傛灉閫氳繃璺敱鏄犲皠鏇存柊浜?subscriptionExpiresAt锛岀洿鎺ヤ繚瀛?
@@ -905,7 +908,7 @@ async function getAllAccounts(options = {}) {
     if (forScheduling) {
       let supportedModels = []
       if (Array.isArray(accountData.supportedModels)) {
-        supportedModels = accountData.supportedModels
+        ;({ supportedModels } = accountData)
       } else if (typeof accountData.supportedModels === 'string' && accountData.supportedModels) {
         try {
           supportedModels = JSON.parse(accountData.supportedModels)

@@ -201,6 +201,19 @@
               <span class="relative">删除选中 ({{ selectedAccounts.length }})</span>
             </button>
 
+            <!-- 批量代理按钮 -->
+            <button
+              v-if="selectedAccounts.length > 0"
+              class="group relative flex items-center justify-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm transition-all duration-200 hover:border-sky-300 hover:bg-sky-100 hover:shadow-md dark:border-sky-700 dark:bg-sky-900/30 dark:text-sky-300 dark:hover:bg-sky-900/50 sm:w-auto"
+              @click="openBatchProxyModal"
+            >
+              <div
+                class="absolute -inset-0.5 rounded-lg bg-gradient-to-r from-sky-500 to-cyan-500 opacity-0 blur transition duration-300 group-hover:opacity-20"
+              ></div>
+              <i class="fas fa-network-wired relative text-sky-600 dark:text-sky-400" />
+              <span class="relative">修改代理 ({{ selectedAccounts.length }})</span>
+            </button>
+
             <!-- 添加账户按钮 -->
             <button
               class="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-green-500 to-green-600 px-5 py-2.5 text-sm font-medium text-white shadow-md transition-all duration-200 hover:from-green-600 hover:to-green-700 hover:shadow-lg sm:w-auto"
@@ -1984,6 +1997,62 @@
       @success="handleEditSuccess"
     />
 
+    <!-- 批量修改代理弹窗 -->
+    <div
+      v-if="showBatchProxyModal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+    >
+      <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-xl dark:bg-gray-800">
+        <div class="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">批量修改代理</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              将统一更新 {{ batchProxyTargetAccounts.length }} 个选中账号的代理配置
+            </p>
+          </div>
+          <button
+            class="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-gray-700"
+            :disabled="batchProxySaving"
+            @click="closeBatchProxyModal"
+          >
+            <i class="fas fa-times" />
+          </button>
+        </div>
+
+        <div
+          v-if="batchProxyUnsupportedAccounts.length > 0"
+          class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+        >
+          已跳过 {{ batchProxyUnsupportedAccounts.length }} 个暂不支持代理配置的账号。
+        </div>
+
+        <div class="space-y-4">
+          <ProxyConfig v-model="batchProxyForm" />
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            关闭“启用代理”并保存，会清空这些账号当前的代理配置。
+          </p>
+
+          <div class="flex justify-end gap-3 pt-2">
+            <button
+              class="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700"
+              :disabled="batchProxySaving"
+              @click="closeBatchProxyModal"
+            >
+              取消
+            </button>
+            <button
+              class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="batchProxySaving"
+              @click="saveBatchProxy"
+            >
+              <i v-if="batchProxySaving" class="fas fa-spinner fa-spin mr-1" />
+              保存
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 确认弹窗 -->
     <ConfirmModal
       :cancel-text="confirmOptions.cancelText"
@@ -2465,6 +2534,7 @@ import ActionDropdown from '@/components/common/ActionDropdown.vue'
 import BalanceDisplay from '@/components/accounts/BalanceDisplay.vue'
 import AccountBalanceScriptModal from '@/components/accounts/AccountBalanceScriptModal.vue'
 import OpenAIJsonImportModal from '@/components/accounts/OpenAIJsonImportModal.vue'
+import ProxyConfig from '@/components/accounts/ProxyConfig.vue'
 
 // 使用确认弹窗
 const { showConfirmModal, confirmOptions, showConfirm, handleConfirm, handleCancel } = useConfirm()
@@ -2502,6 +2572,33 @@ const selectedAccounts = ref([])
 const selectAllChecked = ref(false)
 const isIndeterminate = ref(false)
 const showCheckboxes = ref(false)
+const showBatchProxyModal = ref(false)
+const batchProxySaving = ref(false)
+const batchProxyTargetAccounts = ref([])
+const batchProxyUnsupportedAccounts = ref([])
+
+const createDefaultProxyState = (enabled = true) => ({
+  enabled,
+  type: 'socks5',
+  host: '',
+  port: '',
+  username: '',
+  password: ''
+})
+
+const batchProxyForm = ref(createDefaultProxyState(true))
+
+const batchProxySupportedPlatforms = new Set([
+  'claude',
+  'claude-console',
+  'openai',
+  'azure_openai',
+  'openai-responses',
+  'ccr',
+  'gemini',
+  'droid',
+  'gemini-api'
+])
 
 // 账号使用详情弹窗状态
 const showAccountUsageModal = ref(false)
@@ -4211,6 +4308,96 @@ const editAccount = (account) => {
   showEditAccountModal.value = true
 }
 
+const proxyDataToFormState = (proxy) => {
+  const parsed = normalizeProxyData(proxy)
+  if (!parsed) {
+    return createDefaultProxyState(true)
+  }
+
+  return {
+    enabled: true,
+    type: parsed.type || 'socks5',
+    host: parsed.host || '',
+    port: parsed.port || '',
+    username: parsed.username || '',
+    password: parsed.password || ''
+  }
+}
+
+const buildProxyPayload = (proxyState) => {
+  if (!proxyState || !proxyState.enabled) {
+    return { valid: true, proxy: null }
+  }
+
+  const host = (proxyState.host || '').trim()
+  const portNumber = Number.parseInt(proxyState.port, 10)
+
+  if (!host) {
+    return { valid: false, message: '请填写代理主机地址' }
+  }
+
+  if (Number.isNaN(portNumber) || portNumber <= 0 || portNumber > 65535) {
+    return { valid: false, message: '请填写有效的代理端口' }
+  }
+
+  const username = proxyState.username ? proxyState.username.trim() : ''
+  const password = proxyState.password ? proxyState.password.trim() : ''
+
+  return {
+    valid: true,
+    proxy: {
+      type: proxyState.type || 'socks5',
+      host,
+      port: portNumber,
+      username: username || null,
+      password: password || null
+    }
+  }
+}
+
+const openBatchProxyModal = () => {
+  if (selectedAccounts.value.length === 0) {
+    showToast('请先选择要修改代理的账户', 'warning')
+    return
+  }
+
+  const accountsMap = new Map(accounts.value.map((item) => [item.id, item]))
+  const targets = selectedAccounts.value
+    .map((id) => accountsMap.get(id))
+    .filter((account) => !!account)
+
+  const supportedTargets = targets.filter((account) =>
+    batchProxySupportedPlatforms.has(account.platform)
+  )
+  const unsupportedTargets = targets.filter(
+    (account) => !batchProxySupportedPlatforms.has(account.platform)
+  )
+
+  if (supportedTargets.length === 0) {
+    showToast('选中的账户暂不支持代理配置', 'warning')
+    return
+  }
+
+  const firstProxyAccount = supportedTargets.find((account) =>
+    normalizeProxyData(account.proxyConfig || account.proxy)
+  )
+
+  batchProxyTargetAccounts.value = supportedTargets
+  batchProxyUnsupportedAccounts.value = unsupportedTargets
+  batchProxyForm.value = firstProxyAccount
+    ? proxyDataToFormState(firstProxyAccount.proxyConfig || firstProxyAccount.proxy)
+    : createDefaultProxyState(true)
+  showBatchProxyModal.value = true
+}
+
+const closeBatchProxyModal = () => {
+  if (batchProxySaving.value) return
+  showBatchProxyModal.value = false
+  batchProxyTargetAccounts.value = []
+  batchProxyUnsupportedAccounts.value = []
+  batchProxyForm.value = createDefaultProxyState(true)
+}
+
 const getBoundApiKeysForAccount = (account) => {
   if (!account || !account.id) return []
   return apiKeys.value.filter((key) => {
@@ -4252,6 +4439,97 @@ const resolveAccountDeleteEndpoint = (account) => {
     default:
       return null
   }
+}
+
+const performAccountProxyUpdate = async (account, proxy) => {
+  const endpoint = resolveAccountDeleteEndpoint(account)
+  if (!endpoint) {
+    return { success: false, message: '不支持的账户类型' }
+  }
+
+  try {
+    const data = await apiClient.put(endpoint, { proxy })
+    if (data.success) {
+      return { success: true, data }
+    }
+    return { success: false, message: data.message || data.error || '代理更新失败' }
+  } catch (error) {
+    const message = error.response?.data?.message || error.message || '代理更新失败'
+    return { success: false, message }
+  }
+}
+
+const saveBatchProxy = async () => {
+  if (batchProxySaving.value) return
+
+  await new Promise((resolve) => setTimeout(resolve, 150))
+
+  const payload = buildProxyPayload(batchProxyForm.value)
+  if (!payload.valid) {
+    showToast(payload.message, 'error')
+    return
+  }
+
+  const targets = batchProxyTargetAccounts.value
+  if (targets.length === 0) {
+    showToast('没有可更新的账户', 'warning')
+    return
+  }
+
+  const actionText = payload.proxy
+    ? `统一修改为 ${payload.proxy.type.toUpperCase()}://${payload.proxy.host}:${payload.proxy.port}`
+    : '清空代理配置'
+  const skippedText =
+    batchProxyUnsupportedAccounts.value.length > 0
+      ? `\n\n将跳过 ${batchProxyUnsupportedAccounts.value.length} 个暂不支持代理配置的账号。`
+      : ''
+  const confirmed = await showConfirm(
+    '批量修改代理',
+    `确定要将 ${targets.length} 个账号的代理${actionText} 吗？${skippedText}`,
+    '保存',
+    '取消'
+  )
+
+  if (!confirmed) return
+
+  batchProxySaving.value = true
+  let successCount = 0
+  let failedCount = 0
+  const failedDetails = []
+
+  for (const account of targets) {
+    const result = await performAccountProxyUpdate(account, payload.proxy)
+    if (result.success) {
+      successCount += 1
+    } else {
+      failedCount += 1
+      failedDetails.push({
+        name: account.name || account.email || account.accountName || account.id,
+        message: result.message || '代理更新失败'
+      })
+    }
+  }
+
+  batchProxySaving.value = false
+
+  if (successCount > 0) {
+    showToast(`成功更新 ${successCount} 个账号代理`, failedCount > 0 ? 'warning' : 'success')
+    showBatchProxyModal.value = false
+    batchProxyTargetAccounts.value = []
+    batchProxyUnsupportedAccounts.value = []
+    batchProxyForm.value = createDefaultProxyState(true)
+    await loadAccounts(true)
+  }
+
+  if (failedCount > 0) {
+    const detailMessage = failedDetails.map((item) => `${item.name}: ${item.message}`).join('\n')
+    showToast(
+      `有 ${failedCount} 个账号代理更新失败:\n${detailMessage}`,
+      successCount > 0 ? 'warning' : 'error'
+    )
+  }
+
+  updateSelectAllState()
 }
 
 const performAccountDeletion = async (account) => {

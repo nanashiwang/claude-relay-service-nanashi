@@ -211,9 +211,12 @@ async function updateAccount(accountId, updates) {
   }
 
   // 处理代理配置
-  if (updates.proxy) {
-    updates.proxy =
-      typeof updates.proxy === 'string' ? updates.proxy : JSON.stringify(updates.proxy)
+  if (updates.proxy !== undefined) {
+    updates.proxy = updates.proxy
+      ? typeof updates.proxy === 'string'
+        ? updates.proxy
+        : JSON.stringify(updates.proxy)
+      : ''
   }
 
   // 处理支持的模型
