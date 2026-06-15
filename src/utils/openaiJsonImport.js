@@ -76,6 +76,33 @@ function readFirstBoolean(source, paths) {
   return undefined
 }
 
+function normalizeProxy(value) {
+  const parsed = safeJsonParse(value)
+  if (!isPlainObject(parsed)) {
+    return null
+  }
+
+  if (parsed.enabled === false) {
+    return null
+  }
+
+  const type = readFirstString(parsed, ['type', 'protocol', 'scheme']) || 'socks5'
+  const host = readFirstString(parsed, ['host', 'hostname'])
+  const port = Number(readFirstString(parsed, ['port']))
+
+  if (!host || !Number.isFinite(port) || port <= 0) {
+    return null
+  }
+
+  return {
+    type,
+    host,
+    port,
+    username: readFirstString(parsed, ['username', 'user']) || null,
+    password: readFirstString(parsed, ['password', 'pass']) || null
+  }
+}
+
 function normalizeIsoDate(value) {
   if (!value) {
     return ''
@@ -167,7 +194,7 @@ function normalizeImportedOpenAIJson(payload, options = {}) {
   const namePrefix = typeof options.namePrefix === 'string' ? options.namePrefix : ''
 
   const type = readFirstString(raw, ['type', 'provider', 'authType']).toLowerCase()
-  if (type && !['codex', 'openai', 'openai-oauth-account'].includes(type)) {
+  if (type && !['codex', 'openai', 'openai-oauth-account', 'oauth'].includes(type)) {
     throw new Error(`暂不支持导入 type=${type} 的 JSON`)
   }
 
@@ -273,6 +300,7 @@ function normalizeImportedOpenAIJson(payload, options = {}) {
       'token.last_refresh'
     ])
   )
+  const proxy = normalizeProxy(readFirst(raw, ['proxy', 'extra.crs_proxy', 'account.proxy']))
 
   return {
     name,
@@ -295,6 +323,7 @@ function normalizeImportedOpenAIJson(payload, options = {}) {
     },
     expiresAt,
     lastRefresh,
+    proxy,
     sourceType: type || 'codex',
     raw
   }

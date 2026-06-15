@@ -230,6 +230,15 @@
               <i class="fas fa-file-import"></i>
               <span>导入 JSON</span>
             </button>
+
+            <button
+              class="flex w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-5 py-2.5 text-sm font-medium text-blue-700 shadow-sm transition-all duration-200 hover:border-blue-300 hover:bg-blue-100 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300 dark:hover:bg-blue-900/50 sm:w-auto"
+              :disabled="exportingOpenAIJson"
+              @click.stop="exportOpenAIJson"
+            >
+              <i :class="exportingOpenAIJson ? 'fas fa-spinner fa-spin' : 'fas fa-file-export'"></i>
+              <span>{{ selectedAccounts.length > 0 ? '导出选中 JSON' : '导出 JSON' }}</span>
+            </button>
           </div>
         </div>
       </div>
@@ -2801,6 +2810,7 @@ const shouldShowCheckboxes = computed(() => showCheckboxes.value)
 
 // 模态框状态
 const showOpenAIJsonImportModal = ref(false)
+const exportingOpenAIJson = ref(false)
 const showCreateAccountModal = ref(false)
 const newAccountPlatform = ref(null) // 跟踪新建账户选择的平台
 const showEditAccountModal = ref(false)
@@ -4284,6 +4294,64 @@ const getRateLimitRemainingMinutes = (account) => {
 
 const openOpenAIJsonImportModal = () => {
   showOpenAIJsonImportModal.value = true
+}
+
+const downloadJsonFile = (payload, filename) => {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: 'application/json;charset=utf-8'
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+const exportOpenAIJson = async () => {
+  if (exportingOpenAIJson.value) return
+
+  const accountsMap = new Map(accounts.value.map((item) => [item.id, item]))
+  const selectedTargets = selectedAccounts.value
+    .map((id) => accountsMap.get(id))
+    .filter((account) => !!account)
+  const selectedOpenAIIds = selectedTargets
+    .filter((account) => account.platform === 'openai')
+    .map((account) => account.id)
+
+  if (selectedAccounts.value.length > 0 && selectedOpenAIIds.length === 0) {
+    showToast('选中的账户里没有 OpenAI 官方账号，暂不能导出为此 JSON 格式', 'warning')
+    return
+  }
+
+  exportingOpenAIJson.value = true
+  try {
+    const params = selectedOpenAIIds.length > 0 ? { ids: selectedOpenAIIds.join(',') } : {}
+    const response = await apiClient.get('/admin/openai-accounts/export-json', { params })
+    const exportData = response.data || {}
+    const exportedAccounts = exportData.accounts || []
+
+    if (exportedAccounts.length === 0) {
+      showToast('没有可导出的 OpenAI JSON 账号', 'warning')
+      return
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    downloadJsonFile(exportedAccounts, `openai-accounts-${timestamp}.json`)
+
+    const skippedText = exportData.skippedCount > 0 ? `，跳过 ${exportData.skippedCount}` : ''
+    const partialText =
+      selectedTargets.length > selectedOpenAIIds.length && selectedOpenAIIds.length > 0
+        ? `，非 OpenAI 账号 ${selectedTargets.length - selectedOpenAIIds.length} 个未导出`
+        : ''
+    showToast(`已导出 ${exportedAccounts.length} 个账号${skippedText}${partialText}`, 'success')
+  } catch (error) {
+    showToast(error.response?.data?.message || error.message || '批量导出失败', 'error')
+  } finally {
+    exportingOpenAIJson.value = false
+  }
 }
 
 const handleOpenAIJsonImportSuccess = async () => {

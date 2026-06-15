@@ -16,7 +16,7 @@
                 批量导入 OpenAI JSON
               </h3>
               <p class="text-sm text-gray-500 dark:text-gray-400">
-                兼容 CLIProxyAPI / CPA 导出的 Codex 认证 JSON
+                兼容本项目导出、CLIProxyAPI / CPA 导出的 Codex 认证 JSON
               </p>
             </div>
           </div>
@@ -33,20 +33,23 @@
         >
           <p class="font-semibold">支持字段</p>
           <p class="mt-1">
-            顶层包含 `access_token`、`refresh_token`、`id_token`、`email`、`account_id`、
-            `expired` 等字段的 JSON 文件都可以直接导入。
+            顶层包含 `access_token`、`refresh_token`、`id_token`、`email`、`account_id`、 `expired`
+            等字段的 JSON 文件都可以直接导入。
           </p>
         </div>
 
         <div class="space-y-6">
-          <div class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50">
-            <div
-              class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
-            >
+          <div
+            class="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-800/50"
+          >
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h4 class="text-sm font-semibold text-gray-800 dark:text-gray-100">选择 JSON 文件</h4>
+                <h4 class="text-sm font-semibold text-gray-800 dark:text-gray-100">
+                  选择 JSON 文件
+                </h4>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  可一次选择多个文件；如果单个文件内是 JSON 数组，也会自动拆分导入。
+                  可一次选择多个文件；JSON 数组或包含 accounts/openaiOAuthAccounts
+                  的迁移文件会自动拆分导入。
                 </p>
               </div>
               <div class="flex gap-2">
@@ -194,7 +197,8 @@
                   class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm dark:border-rose-800 dark:bg-rose-900/20"
                 >
                   <p class="font-medium text-rose-700 dark:text-rose-200">
-                    {{ item.fileName }}<span v-if="item.payloadIndex"> #{{ item.payloadIndex + 1 }}</span>
+                    {{ item.fileName
+                    }}<span v-if="item.payloadIndex"> #{{ item.payloadIndex + 1 }}</span>
                   </p>
                   <p class="mt-1 text-xs text-rose-600 dark:text-rose-300">{{ item.error }}</p>
                 </div>
@@ -210,10 +214,12 @@
                   class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm dark:border-amber-800 dark:bg-amber-900/20"
                 >
                   <p class="font-medium text-amber-700 dark:text-amber-200">
-                    {{ item.fileName }}<span v-if="item.payloadIndex"> #{{ item.payloadIndex + 1 }}</span>
+                    {{ item.fileName
+                    }}<span v-if="item.payloadIndex"> #{{ item.payloadIndex + 1 }}</span>
                   </p>
                   <p class="mt-1 text-xs text-amber-600 dark:text-amber-300">
-                    {{ item.reason }}<span v-if="item.existingAccountName">：{{ item.existingAccountName }}</span>
+                    {{ item.reason
+                    }}<span v-if="item.existingAccountName">：{{ item.existingAccountName }}</span>
                   </p>
                 </div>
               </div>

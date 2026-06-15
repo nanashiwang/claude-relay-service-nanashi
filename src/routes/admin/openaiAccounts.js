@@ -39,6 +39,176 @@ function parseBooleanQuery(value, defaultValue = true) {
   return defaultValue
 }
 
+function parseIdList(value) {
+  const rawValues = Array.isArray(value) ? value : [value]
+  return rawValues
+    .flatMap((item) => String(item || '').split(','))
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function collectImportPayloads(parsed) {
+  if (Array.isArray(parsed)) {
+    return parsed
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    return [parsed]
+  }
+
+  const candidates = [
+    parsed.accounts,
+    parsed.openaiAccounts,
+    parsed.openaiOAuthAccounts,
+    parsed.openai_oauth_accounts,
+    parsed.data,
+    parsed.data?.accounts,
+    parsed.data?.openaiAccounts,
+    parsed.data?.openaiOAuthAccounts,
+    parsed.data?.openai_oauth_accounts
+  ]
+
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) {
+      return candidate
+    }
+  }
+
+  return [parsed]
+}
+
+function normalizeProxyForExport(proxy) {
+  if (!proxy) {
+    return null
+  }
+
+  let parsed = proxy
+  if (typeof proxy === 'string') {
+    try {
+      parsed = JSON.parse(proxy)
+    } catch {
+      return null
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    return null
+  }
+
+  const type = parsed.type || parsed.protocol || parsed.scheme || 'socks5'
+  const host = parsed.host || parsed.hostname || ''
+  const port = Number(parsed.port || 0)
+
+  if (!host || !Number.isFinite(port) || port <= 0) {
+    return null
+  }
+
+  return {
+    type,
+    host,
+    port,
+    username: parsed.username || parsed.user || null,
+    password: parsed.password || parsed.pass || null
+  }
+}
+
+function getOpenAIOAuthValue(account, camelKey, snakeKey) {
+  if (!account?.openaiOauth || typeof account.openaiOauth !== 'object') {
+    return ''
+  }
+  return account.openaiOauth[camelKey] || account.openaiOauth[snakeKey] || ''
+}
+
+function getSecondsUntil(isoDate) {
+  if (!isoDate) {
+    return undefined
+  }
+
+  const expiresAt = Date.parse(isoDate)
+  if (Number.isNaN(expiresAt)) {
+    return undefined
+  }
+
+  const seconds = Math.floor((expiresAt - Date.now()) / 1000)
+  return seconds > 0 ? seconds : undefined
+}
+
+function buildOpenAIJsonExportPayload(account) {
+  const accessToken =
+    getOpenAIOAuthValue(account, 'accessToken', 'access_token') ||
+    (account.accessToken ? openaiAccountService.decrypt(account.accessToken) : '')
+  const refreshToken =
+    account.refreshToken || getOpenAIOAuthValue(account, 'refreshToken', 'refresh_token') || ''
+  const idToken = account.idToken || getOpenAIOAuthValue(account, 'idToken', 'id_token') || ''
+
+  if (!accessToken && !refreshToken) {
+    return null
+  }
+
+  const scopes =
+    account.scopes && typeof account.scopes === 'string' && account.scopes.trim()
+      ? account.scopes.trim()
+      : undefined
+  const expiresIn = getSecondsUntil(account.expiresAt)
+  const proxy = normalizeProxyForExport(account.proxy)
+
+  return {
+    type: 'openai',
+    name: account.name || account.email || `OpenAI Account ${account.id}`,
+    description: account.description || '',
+    email: account.email || '',
+    account_id: account.accountId || '',
+    chatgpt_account_id: account.accountId || '',
+    chatgpt_user_id: account.chatgptUserId || '',
+    organization_id: account.organizationId || '',
+    organization_role: account.organizationRole || '',
+    organization_title: account.organizationTitle || '',
+    plan_type: account.planType || '',
+    email_verified: account.emailVerified === true || account.emailVerified === 'true',
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    id_token: idToken,
+    expires_at: account.expiresAt || undefined,
+    expired: account.expiresAt || undefined,
+    last_refresh: account.lastRefresh || undefined,
+    proxy,
+    credentials: {
+      access_token: accessToken,
+      refresh_token: refreshToken || undefined,
+      id_token: idToken || undefined,
+      expires_at: account.expiresAt || undefined,
+      expires_in: expiresIn,
+      scope: scopes,
+      token_type: 'Bearer',
+      chatgpt_account_id: account.accountId || undefined,
+      chatgpt_user_id: account.chatgptUserId || undefined,
+      organization_id: account.organizationId || undefined
+    },
+    accountInfo: {
+      accountId: account.accountId || '',
+      chatgptUserId: account.chatgptUserId || '',
+      organizationId: account.organizationId || '',
+      organizationRole: account.organizationRole || '',
+      organizationTitle: account.organizationTitle || '',
+      planType: account.planType || '',
+      email: account.email || '',
+      emailVerified: account.emailVerified === true || account.emailVerified === 'true'
+    },
+    extra: {
+      crs_account_id: account.id,
+      crs_kind: 'openai-oauth-account',
+      crs_name: account.name || '',
+      crs_description: account.description || '',
+      crs_is_active: account.isActive === true || account.isActive === 'true',
+      crs_schedulable: account.schedulable !== false && account.schedulable !== 'false',
+      crs_priority: Number.parseInt(account.priority, 10) || 50,
+      crs_status: account.status || 'active',
+      crs_email: account.email || undefined,
+      crs_proxy: proxy || undefined
+    }
+  }
+}
+
 // OpenAI OAuth 配置
 const OPENAI_CONFIG = {
   BASE_URL: 'https://auth.openai.com',
@@ -63,23 +233,14 @@ function parseImportEntries(imports = []) {
       }
     }
 
-    if (Array.isArray(parsed)) {
-      parsed.forEach((payload, payloadIndex) => {
-        entries.push({
-          fileIndex,
-          payloadIndex,
-          fileName: fileName || `import-${fileIndex + 1}.json`,
-          payload
-        })
+    const payloads = collectImportPayloads(parsed)
+    payloads.forEach((payload, payloadIndex) => {
+      entries.push({
+        fileIndex,
+        payloadIndex,
+        fileName: fileName || `import-${fileIndex + 1}.json`,
+        payload
       })
-      return
-    }
-
-    entries.push({
-      fileIndex,
-      payloadIndex: 0,
-      fileName: fileName || `import-${fileIndex + 1}.json`,
-      payload: parsed
     })
   })
 
@@ -306,6 +467,59 @@ router.post('/exchange-code', authenticateAdmin, async (req, res) => {
   }
 })
 
+// 导出 OpenAI OAuth 账号为可再次导入的 JSON
+router.get('/export-json', authenticateAdmin, async (req, res) => {
+  try {
+    const requestedIds = parseIdList(req.query.ids)
+    const accountIds =
+      requestedIds.length > 0
+        ? requestedIds
+        : (await openaiAccountService.getAllAccounts()).map((account) => account.id)
+
+    const accounts = []
+    const skipped = []
+
+    for (const accountId of accountIds) {
+      const account = await openaiAccountService.getAccount(accountId)
+      if (!account) {
+        skipped.push({ id: accountId, reason: '账号不存在' })
+        continue
+      }
+
+      const payload = buildOpenAIJsonExportPayload(account)
+      if (!payload) {
+        skipped.push({ id: accountId, name: account.name || '', reason: '缺少可导出的 Token' })
+        continue
+      }
+
+      accounts.push(payload)
+    }
+
+    logger.info(
+      `Exported OpenAI JSON accounts: requested=${accountIds.length}, exported=${accounts.length}, skipped=${skipped.length}`
+    )
+
+    return res.json({
+      success: true,
+      data: {
+        exportedAt: new Date().toISOString(),
+        total: accountIds.length,
+        exportedCount: accounts.length,
+        skippedCount: skipped.length,
+        accounts,
+        skipped
+      }
+    })
+  } catch (error) {
+    logger.error('批量导出 OpenAI JSON 账号失败:', error)
+    return res.status(500).json({
+      success: false,
+      message: '批量导出 OpenAI JSON 账号失败',
+      error: error.message
+    })
+  }
+})
+
 // 获取所有 OpenAI 账户
 router.get('/', authenticateAdmin, async (req, res) => {
   try {
@@ -467,7 +681,7 @@ router.post('/import-json', authenticateAdmin, async (req, res) => {
           description: normalized.description,
           openaiOauth: normalized.openaiOauth,
           accountInfo: normalized.accountInfo,
-          proxy: defaults.proxy || null,
+          proxy: defaults.proxy || normalized.proxy || null,
           accountType: defaults.accountType || 'shared',
           priority: defaults.priority || 50,
           rateLimitDuration:
