@@ -732,9 +732,11 @@
                             ? 'bg-red-100 text-red-800'
                             : account.status === 'temp_error'
                               ? 'bg-orange-100 text-orange-800'
-                              : account.isActive
-                                ? 'bg-green-100 text-green-800'
-                                : 'bg-red-100 text-red-800'
+                              : account.status === 'quota_exceeded'
+                                ? 'bg-orange-100 text-orange-800'
+                                : account.isActive
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-red-100 text-red-800'
                       ]"
                     >
                       <div
@@ -746,9 +748,11 @@
                               ? 'bg-red-500'
                               : account.status === 'temp_error'
                                 ? 'bg-orange-500'
-                                : account.isActive
-                                  ? 'bg-green-500'
-                                  : 'bg-red-500'
+                                : account.status === 'quota_exceeded'
+                                  ? 'bg-orange-500'
+                                  : account.isActive
+                                    ? 'bg-green-500'
+                                    : 'bg-red-500'
                         ]"
                       />
                       {{
@@ -758,9 +762,11 @@
                             ? '异常'
                             : account.status === 'temp_error'
                               ? '临时异常'
-                              : account.isActive
-                                ? '正常'
-                                : '异常'
+                              : account.status === 'quota_exceeded'
+                                ? '额度超限'
+                                : account.isActive
+                                  ? '正常'
+                                  : '异常'
                       }}
                     </span>
                     <span
@@ -797,9 +803,9 @@
                       </el-tooltip>
                     </span>
                     <span
-                      v-if="account.status === 'blocked' && account.errorMessage"
+                      v-if="(account.status === 'blocked' || account.status === 'quota_exceeded') && account.errorMessage"
                       class="mt-1 max-w-xs truncate text-xs text-gray-500 dark:text-gray-400"
-                      :title="account.errorMessage"
+                      :title="account.status === 'quota_exceeded' ? account.errorMessage + '（额度窗口重置后自动恢复，无需重新鉴权）' : account.errorMessage"
                     >
                       {{ account.errorMessage }}
                     </span>
@@ -5140,6 +5146,7 @@ const getAccountStatusText = (account) => {
   )
     return '限流中'
   // 检查是否临时错误
+  if (account.status === 'quota_exceeded') return '额度超限'
   if (account.status === 'temp_error') return '临时异常'
   // 检查是否错误
   if (account.status === 'error' || !account.isActive) return '错误'
@@ -5163,6 +5170,9 @@ const getAccountStatusClass = (account) => {
     (account.rateLimitStatus && account.rateLimitStatus.isRateLimited) ||
     account.rateLimitStatus === 'limited'
   ) {
+    return 'bg-orange-100 text-orange-800'
+  }
+  if (account.status === 'quota_exceeded') {
     return 'bg-orange-100 text-orange-800'
   }
   if (account.status === 'temp_error') {
@@ -5191,6 +5201,9 @@ const getAccountStatusDotClass = (account) => {
     (account.rateLimitStatus && account.rateLimitStatus.isRateLimited) ||
     account.rateLimitStatus === 'limited'
   ) {
+    return 'bg-orange-500'
+  }
+  if (account.status === 'quota_exceeded') {
     return 'bg-orange-500'
   }
   if (account.status === 'temp_error') {
