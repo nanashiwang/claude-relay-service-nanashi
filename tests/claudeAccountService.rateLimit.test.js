@@ -56,14 +56,16 @@ describe('ClaudeAccountService transient 429 handling', () => {
     jest.doMock('../src/utils/modelHelper', () => ({
       isOpus45OrNewer: jest.fn(() => false)
     }))
-    jest.doMock('../src/utils/lruCache', () => {
-      return class MockLRUCache {
-        cleanup() {}
-        getStats() {
-          return {}
+    jest.doMock(
+      '../src/utils/lruCache',
+      () =>
+        class MockLRUCache {
+          cleanup() {}
+          getStats() {
+            return {}
+          }
         }
-      }
-    })
+    )
     jest.doMock('../src/utils/webhookNotifier', () => webhookNotifier)
     jest.doMock('axios', () => ({}), { virtual: true })
     jest.doMock('uuid', () => ({ v4: jest.fn(() => 'uuid-1') }), { virtual: true })
@@ -86,15 +88,18 @@ describe('ClaudeAccountService transient 429 handling', () => {
     jest.resetModules()
   })
 
-  it('keeps scheduling enabled for transient 429 without reset timestamp', async () => {
-    const { service, getAccount } = loadService()
+  it('skips rate-limit state for 429 without reset timestamp', async () => {
+    const { service, getAccount, redisMock, webhookNotifier } = loadService()
 
-    await service.markAccountRateLimited('acc-1', null, null)
+    const result = await service.markAccountRateLimited('acc-1', null, null)
 
+    expect(result).toEqual({ success: true, skipped: true })
     expect(getAccount().schedulable).toBe('true')
-    expect(getAccount().rateLimitStatus).toBe('limited')
-    expect(getAccount().rateLimitEndAt).toBeTruthy()
+    expect(getAccount().rateLimitStatus).toBeUndefined()
+    expect(getAccount().rateLimitEndAt).toBeUndefined()
     expect(getAccount().rateLimitAutoStopped).toBeUndefined()
+    expect(redisMock.setClaudeAccount).not.toHaveBeenCalled()
+    expect(webhookNotifier.sendAccountAnomalyNotification).not.toHaveBeenCalled()
   })
 
   it('skips rate-limit state entirely when 429 auto cooldown is disabled', async () => {

@@ -1430,40 +1430,37 @@ class ClaudeAccountService {
         return { success: true, skipped: true }
       }
 
+      // 无上游权威 reset 时间的 429 大概率不是真实窗口限流，避免误停账号。
+      if (!rateLimitResetTimestamp) {
+        logger.warn(
+          `⚠️ 429 without authoritative reset header for account ${accountData.name} (${accountId}), skipping rate limit marking`
+        )
+        return { success: true, skipped: true }
+      }
+
       // 设置限流状态和时间
       const updatedAccountData = { ...accountData }
       updatedAccountData.rateLimitedAt = new Date().toISOString()
       updatedAccountData.rateLimitStatus = 'limited'
 
-      // 如果提供了准确的限流重置时间戳（来自API响应头）
-      if (rateLimitResetTimestamp) {
-        // 只有明确给出 reset 时间的 429，才认为是窗口级强限流并暂停调度
-        updatedAccountData.schedulable = 'false'
-        updatedAccountData.rateLimitAutoStopped = 'true'
+      // 只有明确给出 reset 时间的 429，才认为是窗口级强限流并暂停调度
+      updatedAccountData.schedulable = 'false'
+      updatedAccountData.rateLimitAutoStopped = 'true'
 
-        // 将Unix时间戳（秒）转换为毫秒并创建Date对象
-        const resetTime = new Date(rateLimitResetTimestamp * 1000)
-        updatedAccountData.rateLimitEndAt = resetTime.toISOString()
+      // 将Unix时间戳（秒）转换为毫秒并创建Date对象
+      const resetTime = new Date(rateLimitResetTimestamp * 1000)
+      updatedAccountData.rateLimitEndAt = resetTime.toISOString()
 
-        // 计算当前会话窗口的开始时间（重置时间减去5小时）
-        const windowStartTime = new Date(resetTime.getTime() - 5 * 60 * 60 * 1000)
-        updatedAccountData.sessionWindowStart = windowStartTime.toISOString()
-        updatedAccountData.sessionWindowEnd = resetTime.toISOString()
+      // 计算当前会话窗口的开始时间（重置时间减去5小时）
+      const windowStartTime = new Date(resetTime.getTime() - 5 * 60 * 60 * 1000)
+      updatedAccountData.sessionWindowStart = windowStartTime.toISOString()
+      updatedAccountData.sessionWindowEnd = resetTime.toISOString()
 
-        const now = new Date()
-        const minutesUntilEnd = Math.ceil((resetTime - now) / (1000 * 60))
-        logger.warn(
-          `🚫 Account marked as rate limited with accurate reset time: ${accountData.name} (${accountId}) - ${minutesUntilEnd} minutes remaining until ${resetTime.toISOString()}`
-        )
-      } else {
-        // 没有准确的 reset timestamp —— 很可能是瞬时并发限流（per-minute rate limit），
-        // 而非 5h 窗口限流。仅短时冷却，不自动关闭调度开关，避免误伤。
-        const cooldownEnd = new Date(Date.now() + rateLimitDuration * 60 * 1000)
-        updatedAccountData.rateLimitEndAt = cooldownEnd.toISOString()
-        logger.warn(
-          `🚫 Account marked as rate limited (transient, ${rateLimitDuration}min cooldown): ${accountData.name} (${accountId})`
-        )
-      }
+      const now = new Date()
+      const minutesUntilEnd = Math.ceil((resetTime - now) / (1000 * 60))
+      logger.warn(
+        `🚫 Account marked as rate limited with accurate reset time: ${accountData.name} (${accountId}) - ${minutesUntilEnd} minutes remaining until ${resetTime.toISOString()}`
+      )
 
       await redis.setClaudeAccount(accountId, updatedAccountData)
 
@@ -1482,7 +1479,7 @@ class ClaudeAccountService {
           platform: 'claude-oauth',
           status: 'error',
           errorCode: 'CLAUDE_OAUTH_RATE_LIMITED',
-          reason: `Account rate limited (429 error). ${rateLimitResetTimestamp ? `Reset at: ${formatDateWithTimezone(rateLimitResetTimestamp)}` : 'Estimated reset in 1-5 hours'}`,
+          reason: `Account rate limited (429 error). Reset at: ${formatDateWithTimezone(rateLimitResetTimestamp)}`,
           timestamp: getISOStringWithTimezone(new Date())
         })
       } catch (webhookError) {

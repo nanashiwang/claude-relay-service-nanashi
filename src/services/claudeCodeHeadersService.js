@@ -38,8 +38,7 @@ class ClaudeCodeHeadersService {
       'x-app',
       'user-agent',
       'accept-language',
-      'sec-fetch-mode',
-      'accept-encoding'
+      'sec-fetch-mode'
     ]
   }
 

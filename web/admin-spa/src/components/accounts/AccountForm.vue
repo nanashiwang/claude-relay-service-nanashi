@@ -1543,6 +1543,25 @@
                 </p>
               </div>
 
+              <div>
+                <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  上游错误处理
+                </label>
+                <label class="inline-flex cursor-pointer items-center">
+                  <input
+                    v-model="form.disableAutoProtection"
+                    class="mr-2 rounded border-gray-300 text-blue-600 focus:border-blue-500 focus:ring focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-700"
+                    type="checkbox"
+                  />
+                  <span class="text-sm text-gray-700 dark:text-gray-300">
+                    上游错误不自动暂停调度
+                  </span>
+                </label>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  勾选后遇到 401/429 等上游错误仅记录日志并透传，不自动暂停调度
+                </p>
+              </div>
+
               <!-- 限流时长字段 - 隐藏不显示，使用默认值60 -->
               <input v-model.number="form.rateLimitDuration" type="hidden" value="60" />
             </div>
@@ -1674,7 +1693,8 @@
                     429错误自动进入限流冷却
                   </span>
                   <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    开启后遇到 429 会记录为“限流中”并短暂跳过调度；关闭后仅记录日志和透传，不写入限流状态。
+                    开启后遇到 429
+                    会记录为“限流中”并短暂跳过调度；关闭后仅记录日志和透传，不写入限流状态。
                   </p>
                 </div>
               </label>
@@ -2718,7 +2738,8 @@
                   429错误自动进入限流冷却
                 </span>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  开启后遇到 429 会记录为“限流中”并短暂跳过调度；关闭后仅记录日志和透传，不写入限流状态。
+                  开启后遇到 429
+                  会记录为“限流中”并短暂跳过调度；关闭后仅记录日志和透传，不写入限流状态。
                 </p>
               </div>
             </label>
@@ -3317,6 +3338,25 @@
               />
               <p class="mt-1 text-xs text-gray-500">
                 留空时将自动使用客户端的 User-Agent，仅在需要固定特定 UA 时填写
+              </p>
+            </div>
+
+            <div>
+              <label class="mb-3 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                上游错误处理
+              </label>
+              <label class="inline-flex cursor-pointer items-center">
+                <input
+                  v-model="form.disableAutoProtection"
+                  class="mr-2 rounded border-gray-300 text-blue-600 focus:border-blue-500 focus:ring focus:ring-blue-200 dark:border-gray-600 dark:bg-gray-700"
+                  type="checkbox"
+                />
+                <span class="text-sm text-gray-700 dark:text-gray-300">
+                  上游错误不自动暂停调度
+                </span>
+              </label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                勾选后遇到 401/429 等上游错误仅记录日志并透传，不自动暂停调度
               </p>
             </div>
 
@@ -4118,7 +4158,10 @@ const form = ref({
   // Gemini-API 特定字段
   baseUrl: props.account?.baseUrl || 'https://generativelanguage.googleapis.com',
   rateLimitDuration: (() => {
-    if (props.account?.rateLimitDuration !== undefined && props.account?.rateLimitDuration !== null) {
+    if (
+      props.account?.rateLimitDuration !== undefined &&
+      props.account?.rateLimitDuration !== null
+    ) {
       return Number(props.account.rateLimitDuration)
     }
     return props.account?.platform === 'claude' ? 5 : 60
@@ -4138,12 +4181,11 @@ const form = ref({
   })(),
   userAgent: props.account?.userAgent || '',
   enableRateLimit: props.account
-    ? Number(
-        props.account.rateLimitDuration ??
-          (props.account.platform === 'claude' ? 5 : 60)
-      ) > 0
+    ? Number(props.account.rateLimitDuration ?? (props.account.platform === 'claude' ? 5 : 60)) > 0
     : true,
-  disableAutoProtection: props.account?.disableAutoProtection === true,
+  disableAutoProtection:
+    props.account?.disableAutoProtection === true ||
+    props.account?.disableAutoProtection === 'true',
   // 额度管理字段
   dailyQuota: props.account?.dailyQuota || 0,
   dailyUsage: props.account?.dailyUsage || 0,
@@ -5282,6 +5324,7 @@ const createAccount = async () => {
       data.rateLimitDuration = 60 // 默认值60，不从用户输入获取
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
+      data.disableAutoProtection = !!form.value.disableAutoProtection
     } else if (form.value.platform === 'gemini-antigravity') {
       // Antigravity OAuth - set oauthProvider, submission happens below
       data.oauthProvider = 'antigravity'
@@ -5625,6 +5668,7 @@ const updateAccount = async () => {
       // 编辑时不上传 rateLimitDuration，保持原值
       data.dailyQuota = form.value.dailyQuota || 0
       data.quotaResetTime = form.value.quotaResetTime || '00:00'
+      data.disableAutoProtection = !!form.value.disableAutoProtection
     }
 
     // Bedrock 特定更新
@@ -6215,10 +6259,7 @@ watch(
         })(),
         userAgent: newAccount.userAgent || '',
         enableRateLimit:
-          Number(
-            newAccount.rateLimitDuration ??
-              (newAccount.platform === 'claude' ? 5 : 60)
-          ) > 0,
+          Number(newAccount.rateLimitDuration ?? (newAccount.platform === 'claude' ? 5 : 60)) > 0,
         // Bedrock 特定字段
         accessKeyId: '', // 编辑模式不显示现有的访问密钥
         secretAccessKey: '', // 编辑模式不显示现有的秘密密钥

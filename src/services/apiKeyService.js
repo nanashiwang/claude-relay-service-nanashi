@@ -4,6 +4,7 @@ const config = require('../../config/config')
 const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { buildRequestCacheMetrics } = require('../utils/cacheMetrics')
+const requestBodyRuleService = require('./requestBodyRuleService')
 
 const ACCOUNT_TYPE_CONFIG = {
   claude: { prefix: 'claude:account:' },
@@ -137,6 +138,43 @@ function sanitizeAccountIdForType(accountId, accountType) {
   return accountId
 }
 
+function parseBooleanWithDefault(value, defaultValue = false) {
+  if (value === undefined || value === null || value === '') {
+    return defaultValue
+  }
+
+  if (typeof value === 'boolean') {
+    return value
+  }
+
+  if (typeof value === 'string') {
+    return value === 'true'
+  }
+
+  return Boolean(value)
+}
+
+function parseOpenAIResponsesPayloadRules(rawRules) {
+  if (rawRules === undefined || rawRules === null || rawRules === '') {
+    return []
+  }
+
+  let parsedRules = rawRules
+  if (typeof rawRules === 'string') {
+    try {
+      parsedRules = JSON.parse(rawRules)
+    } catch (error) {
+      return []
+    }
+  }
+
+  if (!Array.isArray(parsedRules)) {
+    return []
+  }
+
+  return parsedRules.map((rule) => requestBodyRuleService.normalizeRule(rule)).filter(Boolean)
+}
+
 class ApiKeyService {
   constructor() {
     this.prefix = config.security.apiKeyPrefix
@@ -173,8 +211,18 @@ class ApiKeyService {
       activationDays = 0, // 新增：激活后有效天数（0表示不使用此功能）
       activationUnit = 'days', // 新增：激活时间单位 'hours' 或 'days'
       expirationMode = 'fixed', // 新增：过期模式 'fixed'(固定时间) 或 'activation'(首次使用后激活)
-      icon = '' // 新增：图标（base64编码）
+      icon = '', // 新增：图标（base64编码）
+      enableOpenAIResponsesCodexAdaptation = true,
+      enableOpenAIResponsesPayloadRules = false,
+      openaiResponsesPayloadRules = []
     } = options
+
+    const payloadRulesValidation = requestBodyRuleService.validateAndNormalizeRules(
+      openaiResponsesPayloadRules
+    )
+    if (!payloadRulesValidation.valid) {
+      throw new Error(payloadRulesValidation.error)
+    }
 
     // 生成简单的API Key (64字符十六进制)
     const apiKey = `${this.prefix}${this._generateSecretKey()}`
@@ -219,7 +267,10 @@ class ApiKeyService {
       createdBy: options.createdBy || 'admin',
       userId: options.userId || '',
       userUsername: options.userUsername || '',
-      icon: icon || '' // 新增：图标（base64编码）
+      icon: icon || '', // 新增：图标（base64编码）
+      enableOpenAIResponsesCodexAdaptation: String(enableOpenAIResponsesCodexAdaptation),
+      enableOpenAIResponsesPayloadRules: String(enableOpenAIResponsesPayloadRules),
+      openaiResponsesPayloadRules: JSON.stringify(payloadRulesValidation.rules)
     }
 
     // 保存API Key数据并建立哈希映射
@@ -269,7 +320,18 @@ class ApiKeyService {
       activatedAt: keyData.activatedAt,
       createdAt: keyData.createdAt,
       expiresAt: keyData.expiresAt,
-      createdBy: keyData.createdBy
+      createdBy: keyData.createdBy,
+      enableOpenAIResponsesCodexAdaptation: parseBooleanWithDefault(
+        keyData.enableOpenAIResponsesCodexAdaptation,
+        true
+      ),
+      enableOpenAIResponsesPayloadRules: parseBooleanWithDefault(
+        keyData.enableOpenAIResponsesPayloadRules,
+        false
+      ),
+      openaiResponsesPayloadRules: parseOpenAIResponsesPayloadRules(
+        keyData.openaiResponsesPayloadRules
+      )
     }
   }
 
@@ -421,6 +483,17 @@ class ApiKeyService {
           dailyCost: dailyCost || 0,
           totalCost,
           weeklyOpusCost: (await redis.getWeeklyOpusCost(keyData.id)) || 0,
+          enableOpenAIResponsesCodexAdaptation: parseBooleanWithDefault(
+            keyData.enableOpenAIResponsesCodexAdaptation,
+            true
+          ),
+          enableOpenAIResponsesPayloadRules: parseBooleanWithDefault(
+            keyData.enableOpenAIResponsesPayloadRules,
+            false
+          ),
+          openaiResponsesPayloadRules: parseOpenAIResponsesPayloadRules(
+            keyData.openaiResponsesPayloadRules
+          ),
           tags,
           usage
         }
@@ -555,6 +628,17 @@ class ApiKeyService {
           dailyCost: dailyCost || 0,
           totalCost: costStats?.total || 0,
           weeklyOpusCost: (await redis.getWeeklyOpusCost(keyData.id)) || 0,
+          enableOpenAIResponsesCodexAdaptation: parseBooleanWithDefault(
+            keyData.enableOpenAIResponsesCodexAdaptation,
+            true
+          ),
+          enableOpenAIResponsesPayloadRules: parseBooleanWithDefault(
+            keyData.enableOpenAIResponsesPayloadRules,
+            false
+          ),
+          openaiResponsesPayloadRules: parseOpenAIResponsesPayloadRules(
+            keyData.openaiResponsesPayloadRules
+          ),
           tags,
           usage
         }
@@ -608,6 +692,17 @@ class ApiKeyService {
         key.expirationMode = key.expirationMode || 'fixed'
         key.isActivated = key.isActivated === 'true'
         key.activatedAt = key.activatedAt || null
+        key.enableOpenAIResponsesCodexAdaptation = parseBooleanWithDefault(
+          key.enableOpenAIResponsesCodexAdaptation,
+          true
+        )
+        key.enableOpenAIResponsesPayloadRules = parseBooleanWithDefault(
+          key.enableOpenAIResponsesPayloadRules,
+          false
+        )
+        key.openaiResponsesPayloadRules = parseOpenAIResponsesPayloadRules(
+          key.openaiResponsesPayloadRules
+        )
 
         // 获取当前时间窗口的请求次数、Token使用量和费用
         if (key.rateLimitWindow > 0) {
@@ -785,6 +880,9 @@ class ApiKeyService {
         'totalCostLimit',
         'weeklyOpusCostLimit',
         'tags',
+        'enableOpenAIResponsesCodexAdaptation',
+        'enableOpenAIResponsesPayloadRules',
+        'openaiResponsesPayloadRules',
         'userId', // 新增：用户ID（所有者变更）
         'userUsername', // 新增：用户名（所有者变更）
         'createdBy' // 新增：创建者（所有者变更）
@@ -799,14 +897,27 @@ class ApiKeyService {
           } else if (
             field === 'restrictedModels' ||
             field === 'allowedClients' ||
-            field === 'tags'
+            field === 'tags' ||
+            field === 'openaiResponsesPayloadRules'
           ) {
             // 特殊处理数组字段
-            updatedData[field] = JSON.stringify(value || [])
+            if (field === 'openaiResponsesPayloadRules') {
+              const payloadRulesValidation = requestBodyRuleService.validateAndNormalizeRules(
+                value || []
+              )
+              if (!payloadRulesValidation.valid) {
+                throw new Error(payloadRulesValidation.error)
+              }
+              updatedData[field] = JSON.stringify(payloadRulesValidation.rules)
+            } else {
+              updatedData[field] = JSON.stringify(value || [])
+            }
           } else if (
             field === 'enableModelRestriction' ||
             field === 'enableClientRestriction' ||
-            field === 'isActivated'
+            field === 'isActivated' ||
+            field === 'enableOpenAIResponsesCodexAdaptation' ||
+            field === 'enableOpenAIResponsesPayloadRules'
           ) {
             // 布尔值转字符串
             updatedData[field] = String(value)
@@ -2108,7 +2219,18 @@ class ApiKeyService {
           isDeleted: key.isDeleted,
           deletedAt: key.deletedAt,
           deletedBy: key.deletedBy,
-          deletedByType: key.deletedByType
+          deletedByType: key.deletedByType,
+          enableOpenAIResponsesCodexAdaptation: parseBooleanWithDefault(
+            key.enableOpenAIResponsesCodexAdaptation,
+            true
+          ),
+          enableOpenAIResponsesPayloadRules: parseBooleanWithDefault(
+            key.enableOpenAIResponsesPayloadRules,
+            false
+          ),
+          openaiResponsesPayloadRules: parseOpenAIResponsesPayloadRules(
+            key.openaiResponsesPayloadRules
+          )
         })
       }
 
@@ -2156,7 +2278,18 @@ class ApiKeyService {
         bedrockAccountId: keyData.bedrockAccountId,
         droidAccountId: keyData.droidAccountId,
         azureOpenaiAccountId: keyData.azureOpenaiAccountId,
-        ccrAccountId: keyData.ccrAccountId
+        ccrAccountId: keyData.ccrAccountId,
+        enableOpenAIResponsesCodexAdaptation: parseBooleanWithDefault(
+          keyData.enableOpenAIResponsesCodexAdaptation,
+          true
+        ),
+        enableOpenAIResponsesPayloadRules: parseBooleanWithDefault(
+          keyData.enableOpenAIResponsesPayloadRules,
+          false
+        ),
+        openaiResponsesPayloadRules: parseOpenAIResponsesPayloadRules(
+          keyData.openaiResponsesPayloadRules
+        )
       }
     } catch (error) {
       logger.error('❌ Failed to get API key by ID:', error)

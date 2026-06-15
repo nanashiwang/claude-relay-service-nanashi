@@ -692,6 +692,74 @@
             </div>
           </div>
 
+          <!-- OpenAI Responses 高级控制 -->
+          <div class="rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+            <h4 class="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">
+              OpenAI Responses 高级控制
+            </h4>
+            <label class="mb-3 flex cursor-pointer items-start gap-2 text-sm">
+              <input
+                v-model="form.enableOpenAIResponsesCodexAdaptation"
+                class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                type="checkbox"
+              />
+              <span class="text-gray-700 dark:text-gray-300">
+                启用 Codex 适配（非 Codex 客户端自动改写为 Codex payload）
+              </span>
+            </label>
+            <label class="mb-3 flex cursor-pointer items-start gap-2 text-sm">
+              <input
+                v-model="form.enableOpenAIResponsesPayloadRules"
+                class="mt-0.5 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                type="checkbox"
+              />
+              <span class="text-gray-700 dark:text-gray-300"> 启用自定义 payload 规则 </span>
+            </label>
+            <div v-if="form.enableOpenAIResponsesPayloadRules" class="space-y-2">
+              <div
+                v-for="(rule, index) in form.openaiResponsesPayloadRules"
+                :key="index"
+                class="grid gap-2 md:grid-cols-[1fr_120px_1fr_auto]"
+              >
+                <input
+                  v-model="rule.path"
+                  class="form-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  placeholder="路径，如 reasoning.effort"
+                  type="text"
+                />
+                <select
+                  v-model="rule.valueType"
+                  class="form-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                >
+                  <option value="string">string</option>
+                  <option value="number">number</option>
+                  <option value="boolean">boolean</option>
+                  <option value="json">json</option>
+                </select>
+                <input
+                  v-model="rule.value"
+                  class="form-input border-gray-300 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-200"
+                  placeholder="值"
+                  type="text"
+                />
+                <button
+                  class="rounded-lg bg-red-500 px-3 py-2 text-white hover:bg-red-600"
+                  type="button"
+                  @click="removeOpenAIResponsesPayloadRule(index)"
+                >
+                  删除
+                </button>
+              </div>
+              <button
+                class="rounded-lg bg-blue-500 px-4 py-2 text-sm text-white hover:bg-blue-600"
+                type="button"
+                @click="addOpenAIResponsesPayloadRule"
+              >
+                添加规则
+              </button>
+            </div>
+          </div>
+
           <div class="flex gap-3 pt-4">
             <button
               class="flex-1 rounded-xl bg-gray-100 px-6 py-3 font-semibold text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
@@ -802,6 +870,9 @@ const form = reactive({
   modelInput: '',
   enableClientRestriction: false,
   allowedClients: [],
+  enableOpenAIResponsesCodexAdaptation: true,
+  enableOpenAIResponsesPayloadRules: false,
+  openaiResponsesPayloadRules: [],
   tags: [],
   isActive: true,
   ownerId: '' // 新增：所有者ID
@@ -818,6 +889,14 @@ const addRestrictedModel = () => {
 // 移除限制的模型
 const removeRestrictedModel = (index) => {
   form.restrictedModels.splice(index, 1)
+}
+
+const addOpenAIResponsesPayloadRule = () => {
+  form.openaiResponsesPayloadRules.push({ path: '', valueType: 'string', value: '' })
+}
+
+const removeOpenAIResponsesPayloadRule = (index) => {
+  form.openaiResponsesPayloadRules.splice(index, 1)
 }
 
 // 常用模型列表
@@ -971,6 +1050,12 @@ const updateApiKey = async () => {
     // 客户端限制 - 始终提交这些字段
     data.enableClientRestriction = form.enableClientRestriction
     data.allowedClients = form.allowedClients
+
+    data.enableOpenAIResponsesCodexAdaptation = form.enableOpenAIResponsesCodexAdaptation
+    data.enableOpenAIResponsesPayloadRules = form.enableOpenAIResponsesPayloadRules
+    data.openaiResponsesPayloadRules = form.openaiResponsesPayloadRules.filter(
+      (rule) => rule.path && rule.valueType
+    )
 
     // 活跃状态
     data.isActive = form.isActive
@@ -1285,6 +1370,21 @@ onMounted(async () => {
     props.apiKey.enableModelRestriction === true || props.apiKey.enableModelRestriction === 'true'
   form.enableClientRestriction =
     props.apiKey.enableClientRestriction === true || props.apiKey.enableClientRestriction === 'true'
+  form.enableOpenAIResponsesCodexAdaptation =
+    props.apiKey.enableOpenAIResponsesCodexAdaptation === undefined
+      ? true
+      : props.apiKey.enableOpenAIResponsesCodexAdaptation === true ||
+        props.apiKey.enableOpenAIResponsesCodexAdaptation === 'true'
+  form.enableOpenAIResponsesPayloadRules =
+    props.apiKey.enableOpenAIResponsesPayloadRules === true ||
+    props.apiKey.enableOpenAIResponsesPayloadRules === 'true'
+  form.openaiResponsesPayloadRules = Array.isArray(props.apiKey.openaiResponsesPayloadRules)
+    ? props.apiKey.openaiResponsesPayloadRules.map((rule) => ({
+        path: rule.path || '',
+        valueType: rule.valueType || 'string',
+        value: rule.value === undefined || rule.value === null ? '' : String(rule.value)
+      }))
+    : []
   // 初始化活跃状态，默认为 true（强制转换为布尔值，因为Redis返回字符串）
   form.isActive =
     props.apiKey.isActive === undefined ||

@@ -73,7 +73,6 @@ function filterForClaude(headers) {
     'anthropic-beta',
     'accept-language',
     'sec-fetch-mode',
-    'accept-encoding',
     'user-agent',
     'content-type',
     'connection'

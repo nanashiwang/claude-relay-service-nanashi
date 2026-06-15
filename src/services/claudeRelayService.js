@@ -17,6 +17,7 @@ const requestIdentityService = require('./requestIdentityService')
 const { createClaudeTestPayload } = require('../utils/testPayloadHelper')
 const userMessageQueueService = require('./userMessageQueueService')
 const { isStreamWritable } = require('../utils/streamHelper')
+const metadataUserIdHelper = require('../utils/metadataUserIdHelper')
 const {
   appendPreviewBuffer,
   createDecodedUpstreamStream,
@@ -149,6 +150,64 @@ class ClaudeRelayService {
   // 🔍 判断是否是真实的 Claude Code 请求
   isRealClaudeCodeRequest(requestBody) {
     return ClaudeCodeValidator.includesClaudeCodeSystemPrompt(requestBody, 1)
+  }
+
+  _getHeaderValueCaseInsensitive(headers, key) {
+    if (!headers || typeof headers !== 'object') {
+      return undefined
+    }
+    const lowerKey = key.toLowerCase()
+    for (const candidate of Object.keys(headers)) {
+      if (candidate.toLowerCase() === lowerKey) {
+        return headers[candidate]
+      }
+    }
+    return undefined
+  }
+
+  _extractTextFromContent(content) {
+    if (typeof content === 'string') {
+      return content
+    }
+    if (!Array.isArray(content)) {
+      return ''
+    }
+    return content
+      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text)
+      .join('\n')
+  }
+
+  _extractSystemText(system) {
+    if (typeof system === 'string') {
+      return system
+    }
+    if (!Array.isArray(system)) {
+      return ''
+    }
+    return system
+      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text)
+      .join('\n')
+  }
+
+  _isAgentViewAuxiliaryRequest(requestBody, clientHeaders) {
+    const appHeader = this._getHeaderValueCaseInsensitive(clientHeaders, 'x-app')
+    if (appHeader !== 'cli-bg' || requestBody?.stream === true) {
+      return false
+    }
+
+    const systemText = this._extractSystemText(requestBody?.system)
+    const messageText = Array.isArray(requestBody?.messages)
+      ? requestBody.messages
+          .map((message) => this._extractTextFromContent(message?.content))
+          .join('\n')
+      : ''
+
+    return (
+      systemText.includes('A user kicked off a Claude Code agent') ||
+      messageText.includes('2-4 word lowercase label for this job')
+    )
   }
 
   // 🚀 转发请求到Claude API
@@ -524,7 +583,7 @@ class ClaudeRelayService {
                 `🕐 Extracted rate limit reset timestamp: ${rateLimitResetTimestamp} (${new Date(rateLimitResetTimestamp * 1000).toISOString()})`
               )
             }
-            if (isDedicatedOfficialAccount) {
+            if (isDedicatedOfficialAccount && rateLimitResetTimestamp) {
               dedicatedRateLimitMessage = this._buildStandardRateLimitMessage(
                 rateLimitResetTimestamp || account?.rateLimitEndAt
               )
@@ -555,21 +614,35 @@ class ClaudeRelayService {
         }
 
         if (isRateLimited) {
-          if (isDedicatedOfficialAccount && !dedicatedRateLimitMessage) {
-            dedicatedRateLimitMessage = this._buildStandardRateLimitMessage(
-              rateLimitResetTimestamp || account?.rateLimitEndAt
+          const isAgentViewAuxiliaryRequest = this._isAgentViewAuxiliaryRequest(
+            requestBody,
+            clientHeaders
+          )
+          if (isAgentViewAuxiliaryRequest) {
+            logger.warn(
+              `🚫 Agent View auxiliary request hit 429 for account ${accountId}; skipping account-level rate-limit marking`
+            )
+          } else if (!rateLimitResetTimestamp) {
+            logger.warn(
+              `⚠️ Rate limit without reset header for account ${accountId}, status: ${response.statusCode}, skipping rate limit marking`
+            )
+          } else {
+            if (isDedicatedOfficialAccount && !dedicatedRateLimitMessage) {
+              dedicatedRateLimitMessage = this._buildStandardRateLimitMessage(
+                rateLimitResetTimestamp || account?.rateLimitEndAt
+              )
+            }
+            logger.warn(
+              `🚫 Rate limit detected for account ${accountId}, status: ${response.statusCode}`
+            )
+            // 标记账号为限流状态并删除粘性会话映射，传递准确的重置时间戳
+            await unifiedClaudeScheduler.markAccountRateLimited(
+              accountId,
+              accountType,
+              sessionHash,
+              rateLimitResetTimestamp
             )
           }
-          logger.warn(
-            `🚫 Rate limit detected for account ${accountId}, status: ${response.statusCode}`
-          )
-          // 标记账号为限流状态并删除粘性会话映射，传递准确的重置时间戳
-          await unifiedClaudeScheduler.markAccountRateLimited(
-            accountId,
-            accountType,
-            sessionHash,
-            rateLimitResetTimestamp
-          )
 
           if (dedicatedRateLimitMessage) {
             return {
@@ -814,19 +887,20 @@ class ClaudeRelayService {
 
   // 🔄 替换请求中的客户端标识
   _replaceClientId(body, unifiedClientId) {
-    if (!body || !body.metadata || !body.metadata.user_id || !unifiedClientId) {
+    if (!body?.metadata?.user_id || !unifiedClientId) {
       return
     }
 
-    const userId = body.metadata.user_id
-    // user_id格式：user_{64位十六进制}_account__session_{uuid}
-    // 只替换第一个下划线后到_account之前的部分（客户端标识）
-    const match = userId.match(/^user_[a-f0-9]{64}(_account__session_[a-f0-9-]{36})$/)
-    if (match && match[1]) {
-      // 替换客户端标识部分
-      body.metadata.user_id = `user_${unifiedClientId}${match[1]}`
-      logger.info(`🔄 Replaced client ID with unified ID: ${body.metadata.user_id}`)
+    const parsed = metadataUserIdHelper.parse(body.metadata.user_id)
+    if (!parsed) {
+      return
     }
+
+    body.metadata.user_id = metadataUserIdHelper.build({
+      ...parsed,
+      deviceId: unifiedClientId
+    })
+    logger.info(`🔄 Replaced client ID with unified ID: ${body.metadata.user_id}`)
   }
 
   // 🔢 验证并限制max_tokens参数
@@ -1108,6 +1182,9 @@ class ClaudeRelayService {
       'anthropic-version': this.apiVersion,
       ...finalHeaders
     }
+
+    // 防止客户端/旧缓存透传 zstd，Node 当前解压链路只稳定支持 identity/gzip/deflate。
+    headers['accept-encoding'] = 'identity'
 
     // 使用统一 User-Agent 或客户端提供的，最后使用默认值
     const userAgent = unifiedUA || headers['user-agent'] || 'claude-cli/1.0.119 (external, cli)'
@@ -1662,15 +1739,33 @@ class ClaudeRelayService {
               const rateLimitResetTimestamp = Number.isNaN(parsedResetTimestamp)
                 ? null
                 : parsedResetTimestamp
-              await unifiedClaudeScheduler.markAccountRateLimited(
-                accountId,
-                accountType,
-                sessionHash,
-                rateLimitResetTimestamp
+              const isAgentViewAuxiliaryRequest = this._isAgentViewAuxiliaryRequest(
+                body,
+                clientHeaders
               )
-              logger.warn(`🚫 [Stream] Rate limit detected for account ${accountId}, status 429`)
+              if (isAgentViewAuxiliaryRequest) {
+                logger.warn(
+                  `🚫 [Stream] Agent View auxiliary request hit 429 for account ${accountId}; skipping account-level rate-limit marking`
+                )
+              } else if (!rateLimitResetTimestamp) {
+                logger.warn(
+                  `⚠️ [Stream] 429 without reset header for account ${accountId}, skipping rate limit marking`
+                )
+              } else {
+                await unifiedClaudeScheduler.markAccountRateLimited(
+                  accountId,
+                  accountType,
+                  sessionHash,
+                  rateLimitResetTimestamp
+                )
+                logger.warn(`🚫 [Stream] Rate limit detected for account ${accountId}, status 429`)
+              }
 
-              if (isDedicatedOfficialAccount) {
+              if (
+                isDedicatedOfficialAccount &&
+                !isAgentViewAuxiliaryRequest &&
+                rateLimitResetTimestamp
+              ) {
                 const limitMessage = this._buildStandardRateLimitMessage(
                   rateLimitResetTimestamp || account?.rateLimitEndAt
                 )
@@ -2268,22 +2363,24 @@ class ClaudeRelayService {
               logger.warn(
                 `🚫 [Stream] Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
               )
+            } else if (this._isAgentViewAuxiliaryRequest(body, clientHeaders)) {
+              logger.warn(
+                `🚫 [Stream] Agent View auxiliary request hit rate limit at stream end for account ${accountId}; skipping account-level rate-limit marking`
+              )
+            } else if (Number.isNaN(parsedResetTimestamp)) {
+              logger.warn(
+                `⚠️ [Stream] Rate limit at stream end without reset header for account ${accountId}, skipping rate limit marking`
+              )
             } else {
-              const rateLimitResetTimestamp = Number.isNaN(parsedResetTimestamp)
-                ? null
-                : parsedResetTimestamp
-
-              if (!Number.isNaN(parsedResetTimestamp)) {
-                logger.info(
-                  `🕐 Extracted rate limit reset timestamp from stream: ${parsedResetTimestamp} (${new Date(parsedResetTimestamp * 1000).toISOString()})`
-                )
-              }
+              logger.info(
+                `🕐 Extracted rate limit reset timestamp from stream: ${parsedResetTimestamp} (${new Date(parsedResetTimestamp * 1000).toISOString()})`
+              )
 
               await unifiedClaudeScheduler.markAccountRateLimited(
                 accountId,
                 accountType,
                 sessionHash,
-                rateLimitResetTimestamp
+                parsedResetTimestamp
               )
             }
           } else if (res.statusCode === 200) {

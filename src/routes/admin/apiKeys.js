@@ -5,6 +5,7 @@ const { authenticateAdmin } = require('../../middleware/auth')
 const logger = require('../../utils/logger')
 const CostCalculator = require('../../utils/costCalculator')
 const config = require('../../../config/config')
+const requestBodyRuleService = require('../../services/requestBodyRuleService')
 
 const router = express.Router()
 
@@ -1292,7 +1293,10 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
       activationDays, // 新增：激活后有效天数
       activationUnit, // 新增：激活时间单位 (hours/days)
       expirationMode, // 新增：过期模式
-      icon // 新增：图标
+      icon, // 新增：图标
+      enableOpenAIResponsesCodexAdaptation,
+      enableOpenAIResponsesPayloadRules,
+      openaiResponsesPayloadRules
     } = req.body
 
     // 输入验证
@@ -1359,6 +1363,29 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
 
     if (allowedClients !== undefined && !Array.isArray(allowedClients)) {
       return res.status(400).json({ error: 'Allowed clients must be an array' })
+    }
+
+    if (
+      enableOpenAIResponsesCodexAdaptation !== undefined &&
+      typeof enableOpenAIResponsesCodexAdaptation !== 'boolean'
+    ) {
+      return res
+        .status(400)
+        .json({ error: 'enableOpenAIResponsesCodexAdaptation must be a boolean' })
+    }
+
+    if (
+      enableOpenAIResponsesPayloadRules !== undefined &&
+      typeof enableOpenAIResponsesPayloadRules !== 'boolean'
+    ) {
+      return res.status(400).json({ error: 'enableOpenAIResponsesPayloadRules must be a boolean' })
+    }
+
+    const payloadRulesValidation = requestBodyRuleService.validateAndNormalizeRules(
+      openaiResponsesPayloadRules
+    )
+    if (!payloadRulesValidation.valid) {
+      return res.status(400).json({ error: payloadRulesValidation.error })
     }
 
     // 验证标签字段
@@ -1446,7 +1473,14 @@ router.post('/api-keys', authenticateAdmin, async (req, res) => {
       activationDays,
       activationUnit,
       expirationMode,
-      icon
+      icon,
+      enableOpenAIResponsesCodexAdaptation:
+        enableOpenAIResponsesCodexAdaptation !== undefined
+          ? enableOpenAIResponsesCodexAdaptation
+          : true,
+      enableOpenAIResponsesPayloadRules:
+        enableOpenAIResponsesPayloadRules !== undefined ? enableOpenAIResponsesPayloadRules : false,
+      openaiResponsesPayloadRules: payloadRulesValidation.rules
     })
 
     logger.success(`🔑 Admin created new API key: ${name}`)
@@ -1805,7 +1839,10 @@ router.put('/api-keys/:keyId', authenticateAdmin, async (req, res) => {
       totalCostLimit,
       weeklyOpusCostLimit,
       tags,
-      ownerId // 新增：所有者ID字段
+      ownerId, // 新增：所有者ID字段
+      enableOpenAIResponsesCodexAdaptation,
+      enableOpenAIResponsesPayloadRules,
+      openaiResponsesPayloadRules
     } = req.body
 
     // 只允许更新指定字段
@@ -1928,6 +1965,34 @@ router.put('/api-keys/:keyId', authenticateAdmin, async (req, res) => {
         return res.status(400).json({ error: 'Allowed clients must be an array' })
       }
       updates.allowedClients = allowedClients
+    }
+
+    if (enableOpenAIResponsesCodexAdaptation !== undefined) {
+      if (typeof enableOpenAIResponsesCodexAdaptation !== 'boolean') {
+        return res
+          .status(400)
+          .json({ error: 'enableOpenAIResponsesCodexAdaptation must be a boolean' })
+      }
+      updates.enableOpenAIResponsesCodexAdaptation = enableOpenAIResponsesCodexAdaptation
+    }
+
+    if (enableOpenAIResponsesPayloadRules !== undefined) {
+      if (typeof enableOpenAIResponsesPayloadRules !== 'boolean') {
+        return res
+          .status(400)
+          .json({ error: 'enableOpenAIResponsesPayloadRules must be a boolean' })
+      }
+      updates.enableOpenAIResponsesPayloadRules = enableOpenAIResponsesPayloadRules
+    }
+
+    if (openaiResponsesPayloadRules !== undefined) {
+      const payloadRulesValidation = requestBodyRuleService.validateAndNormalizeRules(
+        openaiResponsesPayloadRules
+      )
+      if (!payloadRulesValidation.valid) {
+        return res.status(400).json({ error: payloadRulesValidation.error })
+      }
+      updates.openaiResponsesPayloadRules = payloadRulesValidation.rules
     }
 
     // 处理过期时间字段

@@ -24,7 +24,11 @@ class UnifiedOpenAIScheduler {
   }
 
   _canParticipateInScheduling(account) {
-    return !!account && this._isAccountActive(account.isActive) && !this._isUnavailableStatus(account.status)
+    return (
+      !!account &&
+      this._isAccountActive(account.isActive) &&
+      !this._isUnavailableStatus(account.status)
+    )
   }
 
   _normalizeOpenAIStickyTtlHours(rawValue) {
@@ -42,7 +46,9 @@ class UnifiedOpenAIScheduler {
     }
 
     const mappedApiKeyId =
-      mappedAccount && typeof mappedAccount.apiKeyId === 'string' ? mappedAccount.apiKeyId.trim() : ''
+      mappedAccount && typeof mappedAccount.apiKeyId === 'string'
+        ? mappedAccount.apiKeyId.trim()
+        : ''
 
     if (!mappedApiKeyId) {
       return false
@@ -347,26 +353,26 @@ class UnifiedOpenAIScheduler {
             )
             await this._deleteSessionMapping(sessionHash)
           } else {
-          // 验证映射的账户是否仍然可用
-          const isAvailable = await this._isAccountAvailable(
-            mappedAccount.accountId,
-            mappedAccount.accountType
-          )
-          if (isAvailable) {
-            // 🚀 智能会话续期（续期 unified 映射键，按配置）
-            await this._extendSessionMappingTTL(sessionHash)
-            logger.info(
-              `🎯 Using sticky session account: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
+            // 验证映射的账户是否仍然可用
+            const isAvailable = await this._isAccountAvailable(
+              mappedAccount.accountId,
+              mappedAccount.accountType
             )
-            // 更新账户的最后使用时间
-            await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
-            return mappedAccount
-          } else {
-            logger.warn(
-              `⚠️ Mapped account ${mappedAccount.accountId} is no longer available, selecting new account`
-            )
-            await this._deleteSessionMapping(sessionHash)
-          }
+            if (isAvailable) {
+              // 🚀 智能会话续期（续期 unified 映射键，按配置）
+              await this._extendSessionMappingTTL(sessionHash)
+              logger.info(
+                `🎯 Using sticky session account: ${mappedAccount.accountId} (${mappedAccount.accountType}) for session ${sessionHash}`
+              )
+              // 更新账户的最后使用时间
+              await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
+              return mappedAccount
+            } else {
+              logger.warn(
+                `⚠️ Mapped account ${mappedAccount.accountId} is no longer available, selecting new account`
+              )
+              await this._deleteSessionMapping(sessionHash)
+            }
           }
         }
       }
@@ -651,9 +657,7 @@ class UnifiedOpenAIScheduler {
     if (stickyTtlHoursOverride !== undefined) {
       sessionConfig.stickyTtlHours = stickyTtlHoursOverride
     }
-    sessionConfig.stickyTtlHours = this._normalizeOpenAIStickyTtlHours(
-      sessionConfig.stickyTtlHours
-    )
+    sessionConfig.stickyTtlHours = this._normalizeOpenAIStickyTtlHours(sessionConfig.stickyTtlHours)
 
     return resolveStickySessionPolicy(sessionConfig, {
       autoRenewEnabledOverride
@@ -727,16 +731,19 @@ class UnifiedOpenAIScheduler {
         await openaiAccountService.setAccountRateLimited(accountId, true, resetsInSeconds)
       } else if (accountType === 'openai-responses') {
         // 对于 OpenAI-Responses 账户，使用与普通 OpenAI 账户类似的处理方式
+        const account = await openaiResponsesAccountService.getAccount(accountId)
         const duration = resetsInSeconds ? Math.ceil(resetsInSeconds / 60) : null
         await openaiResponsesAccountService.markAccountRateLimited(accountId, duration)
 
         // 同时更新调度状态，避免继续被调度
-        await openaiResponsesAccountService.updateAccount(accountId, {
-          schedulable: 'false',
-          rateLimitResetAt: resetsInSeconds
-            ? new Date(Date.now() + resetsInSeconds * 1000).toISOString()
-            : new Date(Date.now() + 3600000).toISOString() // 默认1小时
-        })
+        if (account?.disableAutoProtection !== true && account?.disableAutoProtection !== 'true') {
+          await openaiResponsesAccountService.updateAccount(accountId, {
+            schedulable: 'false',
+            rateLimitResetAt: resetsInSeconds
+              ? new Date(Date.now() + resetsInSeconds * 1000).toISOString()
+              : new Date(Date.now() + 3600000).toISOString() // 默认1小时
+          })
+        }
       }
 
       // 删除会话映射
@@ -856,7 +863,12 @@ class UnifiedOpenAIScheduler {
   }
 
   // 👥 从分组中选择账户
-  async selectAccountFromGroup(groupId, sessionHash = null, requestedModel = null, apiKeyData = null) {
+  async selectAccountFromGroup(
+    groupId,
+    sessionHash = null,
+    requestedModel = null,
+    apiKeyData = null
+  ) {
     try {
       // 获取分组信息
       const group = await accountGroupService.getGroup(groupId)
@@ -884,26 +896,26 @@ class UnifiedOpenAIScheduler {
             )
             await this._deleteSessionMapping(sessionHash)
           } else {
-          // 验证映射的账户是否仍然可用并且在分组中
-          const isInGroup = await this._isAccountInGroup(mappedAccount.accountId, groupId)
-          if (isInGroup) {
-            const isAvailable = await this._isAccountAvailable(
-              mappedAccount.accountId,
-              mappedAccount.accountType
-            )
-            if (isAvailable) {
-              // 🚀 智能会话续期（续期 unified 映射键，按配置）
-              await this._extendSessionMappingTTL(sessionHash)
-              logger.info(
-                `🎯 Using sticky session account from group: ${mappedAccount.accountId} (${mappedAccount.accountType})`
+            // 验证映射的账户是否仍然可用并且在分组中
+            const isInGroup = await this._isAccountInGroup(mappedAccount.accountId, groupId)
+            if (isInGroup) {
+              const isAvailable = await this._isAccountAvailable(
+                mappedAccount.accountId,
+                mappedAccount.accountType
               )
-              // 更新账户的最后使用时间
-              await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
-              return mappedAccount
+              if (isAvailable) {
+                // 🚀 智能会话续期（续期 unified 映射键，按配置）
+                await this._extendSessionMappingTTL(sessionHash)
+                logger.info(
+                  `🎯 Using sticky session account from group: ${mappedAccount.accountId} (${mappedAccount.accountType})`
+                )
+                // 更新账户的最后使用时间
+                await this.updateAccountLastUsed(mappedAccount.accountId, mappedAccount.accountType)
+                return mappedAccount
+              }
             }
-          }
-          // 如果账户不可用或不在分组中，删除映射
-          await this._deleteSessionMapping(sessionHash)
+            // 如果账户不可用或不在分组中，删除映射
+            await this._deleteSessionMapping(sessionHash)
           }
         }
       }

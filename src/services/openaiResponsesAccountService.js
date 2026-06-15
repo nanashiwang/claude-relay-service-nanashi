@@ -50,7 +50,8 @@ class OpenAIResponsesAccountService {
       schedulable = true, // 是否可被调度
       dailyQuota = 0, // 每日额度限制（美元），0表示不限制
       quotaResetTime = '00:00', // 额度重置时间（HH:mm格式）
-      rateLimitDuration = 60 // 限流时间（分钟）
+      rateLimitDuration = 60, // 限流时间（分钟）
+      disableAutoProtection = false // 是否关闭自动防护（429/401 等不自动暂停调度）
     } = options
 
     // 验证必填字段
@@ -94,7 +95,8 @@ class OpenAIResponsesAccountService {
       dailyUsage: '0',
       lastResetDate: redis.getDateStringInTimezone(),
       quotaResetTime,
-      quotaStoppedAt: ''
+      quotaStoppedAt: '',
+      disableAutoProtection: disableAutoProtection.toString()
     }
 
     // 保存到 Redis
@@ -163,6 +165,11 @@ class OpenAIResponsesAccountService {
       // 直接保存，不做任何调整
     }
 
+    // 自动防护开关
+    if (updates.disableAutoProtection !== undefined) {
+      updates.disableAutoProtection = updates.disableAutoProtection.toString()
+    }
+
     // 更新 Redis
     const client = redis.getClientSafe()
     const key = `${this.ACCOUNT_KEY_PREFIX}${accountId}`
@@ -223,6 +230,7 @@ class OpenAIResponsesAccountService {
           account.schedulable = account.schedulable !== 'false'
           // 转换 isActive 字段为布尔值
           account.isActive = account.isActive === 'true'
+          account.disableAutoProtection = account.disableAutoProtection === 'true'
 
           // ✅ 前端显示订阅过期时间（业务字段）
           account.expiresAt = account.subscriptionExpiresAt || null
@@ -294,6 +302,13 @@ class OpenAIResponsesAccountService {
       return
     }
 
+    if (account.disableAutoProtection === true || account.disableAutoProtection === 'true') {
+      logger.info(
+        `🛡️ Account ${accountId} has auto-protection disabled, skipping markAccountRateLimited`
+      )
+      return
+    }
+
     const rateLimitDuration = duration || parseInt(account.rateLimitDuration) || 60
     const now = new Date()
     const resetAt = new Date(now.getTime() + rateLimitDuration * 60000)
@@ -317,6 +332,13 @@ class OpenAIResponsesAccountService {
   async markAccountUnauthorized(accountId, reason = 'OpenAI Responses账号认证失败（401错误）') {
     const account = await this.getAccount(accountId)
     if (!account) {
+      return
+    }
+
+    if (account.disableAutoProtection === true || account.disableAutoProtection === 'true') {
+      logger.info(
+        `🛡️ Account ${accountId} has auto-protection disabled, skipping markAccountUnauthorized`
+      )
       return
     }
 
