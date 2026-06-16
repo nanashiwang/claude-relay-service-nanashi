@@ -164,6 +164,16 @@ function getAllFiles(formData, key) {
   return formData.getAll(key).filter((value) => value && typeof value.arrayBuffer === 'function')
 }
 
+function normalizeCodexImageToolModel(model) {
+  const requested = String(model || DEFAULT_IMAGE_MODEL).trim() || DEFAULT_IMAGE_MODEL
+  if (requested === DEFAULT_IMAGE_MODEL) {
+    return requested
+  }
+
+  logger.warn(`OpenAI OAuth image model ${requested} is mapped to ${DEFAULT_IMAGE_MODEL}`)
+  return DEFAULT_IMAGE_MODEL
+}
+
 async function fileToDataUrl(file) {
   const arrayBuffer = await file.arrayBuffer()
   const buffer = Buffer.from(arrayBuffer)
@@ -298,7 +308,7 @@ async function recordUsageFromUsageData({
 }
 
 function createImageTool(source = {}, action = 'generate', routeModel = DEFAULT_IMAGE_MODEL) {
-  const model = String(source.model || routeModel || DEFAULT_IMAGE_MODEL).trim()
+  const model = normalizeCodexImageToolModel(source.model || routeModel)
   const tool = {
     type: 'image_generation',
     action,
@@ -427,6 +437,76 @@ function extractImageFromOutputItemDone(eventData) {
     background: item.background || '',
     quality: item.quality || ''
   }
+}
+
+function extractImageFromPartialImage(eventData) {
+  if (
+    !eventData ||
+    eventData.type !== 'response.image_generation_call.partial_image' ||
+    !eventData.partial_image_b64
+  ) {
+    return null
+  }
+
+  return {
+    itemId: eventData.item_id || '',
+    result: String(eventData.partial_image_b64).trim(),
+    revisedPrompt: '',
+    outputFormat: eventData.output_format || '',
+    size: eventData.size || '',
+    background: eventData.background || '',
+    quality: eventData.quality || ''
+  }
+}
+
+function extractCodexImageNoOutputHint(eventData) {
+  if (!eventData || typeof eventData !== 'object') {
+    return ''
+  }
+
+  if (eventData.error?.message) {
+    return eventData.error.message
+  }
+
+  const response = eventData.response
+  if (response && typeof response === 'object') {
+    if (response.error?.message) {
+      return response.error.message
+    }
+    if (response.incomplete_details?.reason) {
+      return `response incomplete: ${response.incomplete_details.reason}`
+    }
+
+    for (const item of response.output || []) {
+      const text = extractOutputTextFromItem(item)
+      if (text) {
+        return text
+      }
+    }
+  }
+
+  if (eventData.item) {
+    return extractOutputTextFromItem(eventData.item)
+  }
+
+  return ''
+}
+
+function extractOutputTextFromItem(item) {
+  if (!item || typeof item !== 'object' || !Array.isArray(item.content)) {
+    return ''
+  }
+
+  return item.content
+    .map((part) => {
+      if (!part || typeof part !== 'object') {
+        return ''
+      }
+      return String(part.text || part.output_text || part.content || '').trim()
+    })
+    .filter(Boolean)
+    .join(' ')
+    .trim()
 }
 
 function buildImagesApiResponse(completed, responseFormat) {
@@ -1315,7 +1395,9 @@ class OpenAIImagesRelayService {
     let buffer = ''
     let completed = null
     const outputItemResults = []
+    const partialImageResults = new Map()
     let upstreamError = null
+    let noOutputHint = ''
 
     const processData = (data) => {
       if (!data) {
@@ -1323,6 +1405,17 @@ class OpenAIImagesRelayService {
       }
       if (data.error && !upstreamError) {
         upstreamError = data
+      }
+
+      const hint = extractCodexImageNoOutputHint(data)
+      if (hint) {
+        noOutputHint = hint
+      }
+
+      const partialImage = extractImageFromPartialImage(data)
+      if (partialImage) {
+        const key = partialImage.itemId || `partial-${partialImageResults.size}`
+        partialImageResults.set(key, partialImage)
       }
 
       const outputItem = extractImageFromOutputItemDone(data)
@@ -1356,14 +1449,25 @@ class OpenAIImagesRelayService {
       processData(parseSSEBlock(buffer).data)
     }
 
+    const fallbackPartialResults = Array.from(partialImageResults.values()).map(
+      ({ itemId: _itemId, ...result }) => result
+    )
     if (completed && (!completed.results || completed.results.length === 0)) {
-      completed.results = outputItemResults
+      completed.results = outputItemResults.length > 0 ? outputItemResults : fallbackPartialResults
     } else if (!completed && outputItemResults.length > 0) {
       completed = {
         createdAt: Math.floor(Date.now() / 1000),
         model: context.model,
         usage: null,
         results: outputItemResults
+      }
+    } else if (!completed && fallbackPartialResults.length > 0) {
+      logger.warn('OpenAI OAuth image response used latest partial image as fallback')
+      completed = {
+        createdAt: Math.floor(Date.now() / 1000),
+        model: context.model,
+        usage: null,
+        results: fallbackPartialResults
       }
     }
 
@@ -1372,7 +1476,10 @@ class OpenAIImagesRelayService {
     }
 
     if (!completed || !completed.results || completed.results.length === 0) {
-      throw createRelayError(502, null, 'Upstream did not return image output', 'bad_gateway')
+      const message = noOutputHint
+        ? `Upstream did not return image output: ${noOutputHint}`
+        : 'Upstream did not return image output'
+      throw createRelayError(502, null, message, 'bad_gateway')
     }
 
     return completed
