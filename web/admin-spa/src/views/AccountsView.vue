@@ -803,9 +803,16 @@
                       </el-tooltip>
                     </span>
                     <span
-                      v-if="(account.status === 'blocked' || account.status === 'quota_exceeded') && account.errorMessage"
+                      v-if="
+                        (account.status === 'blocked' || account.status === 'quota_exceeded') &&
+                        account.errorMessage
+                      "
                       class="mt-1 max-w-xs truncate text-xs text-gray-500 dark:text-gray-400"
-                      :title="account.status === 'quota_exceeded' ? account.errorMessage + '（额度窗口重置后自动恢复，无需重新鉴权）' : account.errorMessage"
+                      :title="
+                        account.status === 'quota_exceeded'
+                          ? account.errorMessage + '（额度窗口重置后自动恢复，无需重新鉴权）'
+                          : account.errorMessage
+                      "
                     >
                       {{ account.errorMessage }}
                     </span>
@@ -4352,7 +4359,16 @@ const exportOpenAIJson = async () => {
       selectedTargets.length > selectedOpenAIIds.length && selectedOpenAIIds.length > 0
         ? `，非 OpenAI 账号 ${selectedTargets.length - selectedOpenAIIds.length} 个未导出`
         : ''
-    showToast(`已导出 ${exportedAccounts.length} 个账号${skippedText}${partialText}`, 'success')
+    const stoppedText =
+      exportData.stoppedCount > 0
+        ? `，已停用源账号 ${exportData.stoppedCount} 个，请勿在源端继续使用`
+        : ''
+    showToast(
+      `已导出 ${exportedAccounts.length} 个账号${skippedText}${partialText}${stoppedText}`,
+      'success'
+    )
+    // 源账号已被置为不可调度，刷新列表以反映最新状态
+    await loadAccounts()
   } catch (error) {
     showToast(error.response?.data?.message || error.message || '批量导出失败', 'error')
   } finally {

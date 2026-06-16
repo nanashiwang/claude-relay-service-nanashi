@@ -478,6 +478,7 @@ router.get('/export-json', authenticateAdmin, async (req, res) => {
 
     const accounts = []
     const skipped = []
+    const stoppedAccounts = []
 
     for (const accountId of accountIds) {
       const account = await openaiAccountService.getAccount(accountId)
@@ -493,10 +494,24 @@ router.get('/export-json', authenticateAdmin, async (req, res) => {
       }
 
       accounts.push(payload)
+
+      // 导出后自动停用源账号：OpenAI 使用一次性轮换的 refresh token，
+      // 源端继续刷新会使导出的凭据失效，导致迁移到新服务器后报错需重新鉴权
+      try {
+        if (account.schedulable !== false && account.schedulable !== 'false') {
+          await openaiAccountService.updateAccount(accountId, { schedulable: 'false' })
+        }
+        stoppedAccounts.push({
+          id: accountId,
+          name: account.name || account.email || accountId
+        })
+      } catch (stopError) {
+        logger.warn(`导出后停用 OpenAI 账号 ${accountId} 失败: ${stopError.message}`)
+      }
     }
 
     logger.info(
-      `Exported OpenAI JSON accounts: requested=${accountIds.length}, exported=${accounts.length}, skipped=${skipped.length}`
+      `Exported OpenAI JSON accounts: requested=${accountIds.length}, exported=${accounts.length}, skipped=${skipped.length}, stopped=${stoppedAccounts.length}`
     )
 
     return res.json({
@@ -506,6 +521,12 @@ router.get('/export-json', authenticateAdmin, async (req, res) => {
         total: accountIds.length,
         exportedCount: accounts.length,
         skippedCount: skipped.length,
+        stoppedCount: stoppedAccounts.length,
+        stoppedAccounts,
+        message:
+          stoppedAccounts.length > 0
+            ? '已停用源账号，请勿在源端继续使用（OpenAI refresh token 为一次性轮换，源端继续刷新会使导出的凭据失效）'
+            : undefined,
         accounts,
         skipped
       }
