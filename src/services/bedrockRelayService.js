@@ -339,8 +339,8 @@ class BedrockRelayService {
             res.write(`event: ${claudeEvent.type}\n`)
             res.write(`data: ${JSON.stringify(claudeEvent.data)}\n\n`)
 
-            // 提取使用统计
-            if (claudeEvent.type === 'message_stop' && claudeEvent.data.usage) {
+            // Claude 规范把 usage 放在 message_delta 中，message_stop 只保留结束标记。
+            if (claudeEvent.type === 'message_delta' && claudeEvent.data.usage) {
               totalUsage = claudeEvent.data.usage
             }
 
@@ -480,6 +480,33 @@ class BedrockRelayService {
     return modelName
   }
 
+  _mapFromBedrockModel(modelName) {
+    if (typeof modelName !== 'string' || !modelName) {
+      return this.defaultModel
+    }
+
+    const reverseMappings = {
+      'us.anthropic.claude-opus-4-1-20250805-v1:0': 'claude-opus-4-1-20250805',
+      'anthropic.claude-opus-4-1-20250805-v1:0': 'claude-opus-4-1-20250805',
+      'us.anthropic.claude-sonnet-4-20250514-v1:0': 'claude-sonnet-4-20250514',
+      'anthropic.claude-sonnet-4-20250514-v1:0': 'claude-sonnet-4-20250514',
+      'us.anthropic.claude-3-7-sonnet-20250219-v1:0': 'claude-3-7-sonnet-20250219',
+      'anthropic.claude-3-7-sonnet-20250219-v1:0': 'claude-3-7-sonnet-20250219',
+      'us.anthropic.claude-3-5-sonnet-20241022-v2:0': 'claude-3-5-sonnet-20241022',
+      'anthropic.claude-3-5-sonnet-20241022-v2:0': 'claude-3-5-sonnet-20241022',
+      'us.anthropic.claude-3-5-haiku-20241022-v1:0': 'claude-3-5-haiku-20241022',
+      'anthropic.claude-3-5-haiku-20241022-v1:0': 'claude-3-5-haiku-20241022',
+      'us.anthropic.claude-3-opus-20240229-v1:0': 'claude-3-opus-20240229',
+      'anthropic.claude-3-opus-20240229-v1:0': 'claude-3-opus-20240229',
+      'us.anthropic.claude-3-sonnet-20240229-v1:0': 'claude-3-sonnet-20240229',
+      'anthropic.claude-3-sonnet-20240229-v1:0': 'claude-3-sonnet-20240229',
+      'us.anthropic.claude-3-haiku-20240307-v1:0': 'claude-3-haiku-20240307',
+      'anthropic.claude-3-haiku-20240307-v1:0': 'claude-3-haiku-20240307'
+    }
+
+    return reverseMappings[modelName] || modelName
+  }
+
   // 选择使用的区域
   _selectRegion(modelId, bedrockAccount) {
     // 优先使用账户配置的区域
@@ -497,9 +524,13 @@ class BedrockRelayService {
 
   // 转换Claude格式请求到Bedrock格式
   _convertToBedrockFormat(requestBody) {
+    const rawMaxTokens = requestBody.max_tokens
+    const maxTokens =
+      rawMaxTokens !== undefined && rawMaxTokens !== null ? rawMaxTokens : this.maxOutputTokens
+
     const bedrockPayload = {
       anthropic_version: 'bedrock-2023-05-31',
-      max_tokens: Math.min(requestBody.max_tokens || this.maxOutputTokens, this.maxOutputTokens),
+      max_tokens: maxTokens,
       messages: requestBody.messages || []
     }
 
@@ -525,6 +556,29 @@ class BedrockRelayService {
       bedrockPayload.stop_sequences = requestBody.stop_sequences
     }
 
+    if (requestBody.metadata) {
+      bedrockPayload.metadata = requestBody.metadata
+    }
+
+    if (requestBody.thinking) {
+      bedrockPayload.thinking = { ...requestBody.thinking }
+
+      if (bedrockPayload.thinking.type === 'adaptive') {
+        bedrockPayload.thinking.type = 'enabled'
+      }
+
+      if (
+        bedrockPayload.thinking.type === 'enabled' &&
+        (bedrockPayload.thinking.budget_tokens === undefined ||
+          bedrockPayload.thinking.budget_tokens === null)
+      ) {
+        const fallbackBudget = Number(maxTokens)
+        if (Number.isFinite(fallbackBudget) && fallbackBudget > 1) {
+          bedrockPayload.thinking.budget_tokens = fallbackBudget - 1
+        }
+      }
+    }
+
     // 工具调用支持
     if (requestBody.tools) {
       bedrockPayload.tools = requestBody.tools
@@ -544,7 +598,7 @@ class BedrockRelayService {
       type: 'message',
       role: 'assistant',
       content: bedrockResponse.content || [],
-      model: bedrockResponse.model || this.defaultModel,
+      model: this._mapFromBedrockModel(bedrockResponse.model || this.defaultModel),
       stop_reason: bedrockResponse.stop_reason || 'end_turn',
       stop_sequence: bedrockResponse.stop_sequence || null,
       usage: bedrockResponse.usage || {
@@ -560,14 +614,17 @@ class BedrockRelayService {
       return {
         type: 'message_start',
         data: {
-          type: 'message',
-          id: `msg_${Date.now()}_bedrock`,
-          role: 'assistant',
-          content: [],
-          model: this.defaultModel,
-          stop_reason: null,
-          stop_sequence: null,
-          usage: bedrockChunk.message?.usage || { input_tokens: 0, output_tokens: 0 }
+          type: 'message_start',
+          message: {
+            id: `msg_${Date.now()}_bedrock`,
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            model: this._mapFromBedrockModel(bedrockChunk.message?.model || this.defaultModel),
+            stop_reason: null,
+            stop_sequence: null,
+            usage: bedrockChunk.message?.usage || { input_tokens: 0, output_tokens: 0 }
+          }
         }
       }
     }
@@ -576,6 +633,7 @@ class BedrockRelayService {
       return {
         type: 'content_block_delta',
         data: {
+          type: 'content_block_delta',
           index: bedrockChunk.index || 0,
           delta: bedrockChunk.delta || {}
         }
@@ -586,6 +644,7 @@ class BedrockRelayService {
       return {
         type: 'message_delta',
         data: {
+          type: 'message_delta',
           delta: bedrockChunk.delta || {},
           usage: bedrockChunk.usage || {}
         }
@@ -596,7 +655,7 @@ class BedrockRelayService {
       return {
         type: 'message_stop',
         data: {
-          usage: bedrockChunk.usage || {}
+          type: 'message_stop'
         }
       }
     }
