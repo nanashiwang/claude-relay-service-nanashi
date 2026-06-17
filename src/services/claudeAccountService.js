@@ -2223,12 +2223,13 @@ class ClaudeAccountService {
           organizationType: profileData.organization?.organization_type,
 
           // 账号类型（基于 has_claude_max 和 has_claude_pro 判断）
+          // 对未知/团队订阅默认按 Max 能力处理，避免被误判为 free 后错误拦截 Opus。
           accountType:
             profileData.account?.has_claude_max === true
               ? 'claude_max'
               : profileData.account?.has_claude_pro === true
                 ? 'claude_pro'
-                : 'free',
+                : 'claude_max',
 
           // 更新时间
           profileFetchedAt: new Date().toISOString()
