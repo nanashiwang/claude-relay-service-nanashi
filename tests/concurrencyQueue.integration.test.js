@@ -21,6 +21,31 @@ jest.mock('../src/utils/logger', () => ({
   security: jest.fn()
 }))
 
+jest.mock(
+  '../config/config',
+  () => ({
+    system: { timezoneOffset: 8 },
+    redis: {
+      host: 'localhost',
+      port: 6379,
+      password: null,
+      db: 0,
+      retryDelayOnFailover: 100,
+      maxRetriesPerRequest: 1,
+      lazyConnect: true,
+      enableTLS: false
+    },
+    userMessageQueue: {
+      enabled: false,
+      delayMs: 200,
+      timeoutMs: 5000,
+      lockTtlMs: 5000
+    },
+    concurrency: {}
+  }),
+  { virtual: true }
+)
+
 const redis = require('../src/models/redis')
 const claudeRelayConfigService = require('../src/services/claudeRelayConfigService')
 

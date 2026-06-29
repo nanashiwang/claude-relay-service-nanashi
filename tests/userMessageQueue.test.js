@@ -3,6 +3,39 @@
  * 测试消息类型检测、队列串行行为、延迟间隔、超时处理和功能开关
  */
 
+jest.mock(
+  '../config/config',
+  () => ({
+    system: { timezoneOffset: 8 },
+    redis: {
+      host: 'localhost',
+      port: 6379,
+      password: null,
+      db: 0,
+      retryDelayOnFailover: 100,
+      maxRetriesPerRequest: 1,
+      lazyConnect: true,
+      enableTLS: false
+    },
+    userMessageQueue: {
+      enabled: false,
+      delayMs: 200,
+      timeoutMs: 5000,
+      lockTtlMs: 5000
+    },
+    concurrency: {}
+  }),
+  { virtual: true }
+)
+
+jest.mock('../src/utils/logger', () => ({
+  debug: jest.fn(),
+  info: jest.fn(),
+  warn: jest.fn(),
+  error: jest.fn(),
+  database: jest.fn()
+}))
+
 const redis = require('../src/models/redis')
 const userMessageQueueService = require('../src/services/userMessageQueueService')
 
