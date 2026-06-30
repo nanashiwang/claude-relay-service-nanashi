@@ -180,6 +180,20 @@ function isWritableSSEStream(res) {
   return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
 }
 
+function writeOpenAIStreamKeepAlive(res, label = 'relay-keep-alive') {
+  if (!isWritableSSEStream(res)) {
+    return false
+  }
+
+  try {
+    res.write(`: ${label}\n\n`)
+    return true
+  } catch (writeError) {
+    logger.warn('Failed to write OpenAI SSE keep-alive:', writeError.message)
+    return false
+  }
+}
+
 function sendOpenAIStreamErrorEvent(res, error, source = 'upstream_stream_error') {
   if (!isWritableSSEStream(res)) {
     return false
@@ -1607,6 +1621,7 @@ const handleResponses = async (req, res) => {
       if (typeof res.flushHeaders === 'function') {
         res.flushHeaders()
       }
+      writeOpenAIStreamKeepAlive(res, 'relay-start')
     }
 
     // 处理响应并捕获 usage 数据和真实的 model
@@ -1749,10 +1764,7 @@ const handleResponses = async (req, res) => {
         return
       }
 
-      try {
-        res.write(': keep-alive\n\n')
-      } catch (heartbeatError) {
-        logger.warn('Failed to send OpenAI SSE heartbeat:', heartbeatError.message)
+      if (!writeOpenAIStreamKeepAlive(res)) {
         stopHeartbeat()
       }
     }
@@ -2094,7 +2106,7 @@ const handleResponses = async (req, res) => {
       }
     })
 
-    // 客户端断开时清理上游流
+    // 客户端断开时清理上游流。不要监听 req.close：POST body 被读完也会触发它。
     const cleanup = () => {
       if (streamFinalized) {
         return
@@ -2111,7 +2123,11 @@ const handleResponses = async (req, res) => {
         //
       }
     }
-    req.on('close', cleanup)
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        cleanup()
+      }
+    })
     req.on('aborted', cleanup)
   } catch (error) {
     logger.error('Proxy to ChatGPT codex/responses failed:', logger.sanitizeAxiosError(error))

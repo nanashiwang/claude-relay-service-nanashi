@@ -48,6 +48,20 @@ function isWritableSSEStream(res) {
   return !!res && !res.destroyed && !res.writableEnded && !res.socket?.destroyed
 }
 
+function writeOpenAIResponsesStreamKeepAlive(res, label = 'relay-keep-alive') {
+  if (!isWritableSSEStream(res)) {
+    return false
+  }
+
+  try {
+    res.write(`: ${label}\n\n`)
+    return true
+  } catch (writeError) {
+    logger.warn('Failed to write OpenAI-Responses SSE keep-alive:', writeError.message)
+    return false
+  }
+}
+
 function sendOpenAIResponsesStreamErrorEvent(
   res,
   error,
@@ -636,13 +650,18 @@ class OpenAIResponsesRelayService {
           abortController.abort()
         }
       }
+      const handleResponseClose = () => {
+        if (!res.writableEnded) {
+          handleClientDisconnect()
+        }
+      }
 
-      // 监听客户端断开事件
-      req.once('close', handleClientDisconnect)
-      res.once('close', handleClientDisconnect)
+      // req.close 会在 POST body 读完时正常触发；只把 req.aborted / 未正常结束的 res.close 当断开。
+      req.once('aborted', handleClientDisconnect)
+      res.once('close', handleResponseClose)
       cleanupClientDisconnectListeners = () => {
-        req.removeListener('close', handleClientDisconnect)
-        res.removeListener('close', handleClientDisconnect)
+        req.removeListener('aborted', handleClientDisconnect)
+        res.removeListener('close', handleResponseClose)
       }
 
       const isChatCompletionsCompat = isChatCompletionsCompatMode(req)
@@ -1032,6 +1051,10 @@ class OpenAIResponsesRelayService {
     res.setHeader('Cache-Control', 'no-cache')
     res.setHeader('Connection', 'keep-alive')
     res.setHeader('X-Accel-Buffering', 'no')
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders()
+    }
+    writeOpenAIResponsesStreamKeepAlive(res, 'relay-start')
 
     const heartbeatIntervalMs = await getOpenAIResponsesStreamHeartbeatIntervalMs()
 
@@ -1061,10 +1084,7 @@ class OpenAIResponsesRelayService {
         return
       }
 
-      try {
-        res.write(': keep-alive\n\n')
-      } catch (heartbeatError) {
-        logger.warn('Failed to send OpenAI-Responses SSE heartbeat:', heartbeatError.message)
+      if (!writeOpenAIResponsesStreamKeepAlive(res)) {
         clearHeartbeat()
       }
     }
@@ -1242,8 +1262,7 @@ class OpenAIResponsesRelayService {
       }
 
       // 清理监听器
-      req.removeListener('close', handleClientDisconnect)
-      res.removeListener('close', handleClientDisconnect)
+      req.removeListener('aborted', handleClientDisconnect)
 
       if (!res.destroyed) {
         res.end()
@@ -1271,8 +1290,7 @@ class OpenAIResponsesRelayService {
       recordStreamInterruption(redis, interruptionReason, 'openai-responses')
 
       // Clean up listeners
-      req.removeListener('close', handleClientDisconnect)
-      res.removeListener('close', handleClientDisconnect)
+      req.removeListener('aborted', handleClientDisconnect)
 
       if (!res.headersSent) {
         res.status(502).json({ error: { message: error?.message || 'Upstream stream error' } })
@@ -1282,7 +1300,7 @@ class OpenAIResponsesRelayService {
       }
     })
 
-    // Handle client disconnection
+    // Handle client disconnection. req.close is normal after POST body is read, so do not use it.
     const cleanup = () => {
       if (streamEnded) {
         return
@@ -1298,7 +1316,11 @@ class OpenAIResponsesRelayService {
       }
     }
 
-    req.on('close', cleanup)
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        cleanup()
+      }
+    })
     req.on('aborted', cleanup)
   }
 
@@ -1395,6 +1417,10 @@ class OpenAIResponsesRelayService {
     res.setHeader('Cache-Control', 'no-cache')
     res.setHeader('Connection', 'keep-alive')
     res.setHeader('X-Accel-Buffering', 'no')
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders()
+    }
+    writeOpenAIResponsesStreamKeepAlive(res, 'relay-start')
 
     const heartbeatIntervalMs = await getOpenAIResponsesStreamHeartbeatIntervalMs()
     const streamId = getChatCompletionsStreamId()
@@ -1430,13 +1456,7 @@ class OpenAIResponsesRelayService {
         return
       }
 
-      try {
-        res.write(': keep-alive\n\n')
-      } catch (heartbeatError) {
-        logger.warn(
-          'Failed to send OpenAI-Responses chat-compat heartbeat:',
-          heartbeatError.message
-        )
+      if (!writeOpenAIResponsesStreamKeepAlive(res)) {
         clearHeartbeat()
       }
     }
@@ -1674,8 +1694,7 @@ class OpenAIResponsesRelayService {
         logger.error('Failed to mark chat-compat stream rate limit:', error)
       }
 
-      req.removeListener('close', handleClientDisconnect)
-      res.removeListener('close', handleClientDisconnect)
+      req.removeListener('aborted', handleClientDisconnect)
 
       sendFinalChunk(usageData)
       sendDone()
@@ -1698,8 +1717,7 @@ class OpenAIResponsesRelayService {
       )
       recordStreamInterruption(redis, interruptionReason, 'openai-responses')
 
-      req.removeListener('close', handleClientDisconnect)
-      res.removeListener('close', handleClientDisconnect)
+      req.removeListener('aborted', handleClientDisconnect)
 
       if (!res.headersSent) {
         res.status(502).json({ error: { message: error?.message || 'Upstream stream error' } })
@@ -1731,7 +1749,11 @@ class OpenAIResponsesRelayService {
         //
       }
     }
-    req.on('close', cleanup)
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        cleanup()
+      }
+    })
     req.on('aborted', cleanup)
   }
 
