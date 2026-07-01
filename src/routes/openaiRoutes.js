@@ -1615,6 +1615,23 @@ const handleResponses = async (req, res) => {
         res.setHeader(key, val)
       }
     }
+    const upstreamRequestId =
+      upstream.headers?.['x-request-id'] ||
+      upstream.headers?.['x-openai-request-id'] ||
+      upstream.headers?.['openai-request-id'] ||
+      null
+
+    const getStreamDiagnosticMeta = () => ({
+      type: 'api',
+      requestId: req.requestId || 'unknown',
+      upstreamRequestId,
+      apiKeyId: apiKeyData?.id,
+      apiKeyName: apiKeyData?.name,
+      accountId,
+      accountType,
+      model: requestedModel,
+      requestContentLength: req.headers?.['content-length'] || null
+    })
 
     if (clientWantsStream) {
       // 立即刷新响应头，开始 SSE
@@ -1746,6 +1763,9 @@ const handleResponses = async (req, res) => {
     let heartbeatTimer = null
     let lastDataAt = Date.now()
     let streamFinalized = false
+    let streamCompleted = false
+    let streamErrorLogged = false
+    let streamBytesForwarded = 0
 
     const stopHeartbeat = () => {
       if (heartbeatTimer) {
@@ -1915,6 +1935,7 @@ const handleResponses = async (req, res) => {
 
             // 检查是否是 response.completed 事件
             if (eventData.type === 'response.completed' && eventData.response) {
+              streamCompleted = true
               // 从响应中获取真实的 model
               if (eventData.response.model) {
                 actualModel = eventData.response.model
@@ -1928,14 +1949,36 @@ const handleResponses = async (req, res) => {
               }
             }
 
-            // 检查是否有限流错误
-            if (eventData.error && eventData.error.type === 'usage_limit_reached') {
-              rateLimitDetected = true
-              if (eventData.error.resets_in_seconds) {
-                rateLimitResetsInSeconds = eventData.error.resets_in_seconds
+            if (eventData.error) {
+              if (!streamErrorLogged) {
+                streamErrorLogged = true
                 logger.warn(
-                  `🚫 Rate limit detected in stream, resets in ${rateLimitResetsInSeconds} seconds`
+                  `⚠️ [${req.requestId || 'unknown'}] OpenAI stream emitted error event: ${eventData.error.message || eventData.error.type || 'unknown'}`,
+                  {
+                    ...getStreamDiagnosticMeta(),
+                    upstreamEventType: eventData.type,
+                    upstreamErrorType: eventData.error.type,
+                    upstreamErrorCode: eventData.error.code,
+                    upstreamErrorParam: eventData.error.param
+                  }
                 )
+              }
+
+              // 检查是否有限流错误
+              if (eventData.error.type === 'usage_limit_reached') {
+                rateLimitDetected = true
+                if (eventData.error.resets_in_seconds) {
+                  rateLimitResetsInSeconds = eventData.error.resets_in_seconds
+                  logger.warn(
+                    `🚫 Rate limit detected in stream, resets in ${rateLimitResetsInSeconds} seconds`
+                  )
+                }
+              } else if (
+                eventData.error.type === 'rate_limit_error' ||
+                eventData.error.type === 'rate_limit_exceeded'
+              ) {
+                rateLimitDetected = true
+                logger.warn(`🚫 Rate limit detected in OpenAI stream: ${eventData.error.type}`)
               }
             }
           } catch (e) {
@@ -1956,6 +1999,7 @@ const handleResponses = async (req, res) => {
 
         // 转发数据给客户端
         if (!isChatCompletionsCompat && !res.destroyed) {
+          streamBytesForwarded += chunk.length
           res.write(chunk)
         }
 
@@ -1989,6 +2033,17 @@ const handleResponses = async (req, res) => {
       if (buffer.trim()) {
         parseSSEForUsage(buffer)
         forwardChatCompatEventBlock(buffer)
+      }
+      if (!streamCompleted && !streamErrorLogged) {
+        logger.warn(
+          `⚠️ [${req.requestId || 'unknown'}] OpenAI stream ended without response.completed`,
+          {
+            ...getStreamDiagnosticMeta(),
+            streamBytesForwarded,
+            bufferedBytes: Buffer.byteLength(buffer),
+            lastDataAgeMs: Date.now() - lastDataAt
+          }
+        )
       }
 
       // 记录使用统计
@@ -2074,7 +2129,10 @@ const handleResponses = async (req, res) => {
       }
       streamFinalized = true
 
-      logger.error('Upstream stream error:', err)
+      logger.error('Upstream stream error:', {
+        ...getStreamDiagnosticMeta(),
+        error: logger.sanitizeAxiosError(err)
+      })
       stopHeartbeat()
 
       const interruptionReason = resolveStreamInterruptionReasonFromError(
@@ -2115,6 +2173,11 @@ const handleResponses = async (req, res) => {
 
       stopHeartbeat()
       recordStreamInterruption(redis, STREAM_INTERRUPTION_REASONS.CLIENT_ABORT, 'openai')
+      logger.warn(`⚠️ [${req.requestId || 'unknown'}] OpenAI stream client aborted`, {
+        ...getStreamDiagnosticMeta(),
+        streamBytesForwarded,
+        lastDataAgeMs: Date.now() - lastDataAt
+      })
 
       try {
         upstream.data?.unpipe?.(res)
