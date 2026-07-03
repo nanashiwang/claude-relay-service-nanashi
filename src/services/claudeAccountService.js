@@ -74,6 +74,354 @@ class ClaudeAccountService {
     return Math.max(parsedValue, 0)
   }
 
+  _isOpusModel(model) {
+    return typeof model === 'string' && model.toLowerCase().includes('opus')
+  }
+
+  _getClaudeRateLimitBuckets(accountData = {}) {
+    const rawBuckets = accountData.claudeRateLimitBuckets
+    if (!rawBuckets) {
+      return {}
+    }
+
+    if (typeof rawBuckets === 'object') {
+      return { ...rawBuckets }
+    }
+
+    try {
+      const parsed = JSON.parse(rawBuckets)
+      return parsed && typeof parsed === 'object' ? parsed : {}
+    } catch (error) {
+      logger.warn('⚠️ Failed to parse Claude rate limit buckets:', error.message)
+      return {}
+    }
+  }
+
+  _getRateLimitBucketForModel(model) {
+    return this._isOpusModel(model) ? 'weekly_opus' : 'weekly_non_opus'
+  }
+
+  _getHeaderCaseInsensitive(headers, headerName) {
+    if (!headers || !headerName) {
+      return null
+    }
+
+    const target = headerName.toLowerCase()
+    for (const [key, value] of Object.entries(headers)) {
+      if (String(key).toLowerCase() === target) {
+        return Array.isArray(value) ? value[0] : value
+      }
+    }
+    return null
+  }
+
+  _isRejectedRateLimitStatus(status) {
+    if (!status) {
+      return false
+    }
+
+    const normalized = String(status)
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_')
+    const allowedStatuses = new Set([
+      'ok',
+      'allowed',
+      'allow',
+      'available',
+      'normal',
+      'within_limit',
+      'within_limits',
+      'not_limited',
+      'not_rate_limited',
+      'unlimited',
+      'warning',
+      'warn',
+      'near_limit'
+    ])
+    if (allowedStatuses.has(normalized)) {
+      return false
+    }
+
+    return (
+      normalized === 'limited' ||
+      normalized === 'rate_limited' ||
+      normalized === 'over_limit' ||
+      normalized.includes('reject') ||
+      normalized.includes('blocked') ||
+      normalized.includes('exceed') ||
+      normalized.includes('exhaust')
+    )
+  }
+
+  _toUnixSeconds(value) {
+    if (value === undefined || value === null || value === '') {
+      return null
+    }
+
+    const numericValue = Number(value)
+    if (Number.isFinite(numericValue)) {
+      return numericValue > 10_000_000_000
+        ? Math.floor(numericValue / 1000)
+        : Math.floor(numericValue)
+    }
+
+    const parsedMs = Date.parse(value)
+    if (Number.isNaN(parsedMs)) {
+      return null
+    }
+    return Math.floor(parsedMs / 1000)
+  }
+
+  _isSameResetTime(left, right, toleranceSeconds = 120) {
+    const leftSeconds = this._toUnixSeconds(left)
+    const rightSeconds = this._toUnixSeconds(right)
+    if (leftSeconds === null || rightSeconds === null) {
+      return false
+    }
+    return Math.abs(leftSeconds - rightSeconds) <= toleranceSeconds
+  }
+
+  _getResetMatchedRateLimitBucket(resetAt, accountData = {}, requestedModel = null) {
+    if (!resetAt || !accountData) {
+      return null
+    }
+
+    if (this._isSameResetTime(resetAt, accountData.claudeFiveHourResetsAt)) {
+      return 'five_hour'
+    }
+
+    const matchesNonOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayResetsAt)
+    const matchesOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayOpusResetsAt)
+
+    if (matchesNonOpusWeekly && matchesOpusWeekly) {
+      return this._getRateLimitBucketForModel(requestedModel)
+    }
+
+    if (matchesOpusWeekly) {
+      return 'weekly_opus'
+    }
+
+    if (matchesNonOpusWeekly) {
+      return 'weekly_non_opus'
+    }
+
+    return null
+  }
+
+  _inferWeeklyBucketFromUsage(accountData = {}) {
+    const sevenDayUtilization = this._toNumberOrNull(accountData.claudeSevenDayUtilization)
+    const opusUtilization = this._toNumberOrNull(accountData.claudeSevenDayOpusUtilization)
+
+    if (sevenDayUtilization !== null && opusUtilization !== null) {
+      if (sevenDayUtilization >= opusUtilization + 10) {
+        return 'weekly_non_opus'
+      }
+      if (opusUtilization >= sevenDayUtilization + 10) {
+        return 'weekly_opus'
+      }
+    }
+
+    return null
+  }
+
+  classifyClaudeRateLimitBucket({
+    requestedModel = null,
+    headers = {},
+    rateLimitResetTimestamp = null,
+    accountData = {}
+  } = {}) {
+    const fiveHourStatus = this._getHeaderCaseInsensitive(
+      headers,
+      'anthropic-ratelimit-unified-5h-status'
+    )
+    const sevenDayStatus = this._getHeaderCaseInsensitive(
+      headers,
+      'anthropic-ratelimit-unified-7d-status'
+    )
+    const representativeClaim = this._getHeaderCaseInsensitive(
+      headers,
+      'anthropic-ratelimit-unified-representative-claim'
+    )
+
+    if (this._isRejectedRateLimitStatus(fiveHourStatus)) {
+      return 'five_hour'
+    }
+
+    if (this._isRejectedRateLimitStatus(sevenDayStatus)) {
+      return this._getRateLimitBucketForModel(requestedModel)
+    }
+
+    if (representativeClaim) {
+      const normalizedClaim = String(representativeClaim)
+        .toLowerCase()
+        .replace(/[\s-]+/g, '_')
+      if (normalizedClaim.includes('five_hour') || normalizedClaim.includes('5h')) {
+        return 'five_hour'
+      }
+      if (normalizedClaim.includes('opus')) {
+        return 'weekly_opus'
+      }
+      if (
+        normalizedClaim.includes('sonnet') ||
+        normalizedClaim.includes('fable') ||
+        normalizedClaim.includes('non_opus')
+      ) {
+        return 'weekly_non_opus'
+      }
+      if (
+        normalizedClaim.includes('seven_day') ||
+        normalizedClaim.includes('7d') ||
+        normalizedClaim.includes('weekly')
+      ) {
+        return this._getRateLimitBucketForModel(requestedModel)
+      }
+    }
+
+    const resetSeconds = this._toUnixSeconds(rateLimitResetTimestamp)
+    if (resetSeconds !== null) {
+      const resetAt = new Date(resetSeconds * 1000).toISOString()
+      const resetMatchedBucket = this._getResetMatchedRateLimitBucket(
+        resetAt,
+        accountData,
+        requestedModel
+      )
+      if (resetMatchedBucket) {
+        return resetMatchedBucket
+      }
+
+      const secondsUntilReset = resetSeconds - Math.floor(Date.now() / 1000)
+      if (secondsUntilReset > 0 && secondsUntilReset <= 6 * 60 * 60) {
+        return 'five_hour'
+      }
+      return this._getRateLimitBucketForModel(requestedModel)
+    }
+
+    return null
+  }
+
+  _getBucketResetAt(bucketInfo) {
+    if (!bucketInfo || typeof bucketInfo !== 'object') {
+      return null
+    }
+    return bucketInfo.resetAt || bucketInfo.rateLimitEndAt || bucketInfo.endAt || null
+  }
+
+  _isBucketActive(bucketInfo) {
+    const resetAt = this._getBucketResetAt(bucketInfo)
+    if (!resetAt) {
+      return false
+    }
+
+    const resetMs = Date.parse(resetAt)
+    if (Number.isNaN(resetMs)) {
+      return false
+    }
+
+    return Date.now() < resetMs
+  }
+
+  _bucketLabel(bucket) {
+    const labels = {
+      five_hour: '5-hour',
+      weekly_opus: 'Opus weekly',
+      weekly_non_opus: 'non-Opus weekly'
+    }
+    return labels[bucket] || bucket
+  }
+
+  _inferLegacyRateLimitBucket(accountData = {}) {
+    if (
+      accountData.rateLimitStatus !== 'limited' &&
+      accountData.rateLimitAutoStopped !== 'true' &&
+      !accountData.rateLimitEndAt
+    ) {
+      return null
+    }
+
+    const resetAt = accountData.rateLimitEndAt
+    if (!resetAt) {
+      return null
+    }
+
+    const resetSeconds = this._toUnixSeconds(resetAt)
+    if (resetSeconds === null) {
+      return null
+    }
+
+    const secondsUntilReset = resetSeconds - Math.floor(Date.now() / 1000)
+    if (this._isSameResetTime(resetAt, accountData.claudeFiveHourResetsAt)) {
+      return 'five_hour'
+    }
+
+    const matchesNonOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayResetsAt)
+    const matchesOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayOpusResetsAt)
+
+    if (matchesNonOpusWeekly && !matchesOpusWeekly) {
+      return 'weekly_non_opus'
+    }
+    if (matchesOpusWeekly && !matchesNonOpusWeekly) {
+      return 'weekly_opus'
+    }
+    if (matchesNonOpusWeekly && matchesOpusWeekly) {
+      return this._inferWeeklyBucketFromUsage(accountData)
+    }
+
+    if (secondsUntilReset > 0 && secondsUntilReset <= 6 * 60 * 60) {
+      return 'five_hour'
+    }
+
+    if (secondsUntilReset > 6 * 60 * 60) {
+      return this._inferWeeklyBucketFromUsage(accountData)
+    }
+
+    return null
+  }
+
+  _applyRateLimitBucket(accountData, bucket, resetAt, metadata = {}) {
+    const buckets = this._getClaudeRateLimitBuckets(accountData)
+    buckets[bucket] = {
+      bucket,
+      resetAt,
+      rateLimitedAt: metadata.rateLimitedAt || new Date().toISOString(),
+      requestedModel: metadata.requestedModel || null,
+      source: metadata.source || 'upstream_429'
+    }
+
+    accountData.claudeRateLimitBuckets = JSON.stringify(buckets)
+
+    if (bucket === 'weekly_opus') {
+      accountData.opusRateLimitedAt = buckets[bucket].rateLimitedAt
+      accountData.opusRateLimitEndAt = resetAt
+    }
+
+    return accountData
+  }
+
+  async _persistRateLimitBuckets(accountId, accountData, buckets) {
+    const redisKey = `claude:account:${accountId}`
+    const activeBuckets = {}
+
+    for (const [bucket, info] of Object.entries(buckets || {})) {
+      if (this._isBucketActive(info)) {
+        activeBuckets[bucket] = info
+      }
+    }
+
+    if (Object.keys(activeBuckets).length === 0) {
+      delete accountData.claudeRateLimitBuckets
+      await redis.setClaudeAccount(accountId, accountData)
+      if (redis.client && typeof redis.client.hdel === 'function') {
+        await redis.client.hdel(redisKey, 'claudeRateLimitBuckets')
+      }
+      return accountData
+    }
+
+    accountData.claudeRateLimitBuckets = JSON.stringify(activeBuckets)
+    await redis.setClaudeAccount(accountId, accountData)
+    return accountData
+  }
+
   _isTransientTokenRefreshError(error) {
     const statusCode = error.response?.status || error.status || error.statusCode
     if (statusCode === 408 || statusCode === 429 || statusCode >= 500) {
@@ -1493,6 +1841,200 @@ class ClaudeAccountService {
     }
   }
 
+  // 🚦 标记 Claude 官方账号的模型额度桶，不再把整个账号停调度
+  async markAccountModelRateLimited(
+    accountId,
+    bucket,
+    rateLimitResetTimestamp = null,
+    metadata = {}
+  ) {
+    try {
+      const accountData = await redis.getClaudeAccount(accountId)
+      if (!accountData || Object.keys(accountData).length === 0) {
+        throw new Error('Account not found')
+      }
+
+      const rateLimitDuration = this._getClaudeRateLimitDuration(accountData)
+      if (rateLimitDuration === 0) {
+        logger.info(
+          `⏭️ Account ${accountData.name} (${accountId}) has 429 auto cooldown disabled, skipping ${this._bucketLabel(bucket)} bucket update`
+        )
+        return { success: true, skipped: true }
+      }
+
+      const resetSeconds = this._toUnixSeconds(rateLimitResetTimestamp)
+      if (resetSeconds === null) {
+        logger.warn(
+          `⚠️ ${this._bucketLabel(bucket)} rate limit for account ${accountData.name} (${accountId}) has no reset timestamp, skipping bucket mark`
+        )
+        return { success: true, skipped: true }
+      }
+
+      const resetAt = new Date(resetSeconds * 1000).toISOString()
+      const updatedAccountData = this._applyRateLimitBucket(
+        { ...accountData },
+        bucket,
+        resetAt,
+        metadata
+      )
+
+      await redis.setClaudeAccount(accountId, updatedAccountData)
+
+      logger.warn(
+        `🚫 Account ${accountData.name} (${accountId}) hit ${this._bucketLabel(bucket)} limit, resets at ${resetAt}`
+      )
+
+      return { success: true, bucket, resetAt }
+    } catch (error) {
+      logger.error(`❌ Failed to mark Claude model rate limit for account: ${accountId}`, error)
+      throw error
+    }
+  }
+
+  async clearAccountModelRateLimit(accountId, bucket) {
+    try {
+      const accountData = await redis.getClaudeAccount(accountId)
+      if (!accountData || Object.keys(accountData).length === 0) {
+        return { success: true }
+      }
+
+      const buckets = this._getClaudeRateLimitBuckets(accountData)
+      delete buckets[bucket]
+
+      if (bucket === 'weekly_opus') {
+        delete accountData.opusRateLimitedAt
+        delete accountData.opusRateLimitEndAt
+        if (redis.client && typeof redis.client.hdel === 'function') {
+          await redis.client.hdel(
+            `claude:account:${accountId}`,
+            'opusRateLimitedAt',
+            'opusRateLimitEndAt'
+          )
+        }
+      }
+
+      await this._persistRateLimitBuckets(accountId, accountData, buckets)
+      logger.info(
+        `✅ Cleared ${this._bucketLabel(bucket)} rate limit state for account ${accountId}`
+      )
+      return { success: true }
+    } catch (error) {
+      logger.error(`❌ Failed to clear Claude model rate limit for account: ${accountId}`, error)
+      throw error
+    }
+  }
+
+  async clearExpiredModelRateLimits(accountId, accountData = null) {
+    try {
+      const currentAccount = accountData || (await redis.getClaudeAccount(accountId))
+      if (!currentAccount || Object.keys(currentAccount).length === 0) {
+        return { success: true, cleared: [], accountData: currentAccount }
+      }
+
+      const buckets = this._getClaudeRateLimitBuckets(currentAccount)
+      const cleared = []
+      for (const [bucket, info] of Object.entries(buckets)) {
+        if (!this._isBucketActive(info)) {
+          delete buckets[bucket]
+          cleared.push(bucket)
+        }
+      }
+
+      if (cleared.includes('weekly_opus')) {
+        delete currentAccount.opusRateLimitedAt
+        delete currentAccount.opusRateLimitEndAt
+        if (redis.client && typeof redis.client.hdel === 'function') {
+          await redis.client.hdel(
+            `claude:account:${accountId}`,
+            'opusRateLimitedAt',
+            'opusRateLimitEndAt'
+          )
+        }
+      }
+
+      if (cleared.length > 0) {
+        const updatedAccountData = await this._persistRateLimitBuckets(
+          accountId,
+          currentAccount,
+          buckets
+        )
+        logger.info(
+          `✅ Cleared expired Claude rate limit buckets for account ${accountId}: ${cleared.join(', ')}`
+        )
+        return { success: true, cleared, accountData: updatedAccountData }
+      }
+
+      return { success: true, cleared, accountData: currentAccount }
+    } catch (error) {
+      logger.error(
+        `❌ Failed to clear expired Claude model rate limits for account: ${accountId}`,
+        error
+      )
+      return { success: false, cleared: [], error: error.message, accountData }
+    }
+  }
+
+  async migrateLegacyRateLimitToBucketIfPossible(accountId, accountData = null) {
+    const currentAccount = accountData || (await redis.getClaudeAccount(accountId))
+    if (!currentAccount || Object.keys(currentAccount).length === 0) {
+      return { migrated: false, accountData: currentAccount }
+    }
+
+    const bucket = this._inferLegacyRateLimitBucket(currentAccount)
+    if (!bucket) {
+      return { migrated: false, accountData: currentAccount }
+    }
+
+    const resetSeconds = this._toUnixSeconds(currentAccount.rateLimitEndAt)
+    if (resetSeconds === null) {
+      return { migrated: false, accountData: currentAccount }
+    }
+
+    const resetAt = new Date(resetSeconds * 1000).toISOString()
+    const updatedAccountData = this._applyRateLimitBucket({ ...currentAccount }, bucket, resetAt, {
+      source: 'legacy_global_rate_limit',
+      rateLimitedAt: currentAccount.rateLimitedAt || new Date().toISOString()
+    })
+
+    const hadAutoStop = updatedAccountData.rateLimitAutoStopped === 'true'
+    delete updatedAccountData.rateLimitedAt
+    delete updatedAccountData.rateLimitStatus
+    delete updatedAccountData.rateLimitEndAt
+    delete updatedAccountData.rateLimitAutoStopped
+
+    if (bucket !== 'five_hour') {
+      delete updatedAccountData.sessionWindowStart
+      delete updatedAccountData.sessionWindowEnd
+    } else {
+      updatedAccountData.sessionWindowEnd = resetAt
+    }
+
+    if (hadAutoStop && updatedAccountData.schedulable === 'false') {
+      updatedAccountData.schedulable = 'true'
+    }
+
+    await redis.setClaudeAccount(accountId, updatedAccountData)
+
+    if (redis.client && typeof redis.client.hdel === 'function') {
+      const fieldsToRemove = [
+        'rateLimitedAt',
+        'rateLimitStatus',
+        'rateLimitEndAt',
+        'rateLimitAutoStopped'
+      ]
+      if (bucket !== 'five_hour') {
+        fieldsToRemove.push('sessionWindowStart', 'sessionWindowEnd')
+      }
+      await redis.client.hdel(`claude:account:${accountId}`, ...fieldsToRemove)
+    }
+
+    logger.info(
+      `✅ Migrated legacy global rate limit for account ${accountId} to ${this._bucketLabel(bucket)} bucket`
+    )
+
+    return { migrated: true, bucket, accountData: updatedAccountData }
+  }
+
   // 🚫 标记账号的 Opus 限流状态（不影响其他模型调度）
   async markAccountOpusRateLimited(accountId, rateLimitResetTimestamp = null) {
     try {
@@ -1501,25 +2043,15 @@ class ClaudeAccountService {
         throw new Error('Account not found')
       }
 
-      const updatedAccountData = { ...accountData }
-      const now = new Date()
-      updatedAccountData.opusRateLimitedAt = now.toISOString()
-
-      if (rateLimitResetTimestamp) {
-        const resetTime = new Date(rateLimitResetTimestamp * 1000)
-        updatedAccountData.opusRateLimitEndAt = resetTime.toISOString()
-        logger.warn(
-          `🚫 Account ${accountData.name} (${accountId}) reached Opus weekly cap, resets at ${resetTime.toISOString()}`
-        )
-      } else {
-        // 如果缺少准确时间戳，保留现有值但记录警告，便于后续人工干预
-        logger.warn(
-          `⚠️ Account ${accountData.name} (${accountId}) reported Opus limit without reset timestamp`
-        )
-      }
-
-      await redis.setClaudeAccount(accountId, updatedAccountData)
-      return { success: true }
+      return await this.markAccountModelRateLimited(
+        accountId,
+        'weekly_opus',
+        rateLimitResetTimestamp,
+        {
+          requestedModel: 'opus',
+          source: 'opus_429'
+        }
+      )
     } catch (error) {
       logger.error(`❌ Failed to mark Opus rate limit for account: ${accountId}`, error)
       throw error
@@ -1537,12 +2069,24 @@ class ClaudeAccountService {
       const updatedAccountData = { ...accountData }
       delete updatedAccountData.opusRateLimitedAt
       delete updatedAccountData.opusRateLimitEndAt
+      const buckets = this._getClaudeRateLimitBuckets(updatedAccountData)
+      delete buckets.weekly_opus
+      if (Object.keys(buckets).length > 0) {
+        updatedAccountData.claudeRateLimitBuckets = JSON.stringify(buckets)
+      } else {
+        delete updatedAccountData.claudeRateLimitBuckets
+      }
 
       await redis.setClaudeAccount(accountId, updatedAccountData)
 
       const redisKey = `claude:account:${accountId}`
       if (redis.client && typeof redis.client.hdel === 'function') {
-        await redis.client.hdel(redisKey, 'opusRateLimitedAt', 'opusRateLimitEndAt')
+        await redis.client.hdel(
+          redisKey,
+          'opusRateLimitedAt',
+          'opusRateLimitEndAt',
+          ...(Object.keys(buckets).length > 0 ? [] : ['claudeRateLimitBuckets'])
+        )
       }
 
       logger.info(`✅ Cleared Opus rate limit state for account ${accountId}`)
@@ -1561,23 +2105,27 @@ class ClaudeAccountService {
         return false
       }
 
-      if (!accountData.opusRateLimitEndAt) {
+      const buckets = this._getClaudeRateLimitBuckets(accountData)
+      if (this._isBucketActive(buckets.weekly_opus)) {
+        return true
+      }
+
+      if (buckets.weekly_opus && !this._isBucketActive(buckets.weekly_opus)) {
+        await this.clearAccountModelRateLimit(accountId, 'weekly_opus')
         return false
       }
 
-      const resetTime = new Date(accountData.opusRateLimitEndAt)
-      if (Number.isNaN(resetTime.getTime())) {
-        await this.clearAccountOpusRateLimit(accountId)
-        return false
+      if (accountData.opusRateLimitEndAt) {
+        const resetTime = new Date(accountData.opusRateLimitEndAt)
+        if (Number.isNaN(resetTime.getTime()) || new Date() >= resetTime) {
+          await this.clearAccountOpusRateLimit(accountId)
+          return false
+        }
+
+        return true
       }
 
-      const now = new Date()
-      if (now >= resetTime) {
-        await this.clearAccountOpusRateLimit(accountId)
-        return false
-      }
-
-      return true
+      return false
     } catch (error) {
       logger.error(`❌ Failed to check Opus rate limit status for account: ${accountId}`, error)
       return false
@@ -1592,12 +2140,14 @@ class ClaudeAccountService {
         return { success: true }
       }
 
-      if (!accountData.opusRateLimitEndAt) {
-        return { success: true }
-      }
-
-      const resetTime = new Date(accountData.opusRateLimitEndAt)
-      if (Number.isNaN(resetTime.getTime()) || new Date() >= resetTime) {
+      const buckets = this._getClaudeRateLimitBuckets(accountData)
+      if (buckets.weekly_opus && !this._isBucketActive(buckets.weekly_opus)) {
+        await this.clearAccountModelRateLimit(accountId, 'weekly_opus')
+      } else if (accountData.opusRateLimitEndAt) {
+        const resetTime = new Date(accountData.opusRateLimitEndAt)
+        if (!Number.isNaN(resetTime.getTime()) && new Date() < resetTime) {
+          return { success: true }
+        }
         await this.clearAccountOpusRateLimit(accountId)
       }
 
@@ -1605,6 +2155,84 @@ class ClaudeAccountService {
     } catch (error) {
       logger.error(`❌ Failed to clear expired Opus rate limit for account: ${accountId}`, error)
       throw error
+    }
+  }
+
+  async isAccountRateLimitedForModel(accountId, requestedModel = null) {
+    try {
+      let accountData = await redis.getClaudeAccount(accountId)
+      if (!accountData || Object.keys(accountData).length === 0) {
+        return false
+      }
+
+      const migrationResult = await this.migrateLegacyRateLimitToBucketIfPossible(
+        accountId,
+        accountData
+      )
+      accountData = migrationResult.accountData || accountData
+
+      const cleanupResult = await this.clearExpiredModelRateLimits(accountId, accountData)
+      accountData = cleanupResult.accountData || accountData
+      if (!accountData || Object.keys(accountData).length === 0) {
+        return false
+      }
+
+      const buckets = this._getClaudeRateLimitBuckets(accountData)
+      if (this._isBucketActive(buckets.five_hour)) {
+        return true
+      }
+
+      const modelBucket = this._getRateLimitBucketForModel(requestedModel)
+      if (this._isBucketActive(buckets[modelBucket])) {
+        return true
+      }
+
+      return await this.isAccountRateLimited(accountId)
+    } catch (error) {
+      logger.error(`❌ Failed to check model rate limit status for account: ${accountId}`, error)
+      return false
+    }
+  }
+
+  async getAccountRateLimitInfoForModel(accountId, requestedModel = null) {
+    try {
+      let accountData = await redis.getClaudeAccount(accountId)
+      if (!accountData || Object.keys(accountData).length === 0) {
+        return null
+      }
+
+      const migrationResult = await this.migrateLegacyRateLimitToBucketIfPossible(
+        accountId,
+        accountData
+      )
+      accountData = migrationResult.accountData || accountData
+
+      const buckets = this._getClaudeRateLimitBuckets(accountData)
+      const candidateBuckets = ['five_hour', this._getRateLimitBucketForModel(requestedModel)]
+
+      for (const bucket of candidateBuckets) {
+        const bucketInfo = buckets[bucket]
+        if (this._isBucketActive(bucketInfo)) {
+          const resetAt = this._getBucketResetAt(bucketInfo)
+          const minutesRemaining = Math.max(
+            0,
+            Math.ceil((new Date(resetAt).getTime() - Date.now()) / (1000 * 60))
+          )
+
+          return {
+            isRateLimited: true,
+            bucket,
+            rateLimitedAt: bucketInfo.rateLimitedAt || null,
+            rateLimitEndAt: resetAt,
+            minutesRemaining
+          }
+        }
+      }
+
+      return await this.getAccountRateLimitInfo(accountId)
+    } catch (error) {
+      logger.error(`❌ Failed to get model rate limit info for account: ${accountId}`, error)
+      return null
     }
   }
 
@@ -2545,6 +3173,9 @@ class ClaudeAccountService {
       delete updatedAccountData.rateLimitedAt
       delete updatedAccountData.rateLimitStatus
       delete updatedAccountData.rateLimitEndAt
+      delete updatedAccountData.claudeRateLimitBuckets
+      delete updatedAccountData.opusRateLimitedAt
+      delete updatedAccountData.opusRateLimitEndAt
       delete updatedAccountData.tempErrorAt
       delete updatedAccountData.sessionWindowStart
       delete updatedAccountData.sessionWindowEnd
@@ -2560,6 +3191,9 @@ class ClaudeAccountService {
         'rateLimitedAt',
         'rateLimitStatus',
         'rateLimitEndAt',
+        'claudeRateLimitBuckets',
+        'opusRateLimitedAt',
+        'opusRateLimitEndAt',
         'tempErrorAt',
         'sessionWindowStart',
         'sessionWindowEnd',

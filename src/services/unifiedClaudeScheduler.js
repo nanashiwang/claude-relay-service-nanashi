@@ -50,6 +50,29 @@ class UnifiedClaudeScheduler {
     return schedulable !== false && schedulable !== 'false'
   }
 
+  async _checkClaudeOfficialSchedulingState(account, requestedModel = null) {
+    const accountId = account?.id || account?.accountId
+    if (!accountId) {
+      return { canUse: false, reason: 'missing_account_id', account }
+    }
+
+    const isModelRateLimited = await claudeAccountService.isAccountRateLimitedForModel(
+      accountId,
+      requestedModel
+    )
+    const latestAccount = (await redis.getClaudeAccount(accountId)) || account
+
+    if (isModelRateLimited) {
+      return { canUse: false, reason: 'rate_limited', account: latestAccount }
+    }
+
+    if (!this._isSchedulable(latestAccount.schedulable)) {
+      return { canUse: false, reason: 'not_schedulable', account: latestAccount }
+    }
+
+    return { canUse: true, account: latestAccount }
+  }
+
   // 🔍 检查账户是否支持请求的模型
   _isModelSupportedByAccount(account, accountType, requestedModel, context = '') {
     if (!requestedModel) {
@@ -279,26 +302,34 @@ class UnifiedClaudeScheduler {
               `⏱️ Bound Claude OAuth account ${boundAccount.id} is temporarily unavailable, falling back to pool`
             )
           } else {
-            const isRateLimited = await claudeAccountService.isAccountRateLimited(boundAccount.id)
-            if (isRateLimited) {
-              const rateInfo = await claudeAccountService.getAccountRateLimitInfo(boundAccount.id)
+            const schedulingState = await this._checkClaudeOfficialSchedulingState(
+              boundAccount,
+              effectiveModel
+            )
+            const latestBoundAccount = schedulingState.account || boundAccount
+            if (schedulingState.reason === 'rate_limited') {
+              const rateInfo = await claudeAccountService.getAccountRateLimitInfoForModel(
+                boundAccount.id,
+                effectiveModel
+              )
               const error = new Error('Dedicated Claude account is rate limited')
               error.code = 'CLAUDE_DEDICATED_RATE_LIMITED'
               error.accountId = boundAccount.id
               error.rateLimitEndAt = rateInfo?.rateLimitEndAt || boundAccount.rateLimitEndAt || null
+              error.rateLimitBucket = rateInfo?.bucket || null
               throw error
             }
 
-            if (!this._isSchedulable(boundAccount.schedulable)) {
+            if (!schedulingState.canUse) {
               logger.warn(
-                `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${boundAccount?.schedulable}), falling back to pool`
+                `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${latestBoundAccount?.schedulable}), falling back to pool`
               )
             } else {
               if (isOpusRequest) {
                 await claudeAccountService.clearExpiredOpusRateLimit(boundAccount.id)
               }
               logger.info(
-                `🎯 Using bound dedicated Claude OAuth account: ${boundAccount.name} (${apiKeyData.claudeAccountId}) for API key ${apiKeyData.name}`
+                `🎯 Using bound dedicated Claude OAuth account: ${latestBoundAccount.name} (${apiKeyData.claudeAccountId}) for API key ${apiKeyData.name}`
               )
               return {
                 accountId: apiKeyData.claudeAccountId,
@@ -490,31 +521,39 @@ class UnifiedClaudeScheduler {
         boundAccount.status !== 'blocked' &&
         boundAccount.status !== 'temp_error'
       ) {
-        const isRateLimited = await claudeAccountService.isAccountRateLimited(boundAccount.id)
-        if (isRateLimited) {
-          const rateInfo = await claudeAccountService.getAccountRateLimitInfo(boundAccount.id)
+        const schedulingState = await this._checkClaudeOfficialSchedulingState(
+          boundAccount,
+          requestedModel
+        )
+        const latestBoundAccount = schedulingState.account || boundAccount
+        if (schedulingState.reason === 'rate_limited') {
+          const rateInfo = await claudeAccountService.getAccountRateLimitInfoForModel(
+            boundAccount.id,
+            requestedModel
+          )
           const error = new Error('Dedicated Claude account is rate limited')
           error.code = 'CLAUDE_DEDICATED_RATE_LIMITED'
           error.accountId = boundAccount.id
           error.rateLimitEndAt = rateInfo?.rateLimitEndAt || boundAccount.rateLimitEndAt || null
+          error.rateLimitBucket = rateInfo?.bucket || null
           throw error
         }
 
-        if (!this._isSchedulable(boundAccount.schedulable)) {
+        if (!schedulingState.canUse) {
           logger.warn(
-            `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${boundAccount?.schedulable})`
+            `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${latestBoundAccount?.schedulable})`
           )
         } else {
           logger.info(
-            `🎯 Using bound dedicated Claude OAuth account: ${boundAccount.name} (${apiKeyData.claudeAccountId})`
+            `🎯 Using bound dedicated Claude OAuth account: ${latestBoundAccount.name} (${apiKeyData.claudeAccountId})`
           )
           return [
             {
-              ...boundAccount,
-              accountId: boundAccount.id,
+              ...latestBoundAccount,
+              accountId: latestBoundAccount.id,
               accountType: 'claude-official',
-              priority: parseInt(boundAccount.priority) || 50,
-              lastUsedAt: boundAccount.lastUsedAt || '0'
+              priority: parseInt(latestBoundAccount.priority) || 50,
+              lastUsedAt: latestBoundAccount.lastUsedAt || '0'
             }
           ]
         }
@@ -612,8 +651,7 @@ class UnifiedClaudeScheduler {
         account.status !== 'error' &&
         account.status !== 'blocked' &&
         account.status !== 'temp_error' &&
-        (account.accountType === 'shared' || !account.accountType) && // 兼容旧数据
-        this._isSchedulable(account.schedulable)
+        (account.accountType === 'shared' || !account.accountType) // 兼容旧数据
       ) {
         // 检查是否可调度
 
@@ -634,11 +672,17 @@ class UnifiedClaudeScheduler {
           continue
         }
 
-        // 检查是否被限流
-        const isRateLimited = await claudeAccountService.isAccountRateLimited(account.id)
-        if (isRateLimited) {
+        const schedulingState = await this._checkClaudeOfficialSchedulingState(
+          account,
+          requestedModel
+        )
+        if (!schedulingState.canUse) {
+          logger.debug(
+            `⏭️ Skipping Claude Official account ${account.name} - ${schedulingState.reason}`
+          )
           continue
         }
+        const latestAccount = schedulingState.account || account
 
         if (isOpusRequest) {
           const isOpusRateLimited = await claudeAccountService.isAccountOpusRateLimited(account.id)
@@ -651,11 +695,11 @@ class UnifiedClaudeScheduler {
         }
 
         availableAccounts.push({
-          ...account,
-          accountId: account.id,
+          ...latestAccount,
+          accountId: latestAccount.id,
           accountType: 'claude-official',
-          priority: parseInt(account.priority) || 50, // 默认优先级50
-          lastUsedAt: account.lastUsedAt || '0'
+          priority: parseInt(latestAccount.priority) || 50, // 默认优先级50
+          lastUsedAt: latestAccount.lastUsedAt || '0'
         })
       }
     }
@@ -982,12 +1026,6 @@ class UnifiedClaudeScheduler {
         ) {
           return false
         }
-        // 检查是否可调度
-        if (!this._isSchedulable(account.schedulable)) {
-          logger.info(`🚫 Account ${accountId} is not schedulable`)
-          return false
-        }
-
         // 检查模型兼容性
         if (
           !this._isModelSupportedByAccount(
@@ -1000,10 +1038,18 @@ class UnifiedClaudeScheduler {
           return false
         }
 
-        // 检查是否限流或过载
-        const isRateLimited = await claudeAccountService.isAccountRateLimited(accountId)
+        const schedulingState = await this._checkClaudeOfficialSchedulingState(
+          account,
+          requestedModel
+        )
+        if (!schedulingState.canUse) {
+          logger.info(`🚫 Account ${accountId} skipped in session check: ${schedulingState.reason}`)
+          return false
+        }
+
+        // 检查是否过载
         const isOverloaded = await claudeAccountService.isAccountOverloaded(accountId)
-        if (isRateLimited || isOverloaded) {
+        if (isOverloaded) {
           return false
         }
 
@@ -1568,16 +1614,33 @@ class UnifiedClaudeScheduler {
               ? account.status === 'active'
               : account.status === 'active'
 
-        if (isActive && status && this._isSchedulable(account.schedulable)) {
+        const isSchedulableForGroup =
+          accountType === 'claude-official' || this._isSchedulable(account.schedulable)
+
+        if (isActive && status && isSchedulableForGroup) {
           // 检查模型支持
           if (!this._isModelSupportedByAccount(account, accountType, requestedModel, 'in group')) {
             continue
           }
 
           // 检查是否被限流
-          const isRateLimited = await this.isAccountRateLimited(account.id, accountType)
-          if (isRateLimited) {
-            continue
+          if (accountType === 'claude-official') {
+            const schedulingState = await this._checkClaudeOfficialSchedulingState(
+              account,
+              requestedModel
+            )
+            if (!schedulingState.canUse) {
+              logger.debug(
+                `⏭️ Skipping group member ${account.name} (${account.id}) - ${schedulingState.reason}`
+              )
+              continue
+            }
+            account = schedulingState.account || account
+          } else {
+            const isRateLimited = await this.isAccountRateLimited(account.id, accountType)
+            if (isRateLimited) {
+              continue
+            }
           }
 
           if (accountType === 'claude-official' && isOpusRequest) {
@@ -1791,10 +1854,10 @@ class UnifiedClaudeScheduler {
    * 注意：此方法仅用于 claude-official 类型账户，其他类型不受会话绑定限制
    * @param {string} accountId - 账户ID
    * @param {string} accountType - 账户类型（应为 'claude-official'）
-   * @param {string} _requestedModel - 请求的模型（保留参数，当前未使用）
+   * @param {string} requestedModel - 请求的模型，用于模型额度桶判断
    * @returns {Promise<boolean>}
    */
-  async _isAccountAvailableForSessionBinding(accountId, accountType, _requestedModel = null) {
+  async _isAccountAvailableForSessionBinding(accountId, accountType, requestedModel = null) {
     try {
       // 此方法仅处理 claude-official 类型
       if (accountType !== 'claude-official') {
@@ -1825,9 +1888,14 @@ class UnifiedClaudeScheduler {
         return false
       }
 
-      // 检查是否被限流
-      if (await claudeAccountService.isAccountRateLimited(accountId)) {
-        logger.warn(`Session binding: Claude OAuth account ${accountId} is rate limited`)
+      const schedulingState = await this._checkClaudeOfficialSchedulingState(
+        account,
+        requestedModel
+      )
+      if (!schedulingState.canUse) {
+        logger.warn(
+          `Session binding: Claude OAuth account ${accountId} unavailable: ${schedulingState.reason}`
+        )
         return false
       }
 

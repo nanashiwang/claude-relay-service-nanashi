@@ -217,6 +217,23 @@ class RateLimitCleanupService {
       const accounts = await redis.getAllClaudeAccounts()
 
       for (const account of accounts) {
+        try {
+          const bucketResult = await claudeAccountService.clearExpiredModelRateLimits(account.id)
+          if (bucketResult?.cleared?.length > 0) {
+            result.checked++
+            result.cleared++
+            logger.info(
+              `🧹 Auto-cleared expired Claude model rate-limit buckets for ${account.name} (${account.id}): ${bucketResult.cleared.join(', ')}`
+            )
+          }
+        } catch (error) {
+          result.errors.push({
+            accountId: account.id,
+            accountName: account.name,
+            error: error.message
+          })
+        }
+
         // 检查是否处于限流状态（兼容对象和字符串格式）
         const isRateLimited =
           account.rateLimitStatus === 'limited' ||

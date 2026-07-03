@@ -39,6 +39,15 @@ function loadRelayService() {
     clearExpiredOpusRateLimit: jest.fn(async () => undefined),
     isAccountOpusRateLimited: jest.fn(async () => false),
     markAccountOpusRateLimited: jest.fn(async () => undefined),
+    markAccountModelRateLimited: jest.fn(async () => undefined),
+    classifyClaudeRateLimitBucket: jest.fn(({ requestedModel, rateLimitResetTimestamp }) => {
+      if (!rateLimitResetTimestamp) {
+        return null
+      }
+      return requestedModel && requestedModel.toLowerCase().includes('opus')
+        ? 'weekly_opus'
+        : 'weekly_non_opus'
+    }),
     updateSessionWindowStatus: jest.fn(async () => undefined),
     clearInternalErrors: jest.fn(async () => undefined),
     isAccountOverloaded: jest.fn(async () => false),
@@ -94,7 +103,9 @@ function loadRelayService() {
   jest.doMock('../src/services/claudeCodeHeadersService', () => ({
     storeAccountHeaders: jest.fn(async () => undefined)
   }))
-  jest.doMock('../src/models/redis', () => ({}))
+  jest.doMock('../src/models/redis', () => ({
+    getClaudeAccount: jest.fn(async () => ({ id: 'acc-1', name: 'Account 1' }))
+  }))
   jest.doMock('../src/services/requestIdentityService', () => ({}))
   jest.doMock('../src/utils/metadataUserIdHelper', () => ({}))
   jest.doMock('../src/utils/proxyHelper', () => ({
@@ -169,8 +180,8 @@ describe('ClaudeRelayService transient 429 handling', () => {
     expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
   })
 
-  it('still rewrites a dedicated-account 429 when Anthropic provides a reset header', async () => {
-    const { service, unifiedClaudeScheduler } = loadRelayService()
+  it('marks a non-Opus weekly bucket instead of globally stopping the account', async () => {
+    const { service, claudeAccountService, unifiedClaudeScheduler } = loadRelayService()
     service._makeClaudeRequest = jest.fn(async () => ({
       statusCode: 429,
       headers: {
@@ -189,15 +200,50 @@ describe('ClaudeRelayService transient 429 handling', () => {
 
     expect(response.statusCode).toBe(403)
     expect(JSON.parse(response.body)).toEqual({
-      error: 'upstream_rate_limited',
-      message: '此专属账号已触发 Anthropic 限流控制，将于 reset-1800000000 自动恢复。'
+      error: 'non_opus_weekly_limit',
+      message:
+        '此专属账号的非 Opus 模型周额度已达到限制，将于 reset-1800000000 自动恢复；如 Opus 额度仍可用，可切换 Opus 模型继续。'
     })
-    expect(unifiedClaudeScheduler.markAccountRateLimited).toHaveBeenCalledWith(
+    expect(claudeAccountService.markAccountModelRateLimited).toHaveBeenCalledWith(
       'acc-1',
-      'claude-official',
-      'session-1',
-      1800000000
+      'weekly_non_opus',
+      1800000000,
+      expect.objectContaining({ requestedModel: 'claude-sonnet-4' })
     )
+    expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
+  })
+
+  it('marks an Opus weekly bucket without globally stopping the account', async () => {
+    const { service, claudeAccountService, unifiedClaudeScheduler } = loadRelayService()
+    service._makeClaudeRequest = jest.fn(async () => ({
+      statusCode: 429,
+      headers: {
+        'anthropic-ratelimit-unified-reset': '1800000000'
+      },
+      body: JSON.stringify({ error: { message: 'rate limited' } })
+    }))
+
+    const response = await service.relayRequest(
+      { model: 'claude-opus-4-8', messages: [] },
+      makeDedicatedApiKey(),
+      null,
+      null,
+      {}
+    )
+
+    expect(response.statusCode).toBe(403)
+    expect(JSON.parse(response.body)).toEqual({
+      error: 'opus_weekly_limit',
+      message:
+        '此专属账号的Opus模型已达到周使用限制，将于 reset-1800000000 自动恢复，请尝试切换其他模型后再试。'
+    })
+    expect(claudeAccountService.markAccountModelRateLimited).toHaveBeenCalledWith(
+      'acc-1',
+      'weekly_opus',
+      1800000000,
+      expect.objectContaining({ requestedModel: 'claude-opus-4-8' })
+    )
+    expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
   })
 
   it('does not mark an account rate-limited when a stream reports rate limit without reset header', async () => {

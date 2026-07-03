@@ -126,6 +126,147 @@ describe('ClaudeAccountService transient 429 handling', () => {
     expect(getAccount().rateLimitAutoStopped).toBe('true')
   })
 
+  it('stores model bucket rate limits without disabling the whole account', async () => {
+    const { service, getAccount } = loadService()
+    const resetTimestamp = Math.floor(Date.now() / 1000) + 7 * 24 * 3600
+
+    await service.markAccountModelRateLimited('acc-1', 'weekly_non_opus', resetTimestamp, {
+      requestedModel: 'claude-fable-5'
+    })
+
+    const account = getAccount()
+    expect(account.schedulable).toBe('true')
+    expect(account.rateLimitStatus).toBeUndefined()
+    expect(account.rateLimitAutoStopped).toBeUndefined()
+    const buckets = JSON.parse(account.claudeRateLimitBuckets)
+    expect(buckets.weekly_non_opus.requestedModel).toBe('claude-fable-5')
+    expect(buckets.weekly_non_opus.resetAt).toBe(new Date(resetTimestamp * 1000).toISOString())
+  })
+
+  it('classifies by account reset time before using the 6h fallback', () => {
+    const { service } = loadService()
+    const resetTimestamp = Math.floor((Date.now() + 2 * 60 * 60 * 1000) / 1000)
+    const resetAt = new Date(resetTimestamp * 1000).toISOString()
+
+    expect(
+      service.classifyClaudeRateLimitBucket({
+        requestedModel: 'claude-sonnet-4',
+        headers: {},
+        rateLimitResetTimestamp: resetTimestamp,
+        accountData: {
+          claudeSevenDayResetsAt: resetAt,
+          claudeFiveHourResetsAt: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString()
+        }
+      })
+    ).toBe('weekly_non_opus')
+  })
+
+  it('does not treat allowed rate-limit statuses as rejected', () => {
+    const { service } = loadService()
+
+    expect(
+      service.classifyClaudeRateLimitBucket({
+        requestedModel: 'claude-sonnet-4',
+        headers: {
+          'anthropic-ratelimit-unified-5h-status': 'not_limited',
+          'anthropic-ratelimit-unified-7d-status': 'within_limit'
+        }
+      })
+    ).toBeNull()
+  })
+
+  it('blocks only the matching weekly model bucket and lets the other weekly bucket through', async () => {
+    const resetTimestamp = Math.floor(Date.now() / 1000) + 7 * 24 * 3600
+    const { service } = loadService({
+      claudeRateLimitBuckets: JSON.stringify({
+        weekly_non_opus: {
+          bucket: 'weekly_non_opus',
+          resetAt: new Date(resetTimestamp * 1000).toISOString(),
+          rateLimitedAt: new Date().toISOString()
+        }
+      })
+    })
+
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-sonnet-4')).resolves.toBe(
+      true
+    )
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-opus-4-8')).resolves.toBe(
+      false
+    )
+  })
+
+  it('blocks every model when the 5h bucket is active', async () => {
+    const resetTimestamp = Math.floor(Date.now() / 1000) + 5 * 3600
+    const { service } = loadService({
+      claudeRateLimitBuckets: JSON.stringify({
+        five_hour: {
+          bucket: 'five_hour',
+          resetAt: new Date(resetTimestamp * 1000).toISOString(),
+          rateLimitedAt: new Date().toISOString()
+        }
+      })
+    })
+
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-sonnet-4')).resolves.toBe(
+      true
+    )
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-opus-4-8')).resolves.toBe(
+      true
+    )
+  })
+
+  it('migrates legacy weekly non-Opus global limits so Opus can still be scheduled', async () => {
+    const resetTimestamp = Math.floor(Date.now() / 1000) + 7 * 24 * 3600
+    const { service, getAccount } = loadService({
+      schedulable: 'false',
+      rateLimitStatus: 'limited',
+      rateLimitedAt: new Date().toISOString(),
+      rateLimitEndAt: new Date(resetTimestamp * 1000).toISOString(),
+      rateLimitAutoStopped: 'true',
+      claudeSevenDayUtilization: '80',
+      claudeSevenDayOpusUtilization: '4'
+    })
+
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-opus-4-8')).resolves.toBe(
+      false
+    )
+
+    const account = getAccount()
+    expect(account.schedulable).toBe('true')
+    expect(account.rateLimitStatus).toBeUndefined()
+    expect(account.rateLimitAutoStopped).toBeUndefined()
+    const buckets = JSON.parse(account.claudeRateLimitBuckets)
+    expect(buckets.weekly_non_opus).toBeTruthy()
+
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-fable-5')).resolves.toBe(
+      true
+    )
+  })
+
+  it('does not migrate a near-reset weekly legacy limit into the 5h bucket', async () => {
+    const resetTimestamp = Math.floor(Date.now() / 1000) + 2 * 3600
+    const resetAt = new Date(resetTimestamp * 1000).toISOString()
+    const { service, getAccount } = loadService({
+      schedulable: 'false',
+      rateLimitStatus: 'limited',
+      rateLimitedAt: new Date().toISOString(),
+      rateLimitEndAt: resetAt,
+      rateLimitAutoStopped: 'true',
+      claudeSevenDayResetsAt: resetAt,
+      claudeFiveHourResetsAt: new Date((resetTimestamp + 3600) * 1000).toISOString(),
+      claudeSevenDayUtilization: '99',
+      claudeSevenDayOpusUtilization: '10'
+    })
+
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-opus-4-8')).resolves.toBe(
+      false
+    )
+
+    const buckets = JSON.parse(getAccount().claudeRateLimitBuckets)
+    expect(buckets.weekly_non_opus).toBeTruthy()
+    expect(buckets.five_hour).toBeUndefined()
+  })
+
   it('clears current rate-limit state when 429 auto cooldown is turned off in edit mode', async () => {
     const { service, getAccount } = loadService({
       schedulable: 'false',

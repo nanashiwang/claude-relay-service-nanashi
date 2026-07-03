@@ -96,6 +96,97 @@ class ClaudeRelayService {
     return `此专属账号的Opus模型已达到周使用限制，将于 ${formattedReset} 自动恢复，请尝试切换其他模型后再试。`
   }
 
+  _buildClaudeBucketLimitMessage(bucket, resetTime) {
+    if (bucket === 'weekly_opus') {
+      return this._buildOpusLimitMessage(resetTime)
+    }
+
+    const formattedReset = resetTime ? formatDateWithTimezone(resetTime) : null
+    if (bucket === 'weekly_non_opus') {
+      return formattedReset
+        ? `此专属账号的非 Opus 模型周额度已达到限制，将于 ${formattedReset} 自动恢复；如 Opus 额度仍可用，可切换 Opus 模型继续。`
+        : '此专属账号的非 Opus 模型周额度已达到限制；如 Opus 额度仍可用，可切换 Opus 模型继续。'
+    }
+
+    if (bucket === 'five_hour') {
+      return formattedReset
+        ? `此专属账号的 5 小时额度已达到限制，将于 ${formattedReset} 自动恢复。`
+        : '此专属账号的 5 小时额度已达到限制。'
+    }
+
+    return this._buildStandardRateLimitMessage(resetTime)
+  }
+
+  _getClaudeBucketErrorCode(bucket) {
+    if (bucket === 'weekly_opus') {
+      return 'opus_weekly_limit'
+    }
+    if (bucket === 'weekly_non_opus') {
+      return 'non_opus_weekly_limit'
+    }
+    if (bucket === 'five_hour') {
+      return 'claude_5h_limit'
+    }
+    return 'upstream_rate_limited'
+  }
+
+  _getHeaderCaseInsensitive(headers, headerName) {
+    if (!headers || !headerName) {
+      return null
+    }
+    const target = headerName.toLowerCase()
+    for (const [key, value] of Object.entries(headers)) {
+      if (String(key).toLowerCase() === target) {
+        return Array.isArray(value) ? value[0] : value
+      }
+    }
+    return null
+  }
+
+  _getClaudeRateLimitResetTimestamp(headers) {
+    const resetHeader = this._getHeaderCaseInsensitive(headers, 'anthropic-ratelimit-unified-reset')
+    const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
+    return Number.isNaN(parsedResetTimestamp) ? null : parsedResetTimestamp
+  }
+
+  async _markClaudeModelRateLimit({
+    accountId,
+    accountType,
+    requestedModel,
+    headers,
+    resetTimestamp
+  }) {
+    if (accountType !== 'claude-official' || !resetTimestamp) {
+      return { handled: false, bucket: null }
+    }
+
+    let accountData = null
+    try {
+      accountData = await redis.getClaudeAccount(accountId)
+    } catch (error) {
+      logger.warn(
+        `⚠️ Failed to load Claude account ${accountId} for rate-limit bucket classification: ${error.message}`
+      )
+    }
+
+    const bucket = claudeAccountService.classifyClaudeRateLimitBucket({
+      requestedModel,
+      headers,
+      rateLimitResetTimestamp: resetTimestamp,
+      accountData
+    })
+    if (!bucket) {
+      return { handled: false, bucket: null }
+    }
+
+    await claudeAccountService.markAccountModelRateLimited(accountId, bucket, resetTimestamp, {
+      requestedModel,
+      source: 'claude_relay_429'
+    })
+
+    return { handled: true, bucket }
+  }
+
   // 🧾 提取错误消息文本
   _extractErrorMessage(body) {
     if (!body) {
@@ -250,7 +341,10 @@ class ClaudeRelayService {
         )
       } catch (error) {
         if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
-          const limitMessage = this._buildStandardRateLimitMessage(error.rateLimitEndAt)
+          const limitMessage = this._buildClaudeBucketLimitMessage(
+            error.rateLimitBucket,
+            error.rateLimitEndAt
+          )
           logger.warn(
             `🚫 Dedicated account ${error.accountId} is rate limited for API key ${apiKeyData.name}, returning 403`
           )
@@ -258,7 +352,7 @@ class ClaudeRelayService {
             statusCode: 403,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              error: 'upstream_rate_limited',
+              error: this._getClaudeBucketErrorCode(error.rateLimitBucket),
               message: limitMessage
             }),
             accountId: error.accountId
@@ -552,24 +646,30 @@ class ClaudeRelayService {
         }
         // 检查是否为429状态码
         else if (response.statusCode === 429) {
-          const resetHeader = response.headers
-            ? response.headers['anthropic-ratelimit-unified-reset']
-            : null
-          const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
+          const parsedResetTimestamp = this._getClaudeRateLimitResetTimestamp(response.headers)
+          const modelRateLimit = await this._markClaudeModelRateLimit({
+            accountId,
+            accountType,
+            requestedModel: requestBody.model,
+            headers: response.headers,
+            resetTimestamp: parsedResetTimestamp
+          })
 
-          if (isOpusModelRequest && !Number.isNaN(parsedResetTimestamp)) {
-            await claudeAccountService.markAccountOpusRateLimited(accountId, parsedResetTimestamp)
+          if (modelRateLimit.handled) {
             logger.warn(
-              `🚫 Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
+              `🚫 Account ${accountId} hit Claude ${modelRateLimit.bucket} limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
             )
 
             if (isDedicatedOfficialAccount) {
-              const limitMessage = this._buildOpusLimitMessage(parsedResetTimestamp)
+              const limitMessage = this._buildClaudeBucketLimitMessage(
+                modelRateLimit.bucket,
+                parsedResetTimestamp
+              )
               return {
                 statusCode: 403,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                  error: 'opus_weekly_limit',
+                  error: this._getClaudeBucketErrorCode(modelRateLimit.bucket),
                   message: limitMessage
                 }),
                 accountId
@@ -577,7 +677,7 @@ class ClaudeRelayService {
             }
           } else {
             isRateLimited = true
-            if (!Number.isNaN(parsedResetTimestamp)) {
+            if (parsedResetTimestamp) {
               rateLimitResetTimestamp = parsedResetTimestamp
               logger.info(
                 `🕐 Extracted rate limit reset timestamp: ${rateLimitResetTimestamp} (${new Date(rateLimitResetTimestamp * 1000).toISOString()})`
@@ -1433,14 +1533,17 @@ class ClaudeRelayService {
         )
       } catch (error) {
         if (error.code === 'CLAUDE_DEDICATED_RATE_LIMITED') {
-          const limitMessage = this._buildStandardRateLimitMessage(error.rateLimitEndAt)
+          const limitMessage = this._buildClaudeBucketLimitMessage(
+            error.rateLimitBucket,
+            error.rateLimitEndAt
+          )
           if (!responseStream.headersSent) {
             responseStream.status(403)
             responseStream.setHeader('Content-Type', 'application/json')
           }
           responseStream.write(
             JSON.stringify({
-              error: 'upstream_rate_limited',
+              error: this._getClaudeBucketErrorCode(error.rateLimitBucket),
               message: limitMessage
             })
           )
@@ -1660,9 +1763,6 @@ class ClaudeRelayService {
     // 获取账户信息用于统一 User-Agent
     const account = await claudeAccountService.getAccount(accountId)
 
-    const isOpusModelRequest =
-      typeof body?.model === 'string' && body.model.toLowerCase().includes('opus')
-
     // 使用公共方法准备请求头和 payload
     const prepared = await this._prepareRequestHeadersAndPayload(
       body,
@@ -1702,31 +1802,38 @@ class ClaudeRelayService {
         // 错误响应处理
         if (res.statusCode !== 200) {
           if (res.statusCode === 429) {
-            const resetHeader = res.headers
-              ? res.headers['anthropic-ratelimit-unified-reset']
-              : null
-            const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
-
-            if (isOpusModelRequest) {
-              if (!Number.isNaN(parsedResetTimestamp)) {
-                await claudeAccountService.markAccountOpusRateLimited(
+            const parsedResetTimestamp = this._getClaudeRateLimitResetTimestamp(res.headers)
+            const isAgentViewAuxiliaryRequest = this._isAgentViewAuxiliaryRequest(
+              body,
+              clientHeaders
+            )
+            const modelRateLimit = isAgentViewAuxiliaryRequest
+              ? { handled: false, bucket: null }
+              : await this._markClaudeModelRateLimit({
                   accountId,
-                  parsedResetTimestamp
-                )
-                logger.warn(
-                  `🚫 [Stream] Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
-                )
-              }
+                  accountType,
+                  requestedModel: body?.model,
+                  headers: res.headers,
+                  resetTimestamp: parsedResetTimestamp
+                })
+
+            if (modelRateLimit.handled) {
+              logger.warn(
+                `🚫 [Stream] Account ${accountId} hit Claude ${modelRateLimit.bucket} limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
+              )
 
               if (isDedicatedOfficialAccount) {
-                const limitMessage = this._buildOpusLimitMessage(parsedResetTimestamp)
+                const limitMessage = this._buildClaudeBucketLimitMessage(
+                  modelRateLimit.bucket,
+                  parsedResetTimestamp
+                )
                 if (!responseStream.headersSent) {
                   responseStream.status(403)
                   responseStream.setHeader('Content-Type', 'application/json')
                 }
                 responseStream.write(
                   JSON.stringify({
-                    error: 'opus_weekly_limit',
+                    error: this._getClaudeBucketErrorCode(modelRateLimit.bucket),
                     message: limitMessage
                   })
                 )
@@ -1736,13 +1843,7 @@ class ClaudeRelayService {
                 return
               }
             } else {
-              const rateLimitResetTimestamp = Number.isNaN(parsedResetTimestamp)
-                ? null
-                : parsedResetTimestamp
-              const isAgentViewAuxiliaryRequest = this._isAgentViewAuxiliaryRequest(
-                body,
-                clientHeaders
-              )
+              const rateLimitResetTimestamp = parsedResetTimestamp
               if (isAgentViewAuxiliaryRequest) {
                 logger.warn(
                   `🚫 [Stream] Agent View auxiliary request hit 429 for account ${accountId}; skipping account-level rate-limit marking`
@@ -2353,21 +2454,30 @@ class ClaudeRelayService {
 
           // 处理限流状态
           if (rateLimitDetected || res.statusCode === 429) {
-            const resetHeader = res.headers
-              ? res.headers['anthropic-ratelimit-unified-reset']
-              : null
-            const parsedResetTimestamp = resetHeader ? parseInt(resetHeader, 10) : NaN
+            const parsedResetTimestamp = this._getClaudeRateLimitResetTimestamp(res.headers)
+            const isAgentViewAuxiliaryRequest = this._isAgentViewAuxiliaryRequest(
+              body,
+              clientHeaders
+            )
+            const modelRateLimit = isAgentViewAuxiliaryRequest
+              ? { handled: false, bucket: null }
+              : await this._markClaudeModelRateLimit({
+                  accountId,
+                  accountType,
+                  requestedModel: body?.model,
+                  headers: res.headers,
+                  resetTimestamp: parsedResetTimestamp
+                })
 
-            if (isOpusModelRequest && !Number.isNaN(parsedResetTimestamp)) {
-              await claudeAccountService.markAccountOpusRateLimited(accountId, parsedResetTimestamp)
+            if (modelRateLimit.handled) {
               logger.warn(
-                `🚫 [Stream] Account ${accountId} hit Opus limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
+                `🚫 [Stream] Account ${accountId} hit Claude ${modelRateLimit.bucket} limit, resets at ${new Date(parsedResetTimestamp * 1000).toISOString()}`
               )
-            } else if (this._isAgentViewAuxiliaryRequest(body, clientHeaders)) {
+            } else if (isAgentViewAuxiliaryRequest) {
               logger.warn(
                 `🚫 [Stream] Agent View auxiliary request hit rate limit at stream end for account ${accountId}; skipping account-level rate-limit marking`
               )
-            } else if (Number.isNaN(parsedResetTimestamp)) {
+            } else if (!parsedResetTimestamp) {
               logger.warn(
                 `⚠️ [Stream] Rate limit at stream end without reset header for account ${accountId}, skipping rate limit marking`
               )
