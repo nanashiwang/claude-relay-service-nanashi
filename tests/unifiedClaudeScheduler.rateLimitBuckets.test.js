@@ -107,4 +107,32 @@ describe('UnifiedClaudeScheduler Claude bucket rate limits', () => {
     )
     expect(getAccount().schedulable).toBe('true')
   })
+
+  it('allows Sonnet when only the Fable bucket is limited', async () => {
+    const initialAccount = {
+      id: 'acc-1',
+      name: 'Claude Pro',
+      isActive: 'true',
+      status: 'active',
+      accountType: 'shared',
+      schedulable: 'true',
+      priority: '50'
+    }
+
+    const { scheduler, claudeAccountService } = loadScheduler(
+      initialAccount,
+      async (_accountId, requestedModel, currentAccount) => ({
+        limited: requestedModel.includes('fable'),
+        account: currentAccount
+      })
+    )
+
+    const selected = await scheduler.selectAccountForApiKey({}, null, 'claude-sonnet-4-6')
+
+    expect(selected).toEqual({ accountId: 'acc-1', accountType: 'claude-official' })
+    expect(claudeAccountService.isAccountRateLimitedForModel).toHaveBeenCalledWith(
+      'acc-1',
+      'claude-sonnet-4-6'
+    )
+  })
 })

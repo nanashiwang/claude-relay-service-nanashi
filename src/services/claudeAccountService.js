@@ -78,6 +78,10 @@ class ClaudeAccountService {
     return typeof model === 'string' && model.toLowerCase().includes('opus')
   }
 
+  _isFableModel(model) {
+    return typeof model === 'string' && model.toLowerCase().includes('fable')
+  }
+
   _getClaudeRateLimitBuckets(accountData = {}) {
     const rawBuckets = accountData.claudeRateLimitBuckets
     if (!rawBuckets) {
@@ -98,7 +102,21 @@ class ClaudeAccountService {
   }
 
   _getRateLimitBucketForModel(model) {
-    return this._isOpusModel(model) ? 'weekly_opus' : 'weekly_non_opus'
+    if (this._isOpusModel(model)) {
+      return 'weekly_opus'
+    }
+    if (this._isFableModel(model)) {
+      return 'weekly_fable'
+    }
+    return 'weekly_standard'
+  }
+
+  _getRateLimitBucketsForModel(model) {
+    const bucket = this._getRateLimitBucketForModel(model)
+    if (bucket === 'weekly_fable') {
+      return ['weekly_fable', 'weekly_non_opus']
+    }
+    return [bucket]
   }
 
   _getHeaderCaseInsensitive(headers, headerName) {
@@ -191,10 +209,10 @@ class ClaudeAccountService {
       return 'five_hour'
     }
 
-    const matchesNonOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayResetsAt)
+    const matchesWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayResetsAt)
     const matchesOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayOpusResetsAt)
 
-    if (matchesNonOpusWeekly && matchesOpusWeekly) {
+    if (matchesWeekly && matchesOpusWeekly) {
       return this._getRateLimitBucketForModel(requestedModel)
     }
 
@@ -202,8 +220,8 @@ class ClaudeAccountService {
       return 'weekly_opus'
     }
 
-    if (matchesNonOpusWeekly) {
-      return 'weekly_non_opus'
+    if (matchesWeekly) {
+      return this._getRateLimitBucketForModel(requestedModel)
     }
 
     return null
@@ -215,7 +233,7 @@ class ClaudeAccountService {
 
     if (sevenDayUtilization !== null && opusUtilization !== null) {
       if (sevenDayUtilization >= opusUtilization + 10) {
-        return 'weekly_non_opus'
+        return 'weekly_fable'
       }
       if (opusUtilization >= sevenDayUtilization + 10) {
         return 'weekly_opus'
@@ -262,12 +280,16 @@ class ClaudeAccountService {
       if (normalizedClaim.includes('opus')) {
         return 'weekly_opus'
       }
-      if (
-        normalizedClaim.includes('sonnet') ||
-        normalizedClaim.includes('fable') ||
-        normalizedClaim.includes('non_opus')
-      ) {
-        return 'weekly_non_opus'
+      if (normalizedClaim.includes('fable')) {
+        return 'weekly_fable'
+      }
+      if (normalizedClaim.includes('sonnet') || normalizedClaim.includes('haiku')) {
+        return 'weekly_standard'
+      }
+      if (normalizedClaim.includes('non_opus')) {
+        return this._isFableModel(requestedModel) || !requestedModel
+          ? 'weekly_fable'
+          : 'weekly_standard'
       }
       if (
         normalizedClaim.includes('seven_day') ||
@@ -325,7 +347,9 @@ class ClaudeAccountService {
     const labels = {
       five_hour: '5-hour',
       weekly_opus: 'Opus weekly',
-      weekly_non_opus: 'non-Opus weekly'
+      weekly_fable: 'Fable weekly',
+      weekly_standard: 'standard weekly',
+      weekly_non_opus: 'legacy Fable weekly'
     }
     return labels[bucket] || bucket
   }
@@ -354,16 +378,16 @@ class ClaudeAccountService {
       return 'five_hour'
     }
 
-    const matchesNonOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayResetsAt)
+    const matchesWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayResetsAt)
     const matchesOpusWeekly = this._isSameResetTime(resetAt, accountData.claudeSevenDayOpusResetsAt)
 
-    if (matchesNonOpusWeekly && !matchesOpusWeekly) {
-      return 'weekly_non_opus'
+    if (matchesWeekly && !matchesOpusWeekly) {
+      return 'weekly_fable'
     }
-    if (matchesOpusWeekly && !matchesNonOpusWeekly) {
+    if (matchesOpusWeekly && !matchesWeekly) {
       return 'weekly_opus'
     }
-    if (matchesNonOpusWeekly && matchesOpusWeekly) {
+    if (matchesWeekly && matchesOpusWeekly) {
       return this._inferWeeklyBucketFromUsage(accountData)
     }
 
@@ -2182,9 +2206,11 @@ class ClaudeAccountService {
         return true
       }
 
-      const modelBucket = this._getRateLimitBucketForModel(requestedModel)
-      if (this._isBucketActive(buckets[modelBucket])) {
-        return true
+      const modelBuckets = this._getRateLimitBucketsForModel(requestedModel)
+      for (const modelBucket of modelBuckets) {
+        if (this._isBucketActive(buckets[modelBucket])) {
+          return true
+        }
       }
 
       return await this.isAccountRateLimited(accountId)
@@ -2208,7 +2234,7 @@ class ClaudeAccountService {
       accountData = migrationResult.accountData || accountData
 
       const buckets = this._getClaudeRateLimitBuckets(accountData)
-      const candidateBuckets = ['five_hour', this._getRateLimitBucketForModel(requestedModel)]
+      const candidateBuckets = ['five_hour', ...this._getRateLimitBucketsForModel(requestedModel)]
 
       for (const bucket of candidateBuckets) {
         const bucketInfo = buckets[bucket]

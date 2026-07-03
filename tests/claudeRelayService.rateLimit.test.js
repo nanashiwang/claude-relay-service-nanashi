@@ -44,9 +44,13 @@ function loadRelayService() {
       if (!rateLimitResetTimestamp) {
         return null
       }
-      return requestedModel && requestedModel.toLowerCase().includes('opus')
-        ? 'weekly_opus'
-        : 'weekly_non_opus'
+      if (requestedModel && requestedModel.toLowerCase().includes('opus')) {
+        return 'weekly_opus'
+      }
+      if (requestedModel && requestedModel.toLowerCase().includes('fable')) {
+        return 'weekly_fable'
+      }
+      return 'weekly_standard'
     }),
     updateSessionWindowStatus: jest.fn(async () => undefined),
     clearInternalErrors: jest.fn(async () => undefined),
@@ -180,7 +184,7 @@ describe('ClaudeRelayService transient 429 handling', () => {
     expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
   })
 
-  it('marks a non-Opus weekly bucket instead of globally stopping the account', async () => {
+  it('marks a Fable weekly bucket instead of globally stopping the account', async () => {
     const { service, claudeAccountService, unifiedClaudeScheduler } = loadRelayService()
     service._makeClaudeRequest = jest.fn(async () => ({
       statusCode: 429,
@@ -191,7 +195,7 @@ describe('ClaudeRelayService transient 429 handling', () => {
     }))
 
     const response = await service.relayRequest(
-      { model: 'claude-sonnet-4', messages: [] },
+      { model: 'claude-fable-5', messages: [] },
       makeDedicatedApiKey(),
       null,
       null,
@@ -200,15 +204,47 @@ describe('ClaudeRelayService transient 429 handling', () => {
 
     expect(response.statusCode).toBe(403)
     expect(JSON.parse(response.body)).toEqual({
-      error: 'non_opus_weekly_limit',
+      error: 'fable_weekly_limit',
       message:
-        '此专属账号的非 Opus 模型周额度已达到限制，将于 reset-1800000000 自动恢复；如 Opus 额度仍可用，可切换 Opus 模型继续。'
+        '此专属账号的 Fable 模型周额度已达到限制，将于 reset-1800000000 自动恢复；可切换 Sonnet、Haiku 或 Opus 模型继续。'
     })
     expect(claudeAccountService.markAccountModelRateLimited).toHaveBeenCalledWith(
       'acc-1',
-      'weekly_non_opus',
+      'weekly_fable',
       1800000000,
-      expect.objectContaining({ requestedModel: 'claude-sonnet-4' })
+      expect.objectContaining({ requestedModel: 'claude-fable-5' })
+    )
+    expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
+  })
+
+  it('marks a standard weekly bucket separately from Fable and Opus', async () => {
+    const { service, claudeAccountService, unifiedClaudeScheduler } = loadRelayService()
+    service._makeClaudeRequest = jest.fn(async () => ({
+      statusCode: 429,
+      headers: {
+        'anthropic-ratelimit-unified-reset': '1800000000'
+      },
+      body: JSON.stringify({ error: { message: 'rate limited' } })
+    }))
+
+    const response = await service.relayRequest(
+      { model: 'claude-sonnet-4-6', messages: [] },
+      makeDedicatedApiKey(),
+      null,
+      null,
+      {}
+    )
+
+    expect(response.statusCode).toBe(403)
+    expect(JSON.parse(response.body)).toEqual({
+      error: 'claude_weekly_limit',
+      message: '此专属账号的标准 Claude 模型周额度已达到限制，将于 reset-1800000000 自动恢复。'
+    })
+    expect(claudeAccountService.markAccountModelRateLimited).toHaveBeenCalledWith(
+      'acc-1',
+      'weekly_standard',
+      1800000000,
+      expect.objectContaining({ requestedModel: 'claude-sonnet-4-6' })
     )
     expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
   })

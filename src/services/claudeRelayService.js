@@ -102,10 +102,16 @@ class ClaudeRelayService {
     }
 
     const formattedReset = resetTime ? formatDateWithTimezone(resetTime) : null
-    if (bucket === 'weekly_non_opus') {
+    if (bucket === 'weekly_fable' || bucket === 'weekly_non_opus') {
       return formattedReset
-        ? `此专属账号的非 Opus 模型周额度已达到限制，将于 ${formattedReset} 自动恢复；如 Opus 额度仍可用，可切换 Opus 模型继续。`
-        : '此专属账号的非 Opus 模型周额度已达到限制；如 Opus 额度仍可用，可切换 Opus 模型继续。'
+        ? `此专属账号的 Fable 模型周额度已达到限制，将于 ${formattedReset} 自动恢复；可切换 Sonnet、Haiku 或 Opus 模型继续。`
+        : '此专属账号的 Fable 模型周额度已达到限制；可切换 Sonnet、Haiku 或 Opus 模型继续。'
+    }
+
+    if (bucket === 'weekly_standard') {
+      return formattedReset
+        ? `此专属账号的标准 Claude 模型周额度已达到限制，将于 ${formattedReset} 自动恢复。`
+        : '此专属账号的标准 Claude 模型周额度已达到限制。'
     }
 
     if (bucket === 'five_hour') {
@@ -121,8 +127,11 @@ class ClaudeRelayService {
     if (bucket === 'weekly_opus') {
       return 'opus_weekly_limit'
     }
-    if (bucket === 'weekly_non_opus') {
-      return 'non_opus_weekly_limit'
+    if (bucket === 'weekly_fable' || bucket === 'weekly_non_opus') {
+      return 'fable_weekly_limit'
+    }
+    if (bucket === 'weekly_standard') {
+      return 'claude_weekly_limit'
     }
     if (bucket === 'five_hour') {
       return 'claude_5h_limit'
