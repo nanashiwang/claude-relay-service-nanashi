@@ -25,6 +25,10 @@ const {
   shouldPassThroughCodexRequest,
   isCodexClientUserAgent
 } = require('../utils/codexAutoReview')
+const {
+  buildChatGPTCodexClientHeaders,
+  normalizeChatGPTCodexModel
+} = require('../utils/openaiCodexRequest')
 
 // 创建代理 Agent（使用统一的代理工具）
 function createProxyAgent(proxy) {
@@ -1170,6 +1174,20 @@ const handleResponses = async (req, res) => {
 
     // 从请求体中提取模型和流式标志
     let requestedModel = originalRequestBody?.model || null
+    const normalizedCodexModel = normalizeChatGPTCodexModel(requestedModel)
+    if (normalizedCodexModel !== requestedModel) {
+      logger.info(
+        `📝 Model ${requestedModel} mapped to ${normalizedCodexModel} for ChatGPT Codex API`
+      )
+      requestedModel = normalizedCodexModel
+      if (req.body && typeof req.body === 'object') {
+        req.body.model = normalizedCodexModel
+      }
+      if (originalRequestBody && typeof originalRequestBody === 'object') {
+        originalRequestBody.model = normalizedCodexModel
+      }
+    }
+
     const isCodexModel =
       typeof requestedModel === 'string' && requestedModel.toLowerCase().includes('codex')
 
@@ -1276,7 +1294,7 @@ const handleResponses = async (req, res) => {
       // 基于白名单构造上游所需的请求头，确保键为小写且值受控
       const incoming = req.headers || {}
 
-      const allowedKeys = ['version', 'openai-beta', 'session_id']
+      const allowedKeys = ['openai-beta', 'session_id']
 
       const headers = {}
       for (const key of allowedKeys) {
@@ -1284,6 +1302,7 @@ const handleResponses = async (req, res) => {
           headers[key] = incoming[key]
         }
       }
+      Object.assign(headers, buildChatGPTCodexClientHeaders(incoming, requestedModel))
       if (sessionId) {
         headers['session_id'] = sessionId
       }
