@@ -866,6 +866,25 @@ router.post('/claude-accounts/:accountId/reset-status', authenticateAdmin, async
   }
 })
 
+router.delete(
+  '/claude-accounts/:accountId/temp-unavailable',
+  authenticateAdmin,
+  async (req, res) => {
+    const { accountId } = req.params
+    try {
+      const result = await claudeAccountService.clearAccountTempUnavailable(accountId)
+      return res.json({ success: true, data: result })
+    } catch (error) {
+      const statusCode = error.message === 'Account not found' ? 404 : 500
+      logger.error(`❌ Failed to clear temporary cooldown for Claude account: ${accountId}`, error)
+      return res.status(statusCode).json({
+        error: 'Failed to clear temporary cooldown',
+        message: error.message
+      })
+    }
+  }
+)
+
 // 切换Claude账户调度状态
 router.put(
   '/claude-accounts/:accountId/toggle-schedulable',
@@ -915,10 +934,14 @@ router.put(
 // 测试Claude OAuth账户连通性（流式响应）- 复用 claudeRelayService
 router.post('/claude-accounts/:accountId/test', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
+  const model =
+    typeof req.body?.model === 'string' && req.body.model.trim().length <= 128
+      ? req.body.model.trim()
+      : undefined
 
   try {
     // 直接调用服务层的测试方法
-    await claudeRelayService.testAccountConnection(accountId, res)
+    await claudeRelayService.testAccountConnection(accountId, res, model)
   } catch (error) {
     logger.error(`❌ Failed to test Claude OAuth account:`, error)
     // 错误已在服务层处理，这里仅做日志记录
@@ -1068,6 +1091,10 @@ router.put('/claude-accounts/:accountId/test-config', authenticateAdmin, async (
 // 手动触发账户测试（非流式，返回JSON结果）
 router.post('/claude-accounts/:accountId/test-sync', authenticateAdmin, async (req, res) => {
   const { accountId } = req.params
+  const model =
+    typeof req.body?.model === 'string' && req.body.model.trim().length <= 128
+      ? req.body.model.trim()
+      : undefined
 
   try {
     // 检查账户是否存在
@@ -1082,7 +1109,7 @@ router.post('/claude-accounts/:accountId/test-sync', authenticateAdmin, async (r
     logger.info(`🧪 Manual sync test triggered for Claude account: ${accountId}`)
 
     // 执行测试
-    const testResult = await claudeRelayService.testAccountConnectionSync(accountId)
+    const testResult = await claudeRelayService.testAccountConnectionSync(accountId, model)
 
     // 保存测试结果到历史
     await redis.saveAccountTestResult(accountId, 'claude', testResult)

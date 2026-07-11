@@ -312,7 +312,7 @@
                   <i v-else class="fas fa-sort ml-1 text-gray-400" />
                 </th>
                 <th
-                  class="w-[120px] min-w-[180px] max-w-[200px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
+                  class="w-[280px] min-w-[280px] max-w-[300px] cursor-pointer px-3 py-4 text-left text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-600"
                   @click="sortAccounts('status')"
                 >
                   状态
@@ -721,7 +721,7 @@
                     </div>
                   </div>
                 </td>
-                <td class="w-[100px] min-w-[100px] max-w-[100px] whitespace-nowrap px-3 py-4">
+                <td class="w-[280px] min-w-[280px] max-w-[300px] px-3 py-4">
                   <div class="flex flex-col gap-1">
                     <span
                       :class="[
@@ -822,6 +822,14 @@
                     >
                       绑定: {{ account.boundApiKeysCount || 0 }} 个API Key
                     </span>
+                    <ClaudeOperationalStatus
+                      v-if="account.platform === 'claude' || account.platform === 'claude-oauth'"
+                      :account="account"
+                      class="mt-2 border-t border-gray-200 pt-2 dark:border-gray-700"
+                      :now-ms="operationalNow"
+                      @clear-temp="clearClaudeTempUnavailable(account)"
+                      @test-model="(model) => openAccountTestModal(account, model)"
+                    />
                   </div>
                 </td>
                 <td class="whitespace-nowrap px-3 py-4 text-sm">
@@ -1501,6 +1509,15 @@
             </span>
           </div>
 
+          <ClaudeOperationalStatus
+            v-if="account.platform === 'claude' || account.platform === 'claude-oauth'"
+            :account="account"
+            class="mb-3 border-t border-gray-200 pt-3 dark:border-gray-700"
+            :now-ms="operationalNow"
+            @clear-temp="clearClaudeTempUnavailable(account)"
+            @test-model="(model) => openAccountTestModal(account, model)"
+          />
+
           <!-- 使用统计 -->
           <div class="mb-3 grid grid-cols-2 gap-3">
             <div>
@@ -1831,9 +1848,9 @@
           </div>
 
           <!-- 操作按钮 -->
-          <div class="mt-3 flex gap-2 border-t border-gray-100 pt-3">
+          <div class="mt-3 grid grid-cols-4 gap-2 border-t border-gray-100 pt-3">
             <button
-              class="flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-2 text-xs transition-colors"
+              class="flex min-w-0 items-center justify-center gap-1 rounded-lg px-2 py-2 text-xs transition-colors"
               :class="
                 account.schedulable
                   ? 'bg-gray-50 text-gray-600 hover:bg-gray-100'
@@ -1848,7 +1865,7 @@
 
             <button
               v-if="canViewUsage(account)"
-              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-indigo-50 px-3 py-2 text-xs text-indigo-600 transition-colors hover:bg-indigo-100"
+              class="flex min-w-0 items-center justify-center gap-1 rounded-lg bg-indigo-50 px-2 py-2 text-xs text-indigo-600 transition-colors hover:bg-indigo-100"
               @click="openAccountUsageModal(account)"
             >
               <i class="fas fa-chart-line" />
@@ -1856,7 +1873,7 @@
             </button>
             <button
               v-if="canTestAccount(account)"
-              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-cyan-50 px-3 py-2 text-xs text-cyan-600 transition-colors hover:bg-cyan-100 dark:bg-cyan-900/40 dark:text-cyan-300 dark:hover:bg-cyan-800/50"
+              class="flex min-w-0 items-center justify-center gap-1 rounded-lg bg-cyan-50 px-2 py-2 text-xs text-cyan-600 transition-colors hover:bg-cyan-100 dark:bg-cyan-900/40 dark:text-cyan-300 dark:hover:bg-cyan-800/50"
               @click="openAccountTestModal(account)"
             >
               <i class="fas fa-vial" />
@@ -1865,7 +1882,7 @@
 
             <button
               v-if="canTestAccount(account)"
-              class="flex flex-1 items-center justify-center gap-1 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-600 transition-colors hover:bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-800/50"
+              class="flex min-w-0 items-center justify-center gap-1 rounded-lg bg-amber-50 px-2 py-2 text-xs text-amber-600 transition-colors hover:bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300 dark:hover:bg-amber-800/50"
               @click="openScheduledTestModal(account)"
             >
               <i class="fas fa-clock" />
@@ -1873,7 +1890,7 @@
             </button>
 
             <button
-              class="flex-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-600 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-800/50"
+              class="min-w-0 rounded-lg bg-emerald-50 px-2 py-2 text-xs text-emerald-600 transition-colors hover:bg-emerald-100 dark:bg-emerald-900/40 dark:text-emerald-300 dark:hover:bg-emerald-800/50"
               @click="openQuotaModal(account)"
             >
               <i class="fas fa-wallet mr-1" />
@@ -1881,7 +1898,7 @@
             </button>
 
             <button
-              class="flex-1 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600 transition-colors hover:bg-gray-100"
+              class="min-w-0 rounded-lg bg-gray-50 px-2 py-2 text-xs text-gray-600 transition-colors hover:bg-gray-100"
               @click="editAccount(account)"
             >
               <i class="fas fa-edit mr-1" />
@@ -2286,6 +2303,7 @@
     <!-- 账户测试弹窗 -->
     <AccountTestModal
       :account="testingAccount"
+      :initial-model="testingInitialModel"
       :show="showAccountTestModal"
       @close="closeAccountTestModal"
     />
@@ -2550,6 +2568,7 @@ import AccountUsageDetailModal from '@/components/accounts/AccountUsageDetailMod
 import AccountExpiryEditModal from '@/components/accounts/AccountExpiryEditModal.vue'
 import AccountTestModal from '@/components/accounts/AccountTestModal.vue'
 import AccountScheduledTestModal from '@/components/accounts/AccountScheduledTestModal.vue'
+import ClaudeOperationalStatus from '@/components/accounts/ClaudeOperationalStatus.vue'
 import ConfirmModal from '@/components/common/ConfirmModal.vue'
 import CustomDropdown from '@/components/common/CustomDropdown.vue'
 import ActionDropdown from '@/components/common/ActionDropdown.vue'
@@ -2648,6 +2667,8 @@ const expiryEditModalRef = ref(null)
 // 测试弹窗状态
 const showAccountTestModal = ref(false)
 const testingAccount = ref(null)
+const testingInitialModel = ref('')
+const operationalNow = ref(Date.now())
 
 // 账号额度弹窗状态
 const showQuotaModal = ref(false)
@@ -2927,6 +2948,19 @@ const getAccountActions = (account) => {
     })
   }
 
+  if (
+    ['claude', 'claude-oauth'].includes(account.platform) &&
+    account.operationalStatus?.tempUnavailable?.active
+  ) {
+    actions.push({
+      key: 'clear-temp-unavailable',
+      label: '解除临时冷却',
+      icon: 'fa-hourglass-end',
+      color: 'amber',
+      handler: () => clearClaudeTempUnavailable(account)
+    })
+  }
+
   // 查看详情
   if (canViewUsage(account)) {
     actions.push({
@@ -3018,24 +3052,58 @@ const closeAccountUsageModal = () => {
 }
 
 // 测试账户连通性相关函数
-const supportedTestPlatforms = ['claude', 'claude-console']
+const supportedTestPlatforms = ['claude', 'claude-oauth', 'claude-console']
 
 const canTestAccount = (account) => {
   return !!account && supportedTestPlatforms.includes(account.platform)
 }
 
-const openAccountTestModal = (account) => {
+const openAccountTestModal = (account, initialModel = '') => {
   if (!canTestAccount(account)) {
     showToast('该账户类型暂不支持测试', 'warning')
     return
   }
   testingAccount.value = account
+  testingInitialModel.value = initialModel
   showAccountTestModal.value = true
 }
 
 const closeAccountTestModal = () => {
   showAccountTestModal.value = false
   testingAccount.value = null
+  testingInitialModel.value = ''
+}
+
+const clearClaudeTempUnavailable = async (account) => {
+  if (
+    !account ||
+    !['claude', 'claude-oauth'].includes(account.platform) ||
+    account.isClearingTempUnavailable
+  ) {
+    return
+  }
+
+  const confirmed = await showConfirm(
+    '解除临时冷却',
+    '只会清除 temp_unavailable 临时冷却，不会清除真实模型限额或改变手动调度状态。确认继续吗？',
+    '确认解除',
+    '取消'
+  )
+  if (!confirmed) return
+
+  try {
+    account.isClearingTempUnavailable = true
+    const response = await apiClient.delete(`/admin/claude-accounts/${account.id}/temp-unavailable`)
+    if (!response.success) {
+      throw new Error(response.message || '解除临时冷却失败')
+    }
+    showToast(response.data?.cleared ? '临时冷却已解除' : '临时冷却已过期', 'success')
+    await loadAccounts(true)
+  } catch (error) {
+    showToast(error.message || '解除临时冷却失败', 'error')
+  } finally {
+    account.isClearingTempUnavailable = false
+  }
 }
 
 const getQuotaPeriodLabel = (period) => {
@@ -5712,6 +5780,7 @@ const checkHorizontalScroll = () => {
 
 // 窗口大小变化时重新检测
 let resizeObserver = null
+let operationalClockTimer = null
 
 onMounted(() => {
   // 首次加载时强制刷新所有数据
@@ -5730,11 +5799,17 @@ onMounted(() => {
 
   // 监听窗口大小变化
   window.addEventListener('resize', checkHorizontalScroll)
+  operationalClockTimer = window.setInterval(() => {
+    operationalNow.value = Date.now()
+  }, 30000)
 })
 
 onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
+  }
+  if (operationalClockTimer) {
+    window.clearInterval(operationalClockTimer)
   }
   window.removeEventListener('resize', checkHorizontalScroll)
 })

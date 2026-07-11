@@ -1,5 +1,5 @@
 describe('ClaudeAccountService transient 429 handling', () => {
-  function loadService(initialAccount = {}) {
+  function loadService(initialAccount = {}, options = {}) {
     jest.resetModules()
     jest.spyOn(global, 'setInterval').mockImplementation(() => 0)
 
@@ -17,8 +17,11 @@ describe('ClaudeAccountService transient 429 handling', () => {
       }),
       deleteSessionAccountMapping: jest.fn(async () => undefined),
       client: {
-        hdel: jest.fn(async () => 0)
-      }
+        hdel: jest.fn(async () => 0),
+        ttl: jest.fn(async () => options.tempUnavailableTtl ?? -2),
+        del: jest.fn(async () => 1)
+      },
+      getClientSafe: jest.fn(() => redisMock.client)
     }
 
     const webhookNotifier = {
@@ -58,7 +61,8 @@ describe('ClaudeAccountService transient 429 handling', () => {
       getRateLimitModelFamily: jest.fn((model) => {
         const normalized = typeof model === 'string' ? model.toLowerCase() : ''
         return ['opus', 'sonnet', 'haiku', 'fable'].find((family) => normalized.includes(family))
-      })
+      }),
+      RATE_LIMITED_MODEL_FAMILIES: ['opus', 'sonnet', 'haiku', 'fable']
     }))
     jest.doMock(
       '../src/utils/lruCache',
@@ -367,6 +371,154 @@ describe('ClaudeAccountService transient 429 handling', () => {
     expect(getAccount().rateLimitStatus).toBeUndefined()
     expect(getAccount().rateLimitEndAt).toBeUndefined()
     expect(getAccount().rateLimitAutoStopped).toBeUndefined()
+  })
+
+  it('reports a family-only limit without marking the whole account unavailable', async () => {
+    const resetAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+    const { service } = loadService({
+      isActive: 'true',
+      status: 'active',
+      accessToken: 'encrypted-token',
+      refreshToken: 'encrypted-refresh-token',
+      expiresAt: String(Date.now() + 24 * 60 * 60 * 1000),
+      claudeRateLimitBuckets: JSON.stringify({
+        weekly_sonnet: {
+          bucket: 'weekly_sonnet',
+          resetAt,
+          rateLimitedAt: new Date().toISOString(),
+          requestedModel: 'claude-sonnet-4-6'
+        }
+      })
+    })
+
+    const status = await service.getAccountOperationalStatus('acc-1')
+
+    expect(status.availability).toMatchObject({
+      scope: 'model',
+      accountUnavailable: false,
+      partialModelUnavailable: true,
+      modelLimitedCount: 1
+    })
+    expect(status.modelRateLimits.sonnet).toMatchObject({
+      isRateLimited: true,
+      bucket: 'weekly_sonnet',
+      resetAt
+    })
+    expect(status.modelRateLimits.haiku.isRateLimited).toBe(false)
+    expect(status.token.status).toBe('healthy')
+  })
+
+  it('maps the shared five-hour bucket to an account-wide limit', async () => {
+    const resetAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+    const { service } = loadService({
+      isActive: 'true',
+      status: 'active',
+      accessToken: 'encrypted-token',
+      expiresAt: String(Date.now() + 24 * 60 * 60 * 1000),
+      claudeRateLimitBuckets: JSON.stringify({
+        five_hour: {
+          bucket: 'five_hour',
+          resetAt,
+          rateLimitedAt: new Date().toISOString()
+        }
+      })
+    })
+
+    const status = await service.getAccountOperationalStatus('acc-1')
+
+    expect(status.availability).toMatchObject({
+      scope: 'account',
+      accountUnavailable: true,
+      modelLimitedCount: 4
+    })
+    expect(status.availability.reasons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'five_hour_rate_limited' })])
+    )
+    expect(Object.values(status.modelRateLimits)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ bucket: 'five_hour', isRateLimited: true, resetAt })
+      ])
+    )
+  })
+
+  it('keeps a valid token refresh failure separate from account availability', async () => {
+    const { service } = loadService({
+      isActive: 'true',
+      status: 'active',
+      accessToken: 'encrypted-token',
+      refreshToken: 'encrypted-refresh-token',
+      expiresAt: String(Date.now() + 24 * 60 * 60 * 1000),
+      lastRefreshAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      lastRefreshErrorAt: new Date().toISOString(),
+      errorMessage: 'refresh request failed'
+    })
+
+    const status = await service.getAccountOperationalStatus('acc-1')
+
+    expect(status.availability.scope).toBe('available')
+    expect(status.availability.reasons).toEqual([])
+    expect(status.token).toMatchObject({ status: 'refresh_failed', isExpired: false })
+  })
+
+  it('maps the legacy shared standard bucket to Sonnet and Haiku only', async () => {
+    const resetAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+    const { service } = loadService({
+      isActive: 'true',
+      status: 'active',
+      accessToken: 'encrypted-token',
+      expiresAt: String(Date.now() + 24 * 60 * 60 * 1000),
+      claudeRateLimitBuckets: JSON.stringify({
+        weekly_standard: {
+          bucket: 'weekly_standard',
+          resetAt,
+          rateLimitedAt: new Date().toISOString()
+        }
+      })
+    })
+
+    const status = await service.getAccountOperationalStatus('acc-1')
+
+    expect(status.availability).toMatchObject({ scope: 'model', modelLimitedCount: 2 })
+    expect(status.modelRateLimits.sonnet.isRateLimited).toBe(true)
+    expect(status.modelRateLimits.haiku.isRateLimited).toBe(true)
+    expect(status.modelRateLimits.opus.isRateLimited).toBe(false)
+    expect(status.modelRateLimits.fable.isRateLimited).toBe(false)
+  })
+
+  it('reports temp-unavailable and refresh failures separately', async () => {
+    const { service } = loadService(
+      {
+        isActive: 'true',
+        status: 'active',
+        accessToken: 'encrypted-token',
+        refreshToken: 'encrypted-refresh-token',
+        expiresAt: String(Date.now() + 24 * 60 * 60 * 1000),
+        lastRefreshAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+        lastRefreshErrorAt: new Date().toISOString(),
+        errorMessage: 'refresh request failed'
+      },
+      { tempUnavailableTtl: 120 }
+    )
+
+    const status = await service.getAccountOperationalStatus('acc-1')
+
+    expect(status.availability.scope).toBe('account')
+    expect(status.availability.reasons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'temp_unavailable' })])
+    )
+    expect(status.tempUnavailable).toMatchObject({ active: true, ttlSeconds: 120 })
+    expect(status.token).toMatchObject({ status: 'refresh_failed', refreshFailed: true })
+  })
+
+  it('clears only the temporary cooldown key', async () => {
+    const { service, redisMock } = loadService({ isActive: 'true', status: 'active' })
+
+    await expect(service.clearAccountTempUnavailable('acc-1')).resolves.toEqual({
+      success: true,
+      cleared: true
+    })
+    expect(redisMock.client.del).toHaveBeenCalledWith('temp_unavailable:claude-official:acc-1')
+    expect(redisMock.client.hdel).not.toHaveBeenCalled()
   })
 })
 

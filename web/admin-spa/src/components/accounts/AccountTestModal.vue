@@ -68,9 +68,37 @@
                 {{ platformLabel }}
               </span>
             </div>
-            <div class="flex items-center justify-between text-sm">
+            <div
+              v-if="account?.platform === 'claude' || account?.platform === 'claude-oauth'"
+              class="space-y-2 pt-1"
+            >
+              <div class="flex items-center justify-between text-sm">
+                <span class="text-gray-500 dark:text-gray-400">测试模型</span>
+                <span class="max-w-[280px] truncate text-xs text-gray-500" :title="testModel">
+                  {{ testModel }}
+                </span>
+              </div>
+              <div class="grid grid-cols-4 gap-1.5">
+                <button
+                  v-for="option in modelOptions"
+                  :key="option.value"
+                  :class="[
+                    'rounded-md border px-2 py-1.5 text-xs font-medium transition-colors',
+                    testModel === option.value
+                      ? 'border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-500 dark:bg-blue-900/30 dark:text-blue-300'
+                      : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700'
+                  ]"
+                  :disabled="testStatus === 'testing'"
+                  type="button"
+                  @click="testModel = option.value"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </div>
+            <div v-else class="flex items-center justify-between text-sm">
               <span class="text-gray-500 dark:text-gray-400">测试模型</span>
-              <span class="font-medium text-gray-700 dark:text-gray-300">{{ testModel }}</span>
+              <span class="font-medium text-gray-700 dark:text-gray-300">默认模型</span>
             </div>
           </div>
 
@@ -187,6 +215,10 @@ const props = defineProps({
   account: {
     type: Object,
     default: null
+  },
+  initialModel: {
+    type: String,
+    default: ''
   }
 })
 
@@ -202,12 +234,18 @@ const eventSource = ref(null)
 
 // 测试模型
 const testModel = ref('claude-sonnet-4-5-20250929')
+const modelOptions = [
+  { label: 'Opus', value: 'claude-opus-4-8' },
+  { label: 'Sonnet', value: 'claude-sonnet-4-6' },
+  { label: 'Haiku', value: 'claude-haiku-4-5-20251001' },
+  { label: 'Fable', value: 'claude-fable-5' }
+]
 
 // 计算属性
 const platformLabel = computed(() => {
   if (!props.account) return '未知'
   const platform = props.account.platform
-  if (platform === 'claude') return 'Claude OAuth'
+  if (platform === 'claude' || platform === 'claude-oauth') return 'Claude OAuth'
   if (platform === 'claude-console') return 'Claude Console'
   return platform
 })
@@ -215,14 +253,14 @@ const platformLabel = computed(() => {
 const platformIcon = computed(() => {
   if (!props.account) return 'fas fa-question'
   const platform = props.account.platform
-  if (platform === 'claude' || platform === 'claude-console') return 'fas fa-brain'
+  if (['claude', 'claude-oauth', 'claude-console'].includes(platform)) return 'fas fa-brain'
   return 'fas fa-robot'
 })
 
 const platformBadgeClass = computed(() => {
   if (!props.account) return 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
   const platform = props.account.platform
-  if (platform === 'claude') {
+  if (platform === 'claude' || platform === 'claude-oauth') {
     return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300'
   }
   if (platform === 'claude-console') {
@@ -340,7 +378,7 @@ const statusTextClass = computed(() => {
 function getTestEndpoint() {
   if (!props.account) return ''
   const platform = props.account.platform
-  if (platform === 'claude') {
+  if (platform === 'claude' || platform === 'claude-oauth') {
     return `${API_PREFIX}/admin/claude-accounts/${props.account.id}/test`
   }
   if (platform === 'claude-console') {
@@ -474,6 +512,7 @@ watch(
   () => props.show,
   (newVal) => {
     if (newVal) {
+      testModel.value = props.initialModel || 'claude-sonnet-4-6'
       testStatus.value = 'idle'
       responseText.value = ''
       errorMessage.value = ''

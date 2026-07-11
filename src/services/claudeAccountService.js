@@ -16,7 +16,11 @@ const {
 const tokenRefreshService = require('./tokenRefreshService')
 const LRUCache = require('../utils/lruCache')
 const { formatDateWithTimezone, getISOStringWithTimezone } = require('../utils/dateHelper')
-const { isOpus45OrNewer, getRateLimitModelFamily } = require('../utils/modelHelper')
+const {
+  isOpus45OrNewer,
+  getRateLimitModelFamily,
+  RATE_LIMITED_MODEL_FAMILIES
+} = require('../utils/modelHelper')
 
 /**
  * Check if account is Pro (not Max)
@@ -356,6 +360,84 @@ class ClaudeAccountService {
       weekly_non_opus: 'legacy Fable weekly'
     }
     return labels[bucket] || bucket
+  }
+
+  _buildModelRateLimitStatus(accountData = {}) {
+    const buckets = this._getClaudeRateLimitBuckets(accountData)
+    const status = {}
+
+    for (const family of RATE_LIMITED_MODEL_FAMILIES) {
+      const candidates = ['five_hour', ...this._getRateLimitBucketsForModel(`claude-${family}`)]
+      let activeBucket = candidates.find((bucket) => this._isBucketActive(buckets[bucket]))
+      let bucketInfo = activeBucket ? buckets[activeBucket] : null
+
+      if (
+        family === 'opus' &&
+        !bucketInfo &&
+        this._isBucketActive({ resetAt: accountData.opusRateLimitEndAt })
+      ) {
+        activeBucket = 'weekly_opus'
+        bucketInfo = {
+          resetAt: accountData.opusRateLimitEndAt,
+          rateLimitedAt: accountData.opusRateLimitedAt || null,
+          source: 'legacy_opus_fields'
+        }
+      }
+
+      const resetAt = this._getBucketResetAt(bucketInfo)
+      status[family] = {
+        family,
+        isRateLimited: !!bucketInfo,
+        bucket: activeBucket || `weekly_${family}`,
+        rateLimitedAt: bucketInfo?.rateLimitedAt || null,
+        resetAt,
+        secondsRemaining: resetAt
+          ? Math.max(0, Math.ceil((Date.parse(resetAt) - Date.now()) / 1000))
+          : 0,
+        requestedModel: bucketInfo?.requestedModel || null,
+        source: bucketInfo?.source || null
+      }
+    }
+
+    return status
+  }
+
+  _buildTokenHealthStatus(accountData = {}) {
+    const nowSeconds = Math.floor(Date.now() / 1000)
+    const expiresAtSeconds = this._toUnixSeconds(accountData.expiresAt)
+    const expiresInSeconds =
+      expiresAtSeconds === null ? null : Math.max(0, expiresAtSeconds - nowSeconds)
+    const isExpired = expiresAtSeconds !== null && expiresAtSeconds <= nowSeconds
+    const lastRefreshAtSeconds = this._toUnixSeconds(accountData.lastRefreshAt)
+    const lastRefreshErrorAtSeconds = this._toUnixSeconds(accountData.lastRefreshErrorAt)
+    const refreshFailed =
+      lastRefreshErrorAtSeconds !== null &&
+      (lastRefreshAtSeconds === null || lastRefreshErrorAtSeconds >= lastRefreshAtSeconds)
+    const hasAccessToken = !!accountData.accessToken
+
+    let status = 'healthy'
+    if (!hasAccessToken) {
+      status = 'missing'
+    } else if (isExpired) {
+      status = 'expired'
+    } else if (refreshFailed) {
+      status = 'refresh_failed'
+    } else if (expiresInSeconds !== null && expiresInSeconds <= 60 * 60) {
+      status = 'expiring'
+    }
+
+    return {
+      status,
+      hasAccessToken,
+      hasRefreshToken: !!accountData.refreshToken,
+      expiresAt: expiresAtSeconds === null ? null : new Date(expiresAtSeconds * 1000).toISOString(),
+      expiresInSeconds,
+      isExpired,
+      refreshFailed,
+      lastRefreshAt: accountData.lastRefreshAt || null,
+      lastRefreshErrorAt: refreshFailed ? accountData.lastRefreshErrorAt : null,
+      refreshError: refreshFailed ? accountData.errorMessage || null : null
+    }
   }
 
   _inferLegacyRateLimitBucket(accountData = {}) {
@@ -941,11 +1023,15 @@ class ClaudeAccountService {
       // 处理返回数据，移除敏感信息并添加限流状态和会话窗口信息
       const processedAccounts = await Promise.all(
         accounts.map(async (account) => {
-          // 获取限流状态信息
-          const rateLimitInfo = await this.getAccountRateLimitInfo(account.id)
-
-          // 获取会话窗口信息
-          const sessionWindowInfo = await this.getSessionWindowInfo(account.id)
+          const [rateLimitInfo, sessionWindowInfo] = await Promise.all([
+            this.getAccountRateLimitInfo(account.id),
+            this.getSessionWindowInfo(account.id)
+          ])
+          const operationalStatus = await this.getAccountOperationalStatus(
+            account.id,
+            account,
+            rateLimitInfo
+          )
 
           // 构建 Claude Usage 快照（从 Redis 读取）
           const claudeUsage = this.buildClaudeUsageSnapshot(account)
@@ -991,9 +1077,11 @@ class ClaudeAccountService {
               ? {
                   isRateLimited: rateLimitInfo.isRateLimited,
                   rateLimitedAt: rateLimitInfo.rateLimitedAt,
-                  minutesRemaining: rateLimitInfo.minutesRemaining
+                  minutesRemaining: rateLimitInfo.minutesRemaining,
+                  rateLimitEndAt: rateLimitInfo.rateLimitEndAt || null
                 }
               : null,
+            operationalStatus,
             // 添加会话窗口信息
             sessionWindow: sessionWindowInfo || {
               hasActiveWindow: false,
@@ -2000,6 +2088,107 @@ class ClaudeAccountService {
       )
       return { success: false, cleared: [], error: error.message, accountData }
     }
+  }
+
+  async getAccountOperationalStatus(accountId, accountData = null, rateLimitInfo = null) {
+    try {
+      let currentAccount = accountData || (await redis.getClaudeAccount(accountId))
+      if (!currentAccount || Object.keys(currentAccount).length === 0) {
+        return null
+      }
+
+      const cleanupResult = await this.clearExpiredModelRateLimits(accountId, currentAccount)
+      currentAccount = cleanupResult.accountData || currentAccount
+
+      const client = redis.getClientSafe()
+      const tempUnavailableKey = `temp_unavailable:claude-official:${accountId}`
+      let tempUnavailableTtl = -2
+      try {
+        tempUnavailableTtl = await client.ttl(tempUnavailableKey)
+      } catch (error) {
+        logger.warn(
+          `⚠️ Failed to read temp-unavailable TTL for Claude account ${accountId}: ${error.message}`
+        )
+      }
+
+      const tempUnavailableActive = tempUnavailableTtl > 0 || tempUnavailableTtl === -1
+      const tempUnavailable = {
+        active: tempUnavailableActive,
+        ttlSeconds: tempUnavailableTtl > 0 ? tempUnavailableTtl : null,
+        expiresAt:
+          tempUnavailableTtl > 0
+            ? new Date(Date.now() + tempUnavailableTtl * 1000).toISOString()
+            : null
+      }
+      const token = this._buildTokenHealthStatus(currentAccount)
+      const modelRateLimits = this._buildModelRateLimitStatus(currentAccount)
+      const currentRateLimitInfo = rateLimitInfo || (await this.getAccountRateLimitInfo(accountId))
+      const reasons = []
+
+      if (currentAccount.isActive !== 'true') {
+        reasons.push({ code: 'inactive', label: '账号未启用' })
+      }
+      if (
+        ['error', 'blocked', 'temp_error', 'unauthorized', 'quota_exceeded'].includes(
+          currentAccount.status
+        )
+      ) {
+        reasons.push({
+          code: `status_${currentAccount.status}`,
+          label: `账号状态：${currentAccount.status}`
+        })
+      }
+      if (currentRateLimitInfo?.isRateLimited) {
+        reasons.push({ code: 'account_rate_limited', label: '账号整体限流' })
+      }
+      if (Object.values(modelRateLimits).some((item) => item.bucket === 'five_hour')) {
+        reasons.push({ code: 'five_hour_rate_limited', label: '5 小时窗口限流' })
+      }
+      if (tempUnavailable.active) {
+        reasons.push({ code: 'temp_unavailable', label: '临时冷却中' })
+      }
+      if (currentAccount.schedulable === 'false') {
+        reasons.push({ code: 'not_schedulable', label: '调度已停用' })
+      }
+      if (token.status === 'missing') {
+        reasons.push({ code: 'token_missing', label: 'Token 缺失' })
+      } else if (token.status === 'expired') {
+        reasons.push({ code: 'token_expired', label: 'Token 已过期' })
+      }
+
+      const modelLimitedCount = Object.values(modelRateLimits).filter(
+        (item) => item.isRateLimited
+      ).length
+      const scope = reasons.length > 0 ? 'account' : modelLimitedCount > 0 ? 'model' : 'available'
+
+      return {
+        availability: {
+          scope,
+          accountUnavailable: scope === 'account',
+          partialModelUnavailable: scope === 'model',
+          modelLimitedCount,
+          reasons
+        },
+        tempUnavailable,
+        token,
+        modelRateLimits
+      }
+    } catch (error) {
+      logger.error(`❌ Failed to build operational status for Claude account ${accountId}:`, error)
+      return null
+    }
+  }
+
+  async clearAccountTempUnavailable(accountId) {
+    const accountData = await redis.getClaudeAccount(accountId)
+    if (!accountData || Object.keys(accountData).length === 0) {
+      throw new Error('Account not found')
+    }
+
+    const key = `temp_unavailable:claude-official:${accountId}`
+    const deleted = await redis.getClientSafe().del(key)
+    logger.info(`✅ Cleared temporary cooldown for Claude account ${accountId}`)
+    return { success: true, cleared: deleted > 0 }
   }
 
   async migrateLegacyRateLimitToBucketIfPossible(accountId, accountData = null) {
@@ -3253,6 +3442,7 @@ class ClaudeAccountService {
       // 清除5xx错误计数
       const serverErrorKey = `claude_account:${accountId}:5xx_errors`
       await redis.client.del(serverErrorKey)
+      await redis.client.del(`temp_unavailable:claude-official:${accountId}`)
 
       logger.info(
         `✅ Successfully reset all error states for account ${accountData.name} (${accountId})`
