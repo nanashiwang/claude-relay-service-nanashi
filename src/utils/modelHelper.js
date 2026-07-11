@@ -188,10 +188,23 @@ function isOpus45OrNewer(modelName) {
   return false
 }
 
+const RATE_LIMITED_MODEL_FAMILIES = ['opus', 'sonnet', 'haiku', 'fable']
+
+function getRateLimitModelFamily(modelName) {
+  if (!modelName || typeof modelName !== 'string') {
+    return null
+  }
+
+  const baseModel = (getEffectiveModel(modelName) || '').toLowerCase()
+  return RATE_LIMITED_MODEL_FAMILIES.find((family) => baseModel.includes(family)) || null
+}
+
 module.exports = {
   parseVendorPrefixedModel,
   hasVendorPrefix,
   getEffectiveModel,
   getVendorType,
-  isOpus45OrNewer
+  isOpus45OrNewer,
+  RATE_LIMITED_MODEL_FAMILIES,
+  getRateLimitModelFamily
 }

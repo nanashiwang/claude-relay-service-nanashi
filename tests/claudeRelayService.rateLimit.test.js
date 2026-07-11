@@ -50,6 +50,12 @@ function loadRelayService() {
       if (requestedModel && requestedModel.toLowerCase().includes('fable')) {
         return 'weekly_fable'
       }
+      if (requestedModel && requestedModel.toLowerCase().includes('sonnet')) {
+        return 'weekly_sonnet'
+      }
+      if (requestedModel && requestedModel.toLowerCase().includes('haiku')) {
+        return 'weekly_haiku'
+      }
       return 'weekly_standard'
     }),
     updateSessionWindowStatus: jest.fn(async () => undefined),
@@ -184,6 +190,56 @@ describe('ClaudeRelayService transient 429 handling', () => {
     expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
   })
 
+  it('returns 503 when the bound dedicated account is unavailable', async () => {
+    const { service, unifiedClaudeScheduler } = loadRelayService()
+    const error = new Error('Dedicated account unavailable')
+    error.code = 'CLAUDE_DEDICATED_UNAVAILABLE'
+    error.accountId = 'acc-1'
+    error.reason = 'temporarily_unavailable'
+    unifiedClaudeScheduler.selectAccountForApiKey.mockRejectedValue(error)
+
+    const response = await service.relayRequest(
+      { model: 'claude-sonnet-4-6', messages: [] },
+      makeDedicatedApiKey(),
+      null,
+      null,
+      {}
+    )
+
+    expect(response.statusCode).toBe(503)
+    expect(JSON.parse(response.body)).toEqual({
+      error: 'dedicated_account_unavailable',
+      message: '该 API Key 绑定的专属账号当前不可用（temporarily_unavailable），请稍后重试。'
+    })
+  })
+
+  it('ends a stream with 503 when the bound dedicated account is unavailable', async () => {
+    const { service, unifiedClaudeScheduler } = loadRelayService()
+    const error = new Error('Dedicated account unavailable')
+    error.code = 'CLAUDE_DEDICATED_UNAVAILABLE'
+    error.accountId = 'acc-1'
+    error.reason = 'not_schedulable'
+    unifiedClaudeScheduler.selectAccountForApiKey.mockRejectedValue(error)
+    const responseStream = makeResponseStream()
+
+    await service.relayStreamRequestWithUsageCapture(
+      { model: 'claude-sonnet-4-6', messages: [], stream: true },
+      makeDedicatedApiKey(),
+      responseStream,
+      {},
+      null
+    )
+
+    expect(responseStream.status).toHaveBeenCalledWith(503)
+    expect(responseStream.write).toHaveBeenCalledWith(
+      JSON.stringify({
+        error: 'dedicated_account_unavailable',
+        message: '该 API Key 绑定的专属账号当前不可用（not_schedulable），请稍后重试。'
+      })
+    )
+    expect(responseStream.end).toHaveBeenCalled()
+  })
+
   it('marks a Fable weekly bucket instead of globally stopping the account', async () => {
     const { service, claudeAccountService, unifiedClaudeScheduler } = loadRelayService()
     service._makeClaudeRequest = jest.fn(async () => ({
@@ -217,7 +273,7 @@ describe('ClaudeRelayService transient 429 handling', () => {
     expect(unifiedClaudeScheduler.markAccountRateLimited).not.toHaveBeenCalled()
   })
 
-  it('marks a standard weekly bucket separately from Fable and Opus', async () => {
+  it('marks a Sonnet weekly bucket separately from Haiku, Fable and Opus', async () => {
     const { service, claudeAccountService, unifiedClaudeScheduler } = loadRelayService()
     service._makeClaudeRequest = jest.fn(async () => ({
       statusCode: 429,
@@ -237,12 +293,13 @@ describe('ClaudeRelayService transient 429 handling', () => {
 
     expect(response.statusCode).toBe(403)
     expect(JSON.parse(response.body)).toEqual({
-      error: 'claude_weekly_limit',
-      message: '此专属账号的标准 Claude 模型周额度已达到限制，将于 reset-1800000000 自动恢复。'
+      error: 'sonnet_weekly_limit',
+      message:
+        '此专属账号的 Sonnet 模型周额度已达到限制，将于 reset-1800000000 自动恢复；可切换其他模型继续。'
     })
     expect(claudeAccountService.markAccountModelRateLimited).toHaveBeenCalledWith(
       'acc-1',
-      'weekly_standard',
+      'weekly_sonnet',
       1800000000,
       expect.objectContaining({ requestedModel: 'claude-sonnet-4-6' })
     )

@@ -421,6 +421,15 @@ class PricingService {
       }
     }
 
+    // GPT-5.6 变体在价格源收录前沿用 GPT-5 定价。
+    if (modelName.toLowerCase().startsWith('gpt-5.6') && !this.pricingData[modelName]) {
+      const fallbackPricing = this.pricingData['gpt-5']
+      if (fallbackPricing) {
+        logger.info(`💰 Using gpt-5 pricing as fallback for ${modelName}`)
+        return this.applyCustomModelPricingOverride(fallbackPricing, 'gpt-5')
+      }
+    }
+
     // 对于Bedrock区域前缀模型（如 us.anthropic.claude-sonnet-4-20250514-v1:0），
     // 尝试去掉区域前缀进行匹配
     if (modelName.includes('.anthropic.') || modelName.includes('.claude')) {

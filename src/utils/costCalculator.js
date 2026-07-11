@@ -104,6 +104,9 @@ class CostCalculator {
     if (normalizedModel.includes('gpt-5.2')) {
       return GPT_52_PRICING
     }
+    if (normalizedModel.startsWith('gpt-5.6')) {
+      return GPT_52_PRICING
+    }
 
     return MODEL_PRICING['unknown']
   }

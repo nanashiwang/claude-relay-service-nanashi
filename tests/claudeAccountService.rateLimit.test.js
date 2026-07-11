@@ -54,7 +54,11 @@ describe('ClaudeAccountService transient 429 handling', () => {
       getISOStringWithTimezone: jest.fn((date) => date.toISOString())
     }))
     jest.doMock('../src/utils/modelHelper', () => ({
-      isOpus45OrNewer: jest.fn(() => false)
+      isOpus45OrNewer: jest.fn(() => false),
+      getRateLimitModelFamily: jest.fn((model) => {
+        const normalized = typeof model === 'string' ? model.toLowerCase() : ''
+        return ['opus', 'sonnet', 'haiku', 'fable'].find((family) => normalized.includes(family))
+      })
     }))
     jest.doMock(
       '../src/utils/lruCache',
@@ -161,7 +165,7 @@ describe('ClaudeAccountService transient 429 handling', () => {
     ).toBe('weekly_fable')
   })
 
-  it('classifies standard Claude models into their own weekly bucket', () => {
+  it('classifies Sonnet into its own weekly bucket', () => {
     const { service } = loadService()
     const resetTimestamp = Math.floor((Date.now() + 2 * 60 * 60 * 1000) / 1000)
     const resetAt = new Date(resetTimestamp * 1000).toISOString()
@@ -176,7 +180,7 @@ describe('ClaudeAccountService transient 429 handling', () => {
           claudeFiveHourResetsAt: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString()
         }
       })
-    ).toBe('weekly_standard')
+    ).toBe('weekly_sonnet')
   })
 
   it('does not treat allowed rate-limit statuses as rejected', () => {
@@ -242,6 +246,30 @@ describe('ClaudeAccountService transient 429 handling', () => {
     )
     await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-fable-5')).resolves.toBe(
       false
+    )
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-opus-4-8')).resolves.toBe(
+      false
+    )
+  })
+
+  it('keeps Sonnet and Haiku weekly limits independent', async () => {
+    const resetAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()
+    const { service } = loadService({
+      claudeRateLimitBuckets: JSON.stringify({
+        weekly_sonnet: { bucket: 'weekly_sonnet', resetAt },
+        weekly_haiku: { bucket: 'weekly_haiku', resetAt }
+      })
+    })
+
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-sonnet-4-6')).resolves.toBe(
+      true
+    )
+    await service.clearAccountModelRateLimit('acc-1', 'weekly_sonnet')
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-sonnet-4-6')).resolves.toBe(
+      false
+    )
+    await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-haiku-4-5')).resolves.toBe(
+      true
     )
     await expect(service.isAccountRateLimitedForModel('acc-1', 'claude-opus-4-8')).resolves.toBe(
       false
@@ -339,5 +367,18 @@ describe('ClaudeAccountService transient 429 handling', () => {
     expect(getAccount().rateLimitStatus).toBeUndefined()
     expect(getAccount().rateLimitEndAt).toBeUndefined()
     expect(getAccount().rateLimitAutoStopped).toBeUndefined()
+  })
+})
+
+describe('Claude rate-limit model family parsing', () => {
+  it('maps supported model names after removing vendor prefixes', () => {
+    const { getRateLimitModelFamily, RATE_LIMITED_MODEL_FAMILIES } = jest.requireActual(
+      '../src/utils/modelHelper'
+    )
+
+    expect(RATE_LIMITED_MODEL_FAMILIES).toEqual(['opus', 'sonnet', 'haiku', 'fable'])
+    expect(getRateLimitModelFamily('ccr,claude-sonnet-4-6')).toBe('sonnet')
+    expect(getRateLimitModelFamily('claude-haiku-4-5')).toBe('haiku')
+    expect(getRateLimitModelFamily('deepseek-chat')).toBeNull()
   })
 })

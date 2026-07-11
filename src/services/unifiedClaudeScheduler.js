@@ -8,6 +8,7 @@ const redis = require('../models/redis')
 const logger = require('../utils/logger')
 const { parseVendorPrefixedModel, isOpus45OrNewer } = require('../utils/modelHelper')
 const { resolveStickySessionPolicy } = require('../utils/sessionStickyHelper')
+const config = require('../../config/config')
 
 /**
  * Check if account is Pro (not Max)
@@ -291,56 +292,80 @@ class UnifiedClaudeScheduler {
 
         // 普通专属账户
         const boundAccount = await redis.getClaudeAccount(apiKeyData.claudeAccountId)
-        if (boundAccount && boundAccount.isActive === 'true' && boundAccount.status !== 'error') {
-          // 检查是否临时不可用
+        const allowDedicatedFallback = config.claude?.dedicatedAccountFallback === true
+        const createUnavailableError = (reason) => {
+          const error = new Error(`Dedicated Claude account is unavailable (${reason})`)
+          error.code = 'CLAUDE_DEDICATED_UNAVAILABLE'
+          error.accountId = apiKeyData.claudeAccountId
+          error.reason = reason
+          return error
+        }
+
+        if (
+          !boundAccount ||
+          boundAccount.isActive !== 'true' ||
+          ['error', 'blocked', 'temp_error'].includes(boundAccount.status)
+        ) {
+          logger.warn(
+            `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not available (isActive: ${boundAccount?.isActive}, status: ${boundAccount?.status})`
+          )
+          if (!allowDedicatedFallback) {
+            throw createUnavailableError('inactive_or_error')
+          }
+        } else {
+          // 限流必须早于 temp_unavailable 判断，避免专属账号静默落入共享池。
+          const schedulingState = await this._checkClaudeOfficialSchedulingState(
+            boundAccount,
+            effectiveModel
+          )
+          const latestBoundAccount = schedulingState.account || boundAccount
+          const rateLimitAutoStopped = latestBoundAccount.rateLimitAutoStopped === 'true'
+          if (
+            schedulingState.reason === 'rate_limited' ||
+            (rateLimitAutoStopped && !this._isSchedulable(latestBoundAccount.schedulable))
+          ) {
+            const rateInfo = await claudeAccountService.getAccountRateLimitInfoForModel(
+              boundAccount.id,
+              effectiveModel
+            )
+            const error = new Error('Dedicated Claude account is rate limited')
+            error.code = 'CLAUDE_DEDICATED_RATE_LIMITED'
+            error.accountId = boundAccount.id
+            error.rateLimitEndAt = rateInfo?.rateLimitEndAt || boundAccount.rateLimitEndAt || null
+            error.rateLimitBucket = rateInfo?.bucket || null
+            throw error
+          }
+
           const isTempUnavailable = await this.isAccountTemporarilyUnavailable(
             boundAccount.id,
             'claude-official'
           )
           if (isTempUnavailable) {
             logger.warn(
-              `⏱️ Bound Claude OAuth account ${boundAccount.id} is temporarily unavailable, falling back to pool`
+              `⏱️ Bound Claude OAuth account ${boundAccount.id} is temporarily unavailable`
             )
-          } else {
-            const schedulingState = await this._checkClaudeOfficialSchedulingState(
-              boundAccount,
-              effectiveModel
-            )
-            const latestBoundAccount = schedulingState.account || boundAccount
-            if (schedulingState.reason === 'rate_limited') {
-              const rateInfo = await claudeAccountService.getAccountRateLimitInfoForModel(
-                boundAccount.id,
-                effectiveModel
-              )
-              const error = new Error('Dedicated Claude account is rate limited')
-              error.code = 'CLAUDE_DEDICATED_RATE_LIMITED'
-              error.accountId = boundAccount.id
-              error.rateLimitEndAt = rateInfo?.rateLimitEndAt || boundAccount.rateLimitEndAt || null
-              error.rateLimitBucket = rateInfo?.bucket || null
-              throw error
+            if (!allowDedicatedFallback) {
+              throw createUnavailableError('temporarily_unavailable')
             }
-
-            if (!schedulingState.canUse) {
-              logger.warn(
-                `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${latestBoundAccount?.schedulable}), falling back to pool`
-              )
-            } else {
-              if (isOpusRequest) {
-                await claudeAccountService.clearExpiredOpusRateLimit(boundAccount.id)
-              }
-              logger.info(
-                `🎯 Using bound dedicated Claude OAuth account: ${latestBoundAccount.name} (${apiKeyData.claudeAccountId}) for API key ${apiKeyData.name}`
-              )
-              return {
-                accountId: apiKeyData.claudeAccountId,
-                accountType: 'claude-official'
-              }
+          } else if (!schedulingState.canUse) {
+            logger.warn(
+              `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${latestBoundAccount?.schedulable})`
+            )
+            if (!allowDedicatedFallback) {
+              throw createUnavailableError('not_schedulable')
+            }
+          } else {
+            if (isOpusRequest) {
+              await claudeAccountService.clearExpiredOpusRateLimit(boundAccount.id)
+            }
+            logger.info(
+              `🎯 Using bound dedicated Claude OAuth account: ${latestBoundAccount.name} (${apiKeyData.claudeAccountId}) for API key ${apiKeyData.name}`
+            )
+            return {
+              accountId: apiKeyData.claudeAccountId,
+              accountType: 'claude-official'
             }
           }
-        } else {
-          logger.warn(
-            `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not available (isActive: ${boundAccount?.isActive}, status: ${boundAccount?.status}), falling back to pool`
-          )
         }
       }
 
@@ -521,41 +546,51 @@ class UnifiedClaudeScheduler {
         boundAccount.status !== 'blocked' &&
         boundAccount.status !== 'temp_error'
       ) {
-        const schedulingState = await this._checkClaudeOfficialSchedulingState(
-          boundAccount,
-          requestedModel
+        const isTempUnavailable = await this.isAccountTemporarilyUnavailable(
+          boundAccount.id,
+          'claude-official'
         )
-        const latestBoundAccount = schedulingState.account || boundAccount
-        if (schedulingState.reason === 'rate_limited') {
-          const rateInfo = await claudeAccountService.getAccountRateLimitInfoForModel(
-            boundAccount.id,
-            requestedModel
-          )
-          const error = new Error('Dedicated Claude account is rate limited')
-          error.code = 'CLAUDE_DEDICATED_RATE_LIMITED'
-          error.accountId = boundAccount.id
-          error.rateLimitEndAt = rateInfo?.rateLimitEndAt || boundAccount.rateLimitEndAt || null
-          error.rateLimitBucket = rateInfo?.bucket || null
-          throw error
-        }
-
-        if (!schedulingState.canUse) {
+        if (isTempUnavailable) {
           logger.warn(
-            `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${latestBoundAccount?.schedulable})`
+            `⏱️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is temporarily unavailable in pool selection`
           )
         } else {
-          logger.info(
-            `🎯 Using bound dedicated Claude OAuth account: ${latestBoundAccount.name} (${apiKeyData.claudeAccountId})`
+          const schedulingState = await this._checkClaudeOfficialSchedulingState(
+            boundAccount,
+            requestedModel
           )
-          return [
-            {
-              ...latestBoundAccount,
-              accountId: latestBoundAccount.id,
-              accountType: 'claude-official',
-              priority: parseInt(latestBoundAccount.priority) || 50,
-              lastUsedAt: latestBoundAccount.lastUsedAt || '0'
-            }
-          ]
+          const latestBoundAccount = schedulingState.account || boundAccount
+          if (schedulingState.reason === 'rate_limited') {
+            const rateInfo = await claudeAccountService.getAccountRateLimitInfoForModel(
+              boundAccount.id,
+              requestedModel
+            )
+            const error = new Error('Dedicated Claude account is rate limited')
+            error.code = 'CLAUDE_DEDICATED_RATE_LIMITED'
+            error.accountId = boundAccount.id
+            error.rateLimitEndAt = rateInfo?.rateLimitEndAt || boundAccount.rateLimitEndAt || null
+            error.rateLimitBucket = rateInfo?.bucket || null
+            throw error
+          }
+
+          if (!schedulingState.canUse) {
+            logger.warn(
+              `⚠️ Bound Claude OAuth account ${apiKeyData.claudeAccountId} is not schedulable (schedulable: ${latestBoundAccount?.schedulable})`
+            )
+          } else {
+            logger.info(
+              `🎯 Using bound dedicated Claude OAuth account: ${latestBoundAccount.name} (${apiKeyData.claudeAccountId})`
+            )
+            return [
+              {
+                ...latestBoundAccount,
+                accountId: latestBoundAccount.id,
+                accountType: 'claude-official',
+                priority: parseInt(latestBoundAccount.priority) || 50,
+                lastUsedAt: latestBoundAccount.lastUsedAt || '0'
+              }
+            ]
+          }
         }
       } else {
         logger.warn(
@@ -1339,12 +1374,23 @@ class UnifiedClaudeScheduler {
     try {
       const client = redis.getClientSafe()
       const key = `temp_unavailable:${accountType}:${accountId}`
-      await client.setex(key, ttlSeconds, '1')
+      const parsedTtl = Number(ttlSeconds)
+      const configuredMaxTtl = Number(config.upstreamError?.maxCustomTtlSeconds)
+      const maxTtl =
+        Number.isFinite(configuredMaxTtl) && configuredMaxTtl > 0 ? configuredMaxTtl : 1800
+      const normalizedTtl = Number.isFinite(parsedTtl) && parsedTtl > 0 ? Math.ceil(parsedTtl) : 300
+      const cappedTtl = Math.min(normalizedTtl, maxTtl)
+      if (cappedTtl < normalizedTtl) {
+        logger.warn(
+          `⚠️ Temp-unavailable TTL ${normalizedTtl}s for account ${accountId} exceeds cap, clamping to ${cappedTtl}s`
+        )
+      }
+      await client.setex(key, cappedTtl, '1')
       if (sessionHash) {
         await this._deleteSessionMapping(sessionHash)
       }
       logger.warn(
-        `⏱️ Account ${accountId} (${accountType}) marked temporarily unavailable for ${ttlSeconds}s`
+        `⏱️ Account ${accountId} (${accountType}) marked temporarily unavailable for ${cappedTtl}s`
       )
       return { success: true }
     } catch (error) {

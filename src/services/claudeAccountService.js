@@ -16,7 +16,7 @@ const {
 const tokenRefreshService = require('./tokenRefreshService')
 const LRUCache = require('../utils/lruCache')
 const { formatDateWithTimezone, getISOStringWithTimezone } = require('../utils/dateHelper')
-const { isOpus45OrNewer } = require('../utils/modelHelper')
+const { isOpus45OrNewer, getRateLimitModelFamily } = require('../utils/modelHelper')
 
 /**
  * Check if account is Pro (not Max)
@@ -102,19 +102,18 @@ class ClaudeAccountService {
   }
 
   _getRateLimitBucketForModel(model) {
-    if (this._isOpusModel(model)) {
-      return 'weekly_opus'
-    }
-    if (this._isFableModel(model)) {
-      return 'weekly_fable'
-    }
-    return 'weekly_standard'
+    const family = getRateLimitModelFamily(model)
+    return family ? `weekly_${family}` : 'weekly_standard'
   }
 
   _getRateLimitBucketsForModel(model) {
     const bucket = this._getRateLimitBucketForModel(model)
     if (bucket === 'weekly_fable') {
       return ['weekly_fable', 'weekly_non_opus']
+    }
+    if (bucket === 'weekly_sonnet' || bucket === 'weekly_haiku') {
+      // 兼容拆分家族限流前写入的共享标准模型桶。
+      return [bucket, 'weekly_standard']
     }
     return [bucket]
   }
@@ -283,8 +282,11 @@ class ClaudeAccountService {
       if (normalizedClaim.includes('fable')) {
         return 'weekly_fable'
       }
-      if (normalizedClaim.includes('sonnet') || normalizedClaim.includes('haiku')) {
-        return 'weekly_standard'
+      if (normalizedClaim.includes('sonnet')) {
+        return 'weekly_sonnet'
+      }
+      if (normalizedClaim.includes('haiku')) {
+        return 'weekly_haiku'
       }
       if (normalizedClaim.includes('non_opus')) {
         return this._isFableModel(requestedModel) || !requestedModel
@@ -347,6 +349,8 @@ class ClaudeAccountService {
     const labels = {
       five_hour: '5-hour',
       weekly_opus: 'Opus weekly',
+      weekly_sonnet: 'Sonnet weekly',
+      weekly_haiku: 'Haiku weekly',
       weekly_fable: 'Fable weekly',
       weekly_standard: 'standard weekly',
       weekly_non_opus: 'legacy Fable weekly'

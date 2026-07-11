@@ -108,6 +108,13 @@ class ClaudeRelayService {
         : '此专属账号的 Fable 模型周额度已达到限制；可切换 Sonnet、Haiku 或 Opus 模型继续。'
     }
 
+    if (bucket === 'weekly_sonnet' || bucket === 'weekly_haiku') {
+      const familyName = bucket === 'weekly_sonnet' ? 'Sonnet' : 'Haiku'
+      return formattedReset
+        ? `此专属账号的 ${familyName} 模型周额度已达到限制，将于 ${formattedReset} 自动恢复；可切换其他模型继续。`
+        : `此专属账号的 ${familyName} 模型周额度已达到限制；可切换其他模型继续。`
+    }
+
     if (bucket === 'weekly_standard') {
       return formattedReset
         ? `此专属账号的标准 Claude 模型周额度已达到限制，将于 ${formattedReset} 自动恢复。`
@@ -129,6 +136,12 @@ class ClaudeRelayService {
     }
     if (bucket === 'weekly_fable' || bucket === 'weekly_non_opus') {
       return 'fable_weekly_limit'
+    }
+    if (bucket === 'weekly_sonnet') {
+      return 'sonnet_weekly_limit'
+    }
+    if (bucket === 'weekly_haiku') {
+      return 'haiku_weekly_limit'
     }
     if (bucket === 'weekly_standard') {
       return 'claude_weekly_limit'
@@ -363,6 +376,17 @@ class ClaudeRelayService {
             body: JSON.stringify({
               error: this._getClaudeBucketErrorCode(error.rateLimitBucket),
               message: limitMessage
+            }),
+            accountId: error.accountId
+          }
+        }
+        if (error.code === 'CLAUDE_DEDICATED_UNAVAILABLE') {
+          return {
+            statusCode: 503,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              error: 'dedicated_account_unavailable',
+              message: `该 API Key 绑定的专属账号当前不可用（${error.reason}），请稍后重试。`
             }),
             accountId: error.accountId
           }
@@ -1554,6 +1578,20 @@ class ClaudeRelayService {
             JSON.stringify({
               error: this._getClaudeBucketErrorCode(error.rateLimitBucket),
               message: limitMessage
+            })
+          )
+          responseStream.end()
+          return
+        }
+        if (error.code === 'CLAUDE_DEDICATED_UNAVAILABLE') {
+          if (!responseStream.headersSent) {
+            responseStream.status(503)
+            responseStream.setHeader('Content-Type', 'application/json')
+          }
+          responseStream.write(
+            JSON.stringify({
+              error: 'dedicated_account_unavailable',
+              message: `该 API Key 绑定的专属账号当前不可用（${error.reason}），请稍后重试。`
             })
           )
           responseStream.end()

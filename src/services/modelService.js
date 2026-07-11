@@ -52,7 +52,10 @@ class ModelService {
           'gpt-5.1-codex',
           'gpt-5.1-codex-max',
           'gpt-5-2025-08-07',
-          'gpt-5-codex'
+          'gpt-5-codex',
+          'gpt-5.6-sol',
+          'gpt-5.6-terra',
+          'gpt-5.6-luna'
         ]
       },
       gemini: {

@@ -46,6 +46,8 @@ const config = {
   claude: {
     apiUrl: process.env.CLAUDE_API_URL || 'https://api.anthropic.com/v1/messages',
     apiVersion: process.env.CLAUDE_API_VERSION || '2023-06-01',
+    // 默认严格使用 API Key 绑定的专属账号；仅显式开启时允许回退共享池。
+    dedicatedAccountFallback: process.env.CLAUDE_DEDICATED_ACCOUNT_FALLBACK === 'true',
     betaHeader:
       process.env.CLAUDE_BETA_HEADER ||
       'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,fine-grained-tool-streaming-2025-05-14',
@@ -105,6 +107,11 @@ const config = {
 
   // ⏱️ 请求超时配置
   requestTimeout: parseInt(process.env.REQUEST_TIMEOUT) || 600000, // 默认 10 分钟
+
+  upstreamError: {
+    // temp_unavailable 只用于短暂故障，避免上游长 retry-after 将账号下线数天。
+    maxCustomTtlSeconds: parseInt(process.env.UPSTREAM_ERROR_MAX_CUSTOM_TTL_SECONDS) || 1800
+  },
 
   // 🖼️ OpenAI 图片代理配置
   openaiImages: {
