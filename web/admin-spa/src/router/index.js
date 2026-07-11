@@ -13,6 +13,7 @@ const DashboardView = () => import('@/views/DashboardView.vue')
 const ApiKeysView = () => import('@/views/ApiKeysView.vue')
 const ApiKeyUsageRecordsView = () => import('@/views/ApiKeyUsageRecordsView.vue')
 const AccountsView = () => import('@/views/AccountsView.vue')
+const ClaudePoolHealthView = () => import('@/views/ClaudePoolHealthView.vue')
 const AccountUsageRecordsView = () => import('@/views/AccountUsageRecordsView.vue')
 const TutorialView = () => import('@/views/TutorialView.vue')
 const SettingsView = () => import('@/views/SettingsView.vue')
@@ -108,6 +109,18 @@ const routes = [
         path: '',
         name: 'Accounts',
         component: AccountsView
+      }
+    ]
+  },
+  {
+    path: '/account-pool-health',
+    component: MainLayout,
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'AccountPoolHealth',
+        component: ClaudePoolHealthView
       }
     ]
   },

@@ -2090,6 +2090,60 @@ class ClaudeAccountService {
     }
   }
 
+  inspectAccountForModel(accountData = {}, requestedModel = null) {
+    const buckets = this._getClaudeRateLimitBuckets(accountData)
+    const candidates = ['five_hour', ...this._getRateLimitBucketsForModel(requestedModel)]
+    let activeBucket = candidates.find((bucket) => this._isBucketActive(buckets[bucket])) || null
+    let resetAt = activeBucket ? this._getBucketResetAt(buckets[activeBucket]) : null
+
+    if (
+      !activeBucket &&
+      this._isOpusModel(requestedModel) &&
+      this._isBucketActive({ resetAt: accountData.opusRateLimitEndAt })
+    ) {
+      activeBucket = 'weekly_opus'
+      resetAt = accountData.opusRateLimitEndAt
+    }
+
+    const legacyBucket = this._inferLegacyRateLimitBucket(accountData)
+    if (!activeBucket && legacyBucket && candidates.includes(legacyBucket)) {
+      const legacyResetAt = accountData.rateLimitEndAt
+      if (this._isBucketActive({ resetAt: legacyResetAt })) {
+        activeBucket = legacyBucket
+        resetAt = legacyResetAt
+      }
+    }
+
+    if (
+      !activeBucket &&
+      !legacyBucket &&
+      accountData.rateLimitStatus === 'limited' &&
+      accountData.rateLimitedAt
+    ) {
+      const rateLimitedAtSeconds = this._toUnixSeconds(accountData.rateLimitedAt)
+      if (rateLimitedAtSeconds !== null) {
+        const fallbackResetAt =
+          accountData.rateLimitEndAt ||
+          new Date((rateLimitedAtSeconds + 60 * 60) * 1000).toISOString()
+        if (this._isBucketActive({ resetAt: fallbackResetAt })) {
+          activeBucket = 'legacy_account'
+          resetAt = fallbackResetAt
+        }
+      }
+    }
+
+    return {
+      isRateLimited: !!activeBucket,
+      bucket: activeBucket,
+      resetAt,
+      wouldAutoResumeScheduling:
+        !!legacyBucket &&
+        accountData.rateLimitAutoStopped === 'true' &&
+        accountData.schedulable === 'false',
+      token: this._buildTokenHealthStatus(accountData)
+    }
+  }
+
   async getAccountOperationalStatus(accountId, accountData = null, rateLimitInfo = null) {
     try {
       let currentAccount = accountData || (await redis.getClaudeAccount(accountId))

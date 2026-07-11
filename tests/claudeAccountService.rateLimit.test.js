@@ -485,6 +485,54 @@ describe('ClaudeAccountService transient 429 handling', () => {
     expect(status.modelRateLimits.fable.isRateLimited).toBe(false)
   })
 
+  it('inspects model limits without writing account state', () => {
+    const resetAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+    const { service, redisMock } = loadService({
+      claudeRateLimitBuckets: JSON.stringify({
+        weekly_sonnet: { bucket: 'weekly_sonnet', resetAt }
+      }),
+      accessToken: 'encrypted-token',
+      expiresAt: String(Date.now() + 24 * 60 * 60 * 1000)
+    })
+
+    expect(
+      service.inspectAccountForModel(
+        {
+          claudeRateLimitBuckets: JSON.stringify({
+            weekly_sonnet: { bucket: 'weekly_sonnet', resetAt }
+          }),
+          accessToken: 'encrypted-token',
+          expiresAt: String(Date.now() + 24 * 60 * 60 * 1000)
+        },
+        'claude-sonnet-4-6'
+      )
+    ).toMatchObject({ isRateLimited: true, bucket: 'weekly_sonnet', resetAt })
+    expect(redisMock.setClaudeAccount).not.toHaveBeenCalled()
+    expect(redisMock.client.hdel).not.toHaveBeenCalled()
+  })
+
+  it('predicts legacy auto-resume when the requested family is not limited', () => {
+    const resetAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    const { service } = loadService()
+    const inspection = service.inspectAccountForModel(
+      {
+        rateLimitStatus: 'limited',
+        rateLimitAutoStopped: 'true',
+        schedulable: 'false',
+        rateLimitEndAt: resetAt,
+        claudeSevenDayResetsAt: resetAt,
+        claudeSevenDayOpusResetsAt: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(),
+        accessToken: 'encrypted-token'
+      },
+      'claude-opus-4-8'
+    )
+
+    expect(inspection).toMatchObject({
+      isRateLimited: false,
+      wouldAutoResumeScheduling: true
+    })
+  })
+
   it('reports temp-unavailable and refresh failures separately', async () => {
     const { service } = loadService(
       {

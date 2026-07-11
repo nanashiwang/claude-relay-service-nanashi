@@ -8,6 +8,7 @@ const router = express.Router()
 
 const claudeAccountService = require('../../services/claudeAccountService')
 const claudeRelayService = require('../../services/claudeRelayService')
+const unifiedClaudeScheduler = require('../../services/unifiedClaudeScheduler')
 const accountGroupService = require('../../services/accountGroupService')
 const accountTestSchedulerService = require('../../services/accountTestSchedulerService')
 const apiKeyService = require('../../services/apiKeyService')
@@ -18,6 +19,17 @@ const oauthHelper = require('../../utils/oauthHelper')
 const CostCalculator = require('../../utils/costCalculator')
 const webhookNotifier = require('../../utils/webhookNotifier')
 const { formatAccountExpiry, mapExpiryField } = require('./utils')
+
+const normalizePoolHealthQuery = (value, maxLength) => {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+  if (typeof value !== 'string') {
+    return null
+  }
+  const normalized = value.trim()
+  return normalized && normalized.length <= maxLength ? normalized : null
+}
 
 // 生成OAuth授权URL
 router.post('/claude-accounts/generate-auth-url', authenticateAdmin, async (req, res) => {
@@ -490,6 +502,81 @@ router.get('/claude-accounts', authenticateAdmin, async (req, res) => {
   } catch (error) {
     logger.error('❌ Failed to get Claude accounts:', error)
     return res.status(500).json({ error: 'Failed to get Claude accounts', message: error.message })
+  }
+})
+
+router.get('/claude-pool-health', authenticateAdmin, async (req, res) => {
+  try {
+    const requestedModel = normalizePoolHealthQuery(req.query.model, 128) || 'claude-sonnet-4-6'
+    const apiKeyId = normalizePoolHealthQuery(req.query.apiKeyId, 128)
+    const groupId = normalizePoolHealthQuery(req.query.groupId, 128)
+    const sessionHash = normalizePoolHealthQuery(req.query.sessionHash, 256)
+
+    if (req.query.model && !normalizePoolHealthQuery(req.query.model, 128)) {
+      return res.status(400).json({ error: 'Invalid model' })
+    }
+    if (req.query.sessionHash && !sessionHash) {
+      return res.status(400).json({ error: 'Invalid session hash' })
+    }
+    if (req.query.apiKeyId && !apiKeyId) {
+      return res.status(400).json({ error: 'Invalid API Key ID' })
+    }
+    if (req.query.groupId && !groupId) {
+      return res.status(400).json({ error: 'Invalid group ID' })
+    }
+
+    let apiKeyData = null
+    if (apiKeyId) {
+      apiKeyData = await redis.getApiKey(apiKeyId)
+      if (!apiKeyData || Object.keys(apiKeyData).length === 0) {
+        return res.status(404).json({ error: 'API Key not found' })
+      }
+    }
+
+    const [snapshot, groups, rawApiKeys] = await Promise.all([
+      unifiedClaudeScheduler.getPoolHealthSnapshot({
+        requestedModel,
+        apiKeyData,
+        groupId,
+        sessionHash
+      }),
+      accountGroupService.getAllGroups('claude'),
+      redis.getAllApiKeys()
+    ])
+
+    const apiKeys = rawApiKeys
+      .filter((key) => key.isDeleted !== 'true')
+      .map((key) => ({
+        id: key.id,
+        name: key.name || key.id,
+        isActive: key.isActive !== 'false',
+        permissions: apiKeyService.normalizePermissions(key.permissions),
+        claudeAccountId: key.claudeAccountId || null,
+        claudeConsoleAccountId: key.claudeConsoleAccountId || null,
+        bedrockAccountId: key.bedrockAccountId || null
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name))
+
+    return res.json({
+      success: true,
+      data: {
+        ...snapshot,
+        options: {
+          groups: groups.map((group) => ({
+            id: group.id,
+            name: group.name,
+            memberCount: Number(group.memberCount || 0)
+          })),
+          apiKeys
+        }
+      }
+    })
+  } catch (error) {
+    logger.error('❌ Failed to build Claude pool health snapshot:', error)
+    return res.status(500).json({
+      error: 'Failed to build Claude pool health snapshot',
+      message: error.message
+    })
   }
 })
 
