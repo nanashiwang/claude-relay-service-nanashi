@@ -49,7 +49,8 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       concurrentRequestQueueMaxSizeMultiplier,
       concurrentRequestQueueTimeoutMs,
       stickySessionAutoRenewalEnabled,
-      openaiStreamHeartbeatIntervalMs
+      openaiStreamHeartbeatIntervalMs,
+      requestMaxSizeMb
     } = req.body
 
     // 验证输入
@@ -185,6 +186,19 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
       }
     }
 
+    if (requestMaxSizeMb !== undefined) {
+      if (
+        typeof requestMaxSizeMb !== 'number' ||
+        !Number.isInteger(requestMaxSizeMb) ||
+        requestMaxSizeMb < 0 ||
+        requestMaxSizeMb > 100
+      ) {
+        return res.status(400).json({
+          error: 'requestMaxSizeMb must be an integer between 0 and 100 (0 = follow env)'
+        })
+      }
+    }
+
     const updateData = {}
     if (claudeCodeOnlyEnabled !== undefined) {
       updateData.claudeCodeOnlyEnabled = claudeCodeOnlyEnabled
@@ -224,6 +238,9 @@ router.put('/claude-relay-config', authenticateAdmin, async (req, res) => {
     }
     if (openaiStreamHeartbeatIntervalMs !== undefined) {
       updateData.openaiStreamHeartbeatIntervalMs = openaiStreamHeartbeatIntervalMs
+    }
+    if (requestMaxSizeMb !== undefined) {
+      updateData.requestMaxSizeMb = requestMaxSizeMb
     }
 
     const updatedConfig = await claudeRelayConfigService.updateConfig(

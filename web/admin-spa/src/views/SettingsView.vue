@@ -976,6 +976,28 @@
                   5000-60000, default 15000.
                 </p>
               </div>
+
+              <div class="mt-6">
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <i class="fas fa-weight-hanging mr-2 text-gray-400"></i>
+                  请求体大小上限 (MB)
+                </label>
+                <input
+                  v-model.number="claudeConfig.requestMaxSizeMb"
+                  class="mt-1 block w-full max-w-xs rounded-lg border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-500 dark:bg-gray-700 dark:text-white sm:text-sm"
+                  max="100"
+                  min="0"
+                  placeholder="0"
+                  step="1"
+                  type="number"
+                  @change="saveClaudeConfig"
+                />
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  超过上限的请求直接返回 413（不可重试），防止巨型请求撑爆内存。0 = 跟随环境变量
+                  REQUEST_MAX_SIZE_MB（默认 30）。建议 10（200k 上下文约
+                  1.5MB，多模态图片留足余量）。保存后 1 分钟内热生效，无需重启。
+                </p>
+              </div>
             </div>
 
             <!-- Concurrent Request Queue -->
@@ -2051,6 +2073,7 @@ const claudeConfig = ref({
   concurrentRequestQueueMaxSizeMultiplier: 0,
   concurrentRequestQueueTimeoutMs: 10000,
   openaiStreamHeartbeatIntervalMs: 15000,
+  requestMaxSizeMb: 0,
   updatedAt: null,
   updatedBy: null
 })
@@ -2608,6 +2631,7 @@ const loadClaudeConfig = async () => {
           response.config?.concurrentRequestQueueMaxSizeMultiplier ?? 0,
         concurrentRequestQueueTimeoutMs: response.config?.concurrentRequestQueueTimeoutMs ?? 10000,
         openaiStreamHeartbeatIntervalMs: response.config?.openaiStreamHeartbeatIntervalMs ?? 15000,
+        requestMaxSizeMb: response.config?.requestMaxSizeMb ?? 0,
         updatedAt: response.config?.updatedAt || null,
         updatedBy: response.config?.updatedBy || null
       }
@@ -2642,7 +2666,8 @@ const saveClaudeConfig = async () => {
       concurrentRequestQueueMaxSizeMultiplier:
         claudeConfig.value.concurrentRequestQueueMaxSizeMultiplier,
       concurrentRequestQueueTimeoutMs: claudeConfig.value.concurrentRequestQueueTimeoutMs,
-      openaiStreamHeartbeatIntervalMs: claudeConfig.value.openaiStreamHeartbeatIntervalMs
+      openaiStreamHeartbeatIntervalMs: claudeConfig.value.openaiStreamHeartbeatIntervalMs,
+      requestMaxSizeMb: claudeConfig.value.requestMaxSizeMb
     }
 
     const response = await apiClient.put('/admin/claude-relay-config', payload, {

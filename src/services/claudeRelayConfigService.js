@@ -32,6 +32,7 @@ const DEFAULT_CONFIG = {
   concurrentRequestQueueHealthThreshold: 0.8, // 健康检查阈值（P90 >= 超时 × 阈值时拒绝新请求）
   stickySessionAutoRenewalEnabled: true, // Sticky session auto renewal toggle
   openaiStreamHeartbeatIntervalMs: 15000, // OpenAI/OpenAI-Responses SSE heartbeat interval (ms)
+  requestMaxSizeMb: 0, // 请求体大小上限（MB），0 表示跟随环境变量 REQUEST_MAX_SIZE_MB（默认30）
   updatedAt: null,
   updatedBy: null
 }

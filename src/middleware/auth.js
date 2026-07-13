@@ -2096,8 +2096,17 @@ const globalRateLimit = async (req, res, next) =>
   */
 
 // 📊 请求大小限制中间件
-const requestSizeLimit = (req, res, next) => {
-  const MAX_SIZE_MB = getRequestMaxSizeMB()
+const requestSizeLimit = async (req, res, next) => {
+  // 后台配置优先（requestMaxSizeMb > 0 时覆盖环境变量），带 1 分钟内存缓存
+  let MAX_SIZE_MB = getRequestMaxSizeMB()
+  try {
+    const relayConfig = await claudeRelayConfigService.getConfig()
+    if (Number.isFinite(relayConfig.requestMaxSizeMb) && relayConfig.requestMaxSizeMb > 0) {
+      MAX_SIZE_MB = relayConfig.requestMaxSizeMb
+    }
+  } catch (error) {
+    logger.warn('⚠️ Failed to read requestMaxSizeMb from relay config, using env fallback')
+  }
   const maxSize = MAX_SIZE_MB * 1024 * 1024
   const contentLength = parseInt(req.headers['content-length'] || '0')
 
