@@ -2084,8 +2084,9 @@ class ClaudeRelayService {
             if (isStreamWritable(responseStream)) {
               // 解析 Claude API 返回的错误详情
               let errorMessage = `Claude API error: ${res.statusCode}`
+              let parsedError = null
               try {
-                const parsedError = JSON.parse(errorData)
+                parsedError = JSON.parse(errorData)
                 if (parsedError.error?.message) {
                   errorMessage = parsedError.error.message
                 } else if (parsedError.message) {
@@ -2100,17 +2101,29 @@ class ClaudeRelayService {
                 responseStream.write(
                   `data: ${JSON.stringify({ type: 'error', error: errorMessage })}\n\n`
                 )
+              } else if (!responseStream.headersSent) {
+                // 流尚未开始：用上游原状态码 + 原始错误体透传。
+                // 4xx/5xx 的分类是客户端重试决策的契约，包装成 200+SSE 会让
+                // 下游把"参数错误"当"服务故障"无限重试（temperature 事件的根源）
+                const passthroughBody = parsedError
+                  ? errorData
+                  : JSON.stringify({
+                      type: 'error',
+                      error: { type: 'upstream_error', message: errorMessage }
+                    })
+                responseStream.writeHead(res.statusCode, { 'Content-Type': 'application/json' })
+                responseStream.write(passthroughBody)
               } else {
-                // 标准错误格式
+                // 流已开始只能走 SSE：使用 Anthropic 原生错误事件格式，
+                // 下游网关（如 newapi）能按 error.type 还原正确的状态码
+                const sseError = parsedError?.error
+                  ? parsedError
+                  : {
+                      type: 'error',
+                      error: { type: 'upstream_error', message: errorMessage }
+                    }
                 responseStream.write('event: error\n')
-                responseStream.write(
-                  `data: ${JSON.stringify({
-                    error: 'Claude API error',
-                    status: res.statusCode,
-                    details: errorData,
-                    timestamp: new Date().toISOString()
-                  })}\n\n`
-                )
+                responseStream.write(`data: ${JSON.stringify(sseError)}\n\n`)
               }
               responseStream.end()
             }
