@@ -2058,9 +2058,9 @@ class ClaudeRelayService {
           })
 
           res.on('end', () => {
+            // 响应体拼进消息本体：winston 当前格式会丢弃第二个字符串参数，导致 4xx/5xx 无法排查
             logger.error(
-              `❌ Claude API error response (Account: ${account?.name || accountId}):`,
-              errorData
+              `❌ Claude API error response (Account: ${account?.name || accountId}): ${String(errorData).substring(0, 2000)}`
             )
             if (this._isOrganizationDisabledError(res.statusCode, errorData)) {
               ;(async () => {
