@@ -16,6 +16,7 @@ const sessionHelper = require('../utils/sessionHelper')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const pricingService = require('../services/pricingService')
 const { getEffectiveModel } = require('../utils/modelHelper')
+const { sanitizeClaudeMessagesRequest } = require('../utils/anthropicRequestCompat')
 
 // 🔧 辅助函数：检查 API Key 权限
 function checkPermissions(apiKeyData, requiredPermission = 'claude') {
@@ -199,6 +200,29 @@ async function handleChatCompletion(req, res, apiKeyData) {
 
     // 转换 OpenAI 请求为 Claude 格式
     const claudeRequest = openaiToClaude.convertRequest(req.body)
+    const compatSummary = sanitizeClaudeMessagesRequest(claudeRequest)
+
+    if (compatSummary.changed) {
+      logger.info('🔧 Applied Claude Messages compatibility sanitization', {
+        ...compatSummary,
+        route: '/openai/claude/v1/chat/completions',
+        requestId: req.requestId || null,
+        clientRequestId:
+          req.headers?.['x-oneapi-request-id'] || req.headers?.['x-request-id'] || null,
+        model: claudeRequest.model || null,
+        stream: claudeRequest.stream === true
+      })
+    }
+
+    if (claudeRequest.messages.length === 0) {
+      return res.status(400).json({
+        error: {
+          message: 'Messages must contain at least one non-empty content block',
+          type: 'invalid_request_error',
+          code: 'empty_messages'
+        }
+      })
+    }
 
     // 模型限制（黑名单）：命中受限模型则拒绝
     if (apiKeyData.enableModelRestriction && apiKeyData.restrictedModels?.length > 0) {

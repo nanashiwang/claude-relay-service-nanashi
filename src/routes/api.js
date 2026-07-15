@@ -28,6 +28,17 @@ const {
 } = require('../services/anthropicGeminiBridgeService')
 const router = express.Router()
 
+function logClaudeMessagesCompatibility(summary, context = {}) {
+  if (!summary.changed) {
+    return
+  }
+
+  logger.info('🔧 Applied Claude Messages compatibility sanitization', {
+    ...summary,
+    ...context
+  })
+}
+
 function queueRateLimitUpdate(rateLimitInfo, usageSummary, model, context = '') {
   if (!rateLimitInfo) {
     return Promise.resolve({ totalTokens: 0, totalCost: 0 })
@@ -206,12 +217,19 @@ async function handleMessagesRequest(req, res) {
     const isStream = req.body.stream === true
 
     const compatSummary = sanitizeClaudeMessagesRequest(req.body)
-    if (compatSummary.removedContextManagement || compatSummary.removedToolInputExamples > 0) {
-      logger.info('🔧 Applied Claude Messages compatibility sanitization', {
-        removedContextManagement: compatSummary.removedContextManagement,
-        removedToolInputExamples: compatSummary.removedToolInputExamples,
-        model: req.body?.model || null,
-        stream: isStream
+    logClaudeMessagesCompatibility(compatSummary, {
+      route: '/v1/messages',
+      requestId: req.requestId || null,
+      clientRequestId:
+        req.headers?.['x-oneapi-request-id'] || req.headers?.['x-request-id'] || null,
+      model: req.body?.model || null,
+      stream: isStream
+    })
+
+    if (req.body.messages.length === 0) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        message: 'Messages must contain at least one non-empty content block'
       })
     }
 
@@ -1438,6 +1456,22 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
 
   if (requiredService === 'gemini') {
     return await handleAnthropicCountTokensToGemini(req, res, { vendor: forcedVendor })
+  }
+
+  const compatSummary = sanitizeClaudeMessagesRequest(req.body)
+  logClaudeMessagesCompatibility(compatSummary, {
+    route: '/v1/messages/count_tokens',
+    requestId: req.requestId || null,
+    clientRequestId: req.headers?.['x-oneapi-request-id'] || req.headers?.['x-request-id'] || null,
+    model: req.body?.model || null,
+    stream: false
+  })
+
+  if (Array.isArray(req.body?.messages) && req.body.messages.length === 0) {
+    return res.status(400).json({
+      error: 'Invalid request',
+      message: 'Messages must contain at least one non-empty content block'
+    })
   }
 
   // 🔗 会话绑定验证（与 messages 端点保持一致）
