@@ -19,9 +19,16 @@ const {
   buildMockWarmupResponse,
   sendMockWarmupStream
 } = require('../utils/warmupInterceptor')
-const { sanitizeUpstreamError } = require('../utils/errorSanitizer')
+const {
+  sanitizeUpstreamError,
+  buildAnthropicErrorResponse,
+  resolveClientRequestId
+} = require('../utils/errorSanitizer')
 const { dumpAnthropicMessagesRequest } = require('../utils/anthropicRequestDump')
-const { sanitizeClaudeMessagesRequest } = require('../utils/anthropicRequestCompat')
+const {
+  sanitizeAnthropicRequestForService,
+  validateAnthropicMessagesRequest
+} = require('../utils/anthropicRequestCompat')
 const {
   handleAnthropicMessagesToGemini,
   handleAnthropicCountTokensToGemini
@@ -34,9 +41,19 @@ function logClaudeMessagesCompatibility(summary, context = {}) {
   }
 
   logger.info('🔧 Applied Claude Messages compatibility sanitization', {
+    event: 'claude_messages_sanitized',
     ...summary,
     ...context
   })
+}
+
+function sendAnthropicInvalidRequest(req, res, message) {
+  return res.status(400).json(
+    buildAnthropicErrorResponse(message, {
+      type: 'invalid_request_error',
+      requestId: req.requestId || null
+    })
+  )
 }
 
 function queueRateLimitUpdate(rateLimitInfo, usageSummary, model, context = '') {
@@ -155,26 +172,9 @@ async function handleMessagesRequest(req, res) {
       req._concurrencyRetryAttempted = false
     }
 
-    // 严格的输入验证
-    if (!req.body || typeof req.body !== 'object') {
-      return res.status(400).json({
-        error: 'Invalid request',
-        message: 'Request body must be a valid JSON object'
-      })
-    }
-
-    if (!req.body.messages || !Array.isArray(req.body.messages)) {
-      return res.status(400).json({
-        error: 'Invalid request',
-        message: 'Missing or invalid field: messages (must be an array)'
-      })
-    }
-
-    if (req.body.messages.length === 0) {
-      return res.status(400).json({
-        error: 'Invalid request',
-        message: 'Messages array cannot be empty'
-      })
+    const validationError = validateAnthropicMessagesRequest(req.body)
+    if (validationError) {
+      return sendAnthropicInvalidRequest(req, res, validationError)
     }
 
     // 模型限制（黑名单）校验：统一在此处处理（去除供应商前缀）
@@ -207,30 +207,33 @@ async function handleMessagesRequest(req, res) {
       stream: req.body?.stream === true
     })
 
-    // /v1/messages 的扩展：按路径强制分流到 Gemini OAuth 账户（避免 model 前缀混乱）
-    if (forcedVendor === 'gemini-cli' || forcedVendor === 'antigravity') {
-      const baseModel = (req.body.model || '').trim()
-      return await handleAnthropicMessagesToGemini(req, res, { vendor: forcedVendor, baseModel })
-    }
-
     // 检查是否为流式请求
     const isStream = req.body.stream === true
 
-    const compatSummary = sanitizeClaudeMessagesRequest(req.body)
+    const compatSummary = sanitizeAnthropicRequestForService(req.body, requiredService)
     logClaudeMessagesCompatibility(compatSummary, {
       route: '/v1/messages',
       requestId: req.requestId || null,
-      clientRequestId:
-        req.headers?.['x-oneapi-request-id'] || req.headers?.['x-request-id'] || null,
+      clientRequestId: resolveClientRequestId(req.headers),
+      apiKeyId: req.apiKey?.id || null,
+      requiredService,
+      forcedVendor,
       model: req.body?.model || null,
       stream: isStream
     })
 
     if (req.body.messages.length === 0) {
-      return res.status(400).json({
-        error: 'Invalid request',
-        message: 'Messages must contain at least one non-empty content block'
-      })
+      return sendAnthropicInvalidRequest(
+        req,
+        res,
+        'Messages must contain at least one non-empty content block'
+      )
+    }
+
+    // /v1/messages 的扩展：按路径强制分流到 Gemini OAuth 账户（避免 model 前缀混乱）
+    if (forcedVendor === 'gemini-cli' || forcedVendor === 'antigravity') {
+      const baseModel = (req.body.model || '').trim()
+      return await handleAnthropicMessagesToGemini(req, res, { vendor: forcedVendor, baseModel })
     }
 
     logger.api(
@@ -1454,24 +1457,33 @@ router.post('/v1/messages/count_tokens', authenticateApiKey, async (req, res) =>
     })
   }
 
-  if (requiredService === 'gemini') {
-    return await handleAnthropicCountTokensToGemini(req, res, { vendor: forcedVendor })
+  const validationError = validateAnthropicMessagesRequest(req.body)
+  if (validationError) {
+    return sendAnthropicInvalidRequest(req, res, validationError)
   }
 
-  const compatSummary = sanitizeClaudeMessagesRequest(req.body)
+  const compatSummary = sanitizeAnthropicRequestForService(req.body, requiredService)
   logClaudeMessagesCompatibility(compatSummary, {
     route: '/v1/messages/count_tokens',
     requestId: req.requestId || null,
-    clientRequestId: req.headers?.['x-oneapi-request-id'] || req.headers?.['x-request-id'] || null,
+    clientRequestId: resolveClientRequestId(req.headers),
+    apiKeyId: req.apiKey?.id || null,
+    requiredService,
+    forcedVendor,
     model: req.body?.model || null,
     stream: false
   })
 
   if (Array.isArray(req.body?.messages) && req.body.messages.length === 0) {
-    return res.status(400).json({
-      error: 'Invalid request',
-      message: 'Messages must contain at least one non-empty content block'
-    })
+    return sendAnthropicInvalidRequest(
+      req,
+      res,
+      'Messages must contain at least one non-empty content block'
+    )
+  }
+
+  if (requiredService === 'gemini') {
+    return await handleAnthropicCountTokensToGemini(req, res, { vendor: forcedVendor })
   }
 
   // 🔗 会话绑定验证（与 messages 端点保持一致）

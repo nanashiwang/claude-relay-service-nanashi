@@ -1,3 +1,6 @@
+const REMOVE_CONTENT_BLOCK = Symbol('removeContentBlock')
+const MAX_CONTENT_NESTING = 8
+
 function createSummary() {
   return {
     changed: false,
@@ -6,6 +9,7 @@ function createSummary() {
     removedEmptyTextBlocks: 0,
     removedEmptyMessages: 0,
     removedEmptyToolResultContents: 0,
+    removedEmptyContentContainers: 0,
     removedEmptySystem: false
   }
 }
@@ -21,38 +25,92 @@ function isEmptyTextBlock(block) {
   )
 }
 
-function sanitizeContentBlocks(blocks, summary, { sanitizeToolResults = false } = {}) {
+function sanitizeRequiredContent(container, field, summary, depth) {
+  const originalContent = container[field]
+
+  if (typeof originalContent === 'string') {
+    if (originalContent.length > 0) {
+      return true
+    }
+    summary.changed = true
+    summary.removedEmptyContentContainers += 1
+    return false
+  }
+
+  if (!Array.isArray(originalContent)) {
+    return true
+  }
+
+  const cleanedContent = sanitizeContentBlocks(originalContent, summary, depth + 1)
+  if (cleanedContent.length === 0) {
+    summary.changed = true
+    summary.removedEmptyContentContainers += 1
+    return false
+  }
+
+  if (cleanedContent.length !== originalContent.length) {
+    container[field] = cleanedContent
+  }
+  return true
+}
+
+function sanitizeContentBlock(block, summary, depth) {
+  if (isEmptyTextBlock(block)) {
+    summary.changed = true
+    summary.removedEmptyTextBlocks += 1
+    return REMOVE_CONTENT_BLOCK
+  }
+
+  if (!block || typeof block !== 'object' || Array.isArray(block)) {
+    return block
+  }
+
+  // Only follow content containers defined by Anthropic; tool_use.input remains arbitrary user JSON.
+  if (block.type === 'tool_result' && Array.isArray(block.content)) {
+    const originalContent = block.content
+    const cleanedContent = sanitizeContentBlocks(originalContent, summary, depth + 1)
+
+    if (cleanedContent.length === 0) {
+      delete block.content
+      summary.changed = true
+      summary.removedEmptyToolResultContents += 1
+    } else if (cleanedContent.length !== originalContent.length) {
+      block.content = cleanedContent
+    }
+    return block
+  }
+
+  if (block.type === 'search_result' && Array.isArray(block.content)) {
+    return sanitizeRequiredContent(block, 'content', summary, depth) ? block : REMOVE_CONTENT_BLOCK
+  }
+
+  if (
+    block.type === 'document' &&
+    block.source &&
+    typeof block.source === 'object' &&
+    !Array.isArray(block.source) &&
+    block.source.type === 'content'
+  ) {
+    return sanitizeRequiredContent(block.source, 'content', summary, depth)
+      ? block
+      : REMOVE_CONTENT_BLOCK
+  }
+
+  return block
+}
+
+function sanitizeContentBlocks(blocks, summary, depth = 0) {
+  if (depth > MAX_CONTENT_NESTING) {
+    return blocks
+  }
+
   const cleaned = []
 
   for (const block of blocks) {
-    if (isEmptyTextBlock(block)) {
-      summary.changed = true
-      summary.removedEmptyTextBlocks += 1
-      continue
+    const sanitizedBlock = sanitizeContentBlock(block, summary, depth)
+    if (sanitizedBlock !== REMOVE_CONTENT_BLOCK) {
+      cleaned.push(sanitizedBlock)
     }
-
-    // tool_use.input is arbitrary user JSON, so only recurse into Anthropic-defined content fields.
-    if (
-      sanitizeToolResults &&
-      block &&
-      typeof block === 'object' &&
-      !Array.isArray(block) &&
-      block.type === 'tool_result' &&
-      Array.isArray(block.content)
-    ) {
-      const originalContent = block.content
-      const cleanedContent = sanitizeContentBlocks(originalContent, summary)
-
-      if (cleanedContent.length === 0) {
-        delete block.content
-        summary.changed = true
-        summary.removedEmptyToolResultContents += 1
-      } else if (cleanedContent.length !== originalContent.length) {
-        block.content = cleanedContent
-      }
-    }
-
-    cleaned.push(block)
   }
 
   return cleaned
@@ -103,9 +161,7 @@ function sanitizeMessages(body, summary) {
 
     if (Array.isArray(message.content)) {
       const originalContent = message.content
-      const cleanedContent = sanitizeContentBlocks(originalContent, summary, {
-        sanitizeToolResults: true
-      })
+      const cleanedContent = sanitizeContentBlocks(originalContent, summary)
 
       if (cleanedContent.length === 0) {
         summary.changed = true
@@ -126,11 +182,22 @@ function sanitizeMessages(body, summary) {
   }
 }
 
-function sanitizeClaudeMessagesRequest(body) {
+function sanitizeAnthropicMessagesRequest(body) {
   const summary = createSummary()
 
   if (!body || typeof body !== 'object') {
     return summary
+  }
+
+  sanitizeSystem(body, summary)
+  sanitizeMessages(body, summary)
+
+  return summary
+}
+
+function sanitizeClaudeCompatibilityFields(body, summary) {
+  if (!body || typeof body !== 'object') {
+    return
   }
 
   if (Object.prototype.hasOwnProperty.call(body, 'context_management')) {
@@ -152,13 +219,40 @@ function sanitizeClaudeMessagesRequest(body) {
       }
     })
   }
+}
 
-  sanitizeSystem(body, summary)
-  sanitizeMessages(body, summary)
+function sanitizeClaudeMessagesRequest(body) {
+  const summary = sanitizeAnthropicMessagesRequest(body)
+
+  sanitizeClaudeCompatibilityFields(body, summary)
 
   return summary
 }
 
+function sanitizeAnthropicRequestForService(body, requiredService) {
+  if (requiredService === 'claude') {
+    return sanitizeClaudeMessagesRequest(body)
+  }
+
+  return sanitizeAnthropicMessagesRequest(body)
+}
+
+function validateAnthropicMessagesRequest(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return 'Request body must be a valid JSON object'
+  }
+  if (!Array.isArray(body.messages)) {
+    return 'Missing or invalid field: messages (must be an array)'
+  }
+  if (body.messages.length === 0) {
+    return 'Messages array cannot be empty'
+  }
+  return null
+}
+
 module.exports = {
-  sanitizeClaudeMessagesRequest
+  sanitizeAnthropicMessagesRequest,
+  sanitizeAnthropicRequestForService,
+  sanitizeClaudeMessagesRequest,
+  validateAnthropicMessagesRequest
 }

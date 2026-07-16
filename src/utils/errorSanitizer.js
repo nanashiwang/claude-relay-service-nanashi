@@ -182,6 +182,40 @@ function extractErrorMessage(body) {
   return ''
 }
 
+function buildAnthropicErrorResponse(message, { type = 'api_error', requestId = null } = {}) {
+  const payload = {
+    type: 'error',
+    error: {
+      type,
+      message: message || 'Upstream error'
+    }
+  }
+
+  if (typeof requestId === 'string' && requestId.trim()) {
+    payload.request_id = requestId.trim()
+  }
+
+  return payload
+}
+
+function resolveClientRequestId(headers = {}) {
+  const value =
+    headers['x-newapi-request-id'] || headers['x-oneapi-request-id'] || headers['x-request-id']
+  const candidate = Array.isArray(value) ? value[0] : value
+  if (typeof candidate !== 'string') {
+    return null
+  }
+
+  const sanitized = Array.from(candidate.trim())
+    .filter((character) => {
+      const code = character.charCodeAt(0)
+      return code > 31 && code !== 127
+    })
+    .join('')
+    .slice(0, 256)
+  return sanitized || null
+}
+
 /**
  * 检测是否为账户被禁用或不可用的 400 错误
  * @param {number} statusCode - HTTP 状态码
@@ -215,5 +249,7 @@ module.exports = {
   sanitizeErrorMessage,
   sanitizeUpstreamError,
   extractErrorMessage,
+  buildAnthropicErrorResponse,
+  resolveClientRequestId,
   isAccountDisabledError
 }

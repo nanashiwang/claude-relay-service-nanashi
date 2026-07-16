@@ -17,6 +17,7 @@ const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const pricingService = require('../services/pricingService')
 const { getEffectiveModel } = require('../utils/modelHelper')
 const { sanitizeClaudeMessagesRequest } = require('../utils/anthropicRequestCompat')
+const { resolveClientRequestId } = require('../utils/errorSanitizer')
 
 // 🔧 辅助函数：检查 API Key 权限
 function checkPermissions(apiKeyData, requiredPermission = 'claude') {
@@ -204,11 +205,13 @@ async function handleChatCompletion(req, res, apiKeyData) {
 
     if (compatSummary.changed) {
       logger.info('🔧 Applied Claude Messages compatibility sanitization', {
+        event: 'claude_messages_sanitized',
         ...compatSummary,
         route: '/openai/claude/v1/chat/completions',
         requestId: req.requestId || null,
-        clientRequestId:
-          req.headers?.['x-oneapi-request-id'] || req.headers?.['x-request-id'] || null,
+        clientRequestId: resolveClientRequestId(req.headers),
+        apiKeyId: apiKeyData.id || null,
+        requiredService: 'claude',
         model: claudeRequest.model || null,
         stream: claudeRequest.stream === true
       })

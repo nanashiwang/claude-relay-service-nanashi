@@ -41,7 +41,7 @@ const signatureCache = require('../utils/signatureCache')
 const apiKeyService = require('./apiKeyService')
 const { updateRateLimitCounters } = require('../utils/rateLimitHelper')
 const { parseSSELine } = require('../utils/sseParser')
-const { sanitizeUpstreamError } = require('../utils/errorSanitizer')
+const { sanitizeUpstreamError, buildAnthropicErrorResponse } = require('../utils/errorSanitizer')
 const { cleanJsonSchemaForGemini } = require('../utils/geminiSchemaCleaner')
 const {
   dumpAnthropicNonStreamResponse,
@@ -1707,13 +1707,7 @@ function convertGeminiPayloadToAnthropicContent(payload) {
  * 构建 Anthropic 格式的错误响应
  */
 function buildAnthropicError(message) {
-  return {
-    type: 'error',
-    error: {
-      type: 'api_error',
-      message: message || 'Upstream error'
-    }
-  }
+  return buildAnthropicErrorResponse(message)
 }
 
 /**

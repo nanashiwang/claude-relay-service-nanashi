@@ -1,4 +1,13 @@
-const { sanitizeClaudeMessagesRequest } = require('../src/utils/anthropicRequestCompat')
+const {
+  sanitizeAnthropicMessagesRequest,
+  sanitizeAnthropicRequestForService,
+  sanitizeClaudeMessagesRequest,
+  validateAnthropicMessagesRequest
+} = require('../src/utils/anthropicRequestCompat')
+const {
+  buildAnthropicErrorResponse,
+  resolveClientRequestId
+} = require('../src/utils/errorSanitizer')
 
 describe('anthropicRequestCompat', () => {
   const unchangedSummary = {
@@ -8,6 +17,7 @@ describe('anthropicRequestCompat', () => {
     removedEmptyTextBlocks: 0,
     removedEmptyMessages: 0,
     removedEmptyToolResultContents: 0,
+    removedEmptyContentContainers: 0,
     removedEmptySystem: false
   }
 
@@ -78,6 +88,39 @@ describe('anthropicRequestCompat', () => {
 
     expect(result).toEqual(unchangedSummary)
     expect(body).toEqual(snapshot)
+  })
+
+  it('keeps Claude-only compatibility fields on non-Claude services', () => {
+    const body = {
+      context_management: { strategy: 'auto' },
+      tools: [
+        {
+          name: 'search',
+          input_examples: [{ query: 'docs' }],
+          input_schema: { type: 'object' }
+        }
+      ],
+      messages: [
+        {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: '' },
+            { type: 'text', text: 'kept' }
+          ]
+        }
+      ]
+    }
+
+    const result = sanitizeAnthropicRequestForService(body, 'gemini')
+
+    expect(result).toEqual({
+      ...unchangedSummary,
+      changed: true,
+      removedEmptyTextBlocks: 1
+    })
+    expect(body.context_management).toEqual({ strategy: 'auto' })
+    expect(body.tools[0].input_examples).toEqual([{ query: 'docs' }])
+    expect(body.messages[0].content).toEqual([{ type: 'text', text: 'kept' }])
   })
 
   it('removes empty text blocks while preserving all meaningful content', () => {
@@ -166,6 +209,124 @@ describe('anthropicRequestCompat', () => {
         tool_use_id: 'tool_2'
       }
     ])
+  })
+
+  it('sanitizes only official nested search result and document content', () => {
+    const arbitraryToolInput = {
+      type: 'search_result',
+      content: [{ type: 'text', text: '' }]
+    }
+    const body = {
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tool_1',
+              content: [
+                {
+                  type: 'search_result',
+                  source: 'https://example.com/1',
+                  title: 'one',
+                  content: [
+                    { type: 'text', text: '' },
+                    { type: 'text', text: 'result' }
+                  ]
+                },
+                {
+                  type: 'search_result',
+                  source: 'https://example.com/2',
+                  title: 'two',
+                  content: [{ type: 'text', text: '' }]
+                },
+                {
+                  type: 'document',
+                  source: {
+                    type: 'content',
+                    content: [
+                      { type: 'text', text: '' },
+                      { type: 'image', source: { type: 'base64', data: 'AA==' } }
+                    ]
+                  }
+                },
+                {
+                  type: 'document',
+                  source: { type: 'content', content: '' }
+                }
+              ]
+            },
+            {
+              type: 'tool_use',
+              id: 'tool_2',
+              name: 'custom',
+              input: arbitraryToolInput
+            }
+          ]
+        }
+      ]
+    }
+
+    const result = sanitizeAnthropicMessagesRequest(body)
+
+    expect(result).toEqual({
+      ...unchangedSummary,
+      changed: true,
+      removedEmptyTextBlocks: 3,
+      removedEmptyContentContainers: 2
+    })
+    expect(body.messages[0].content[0].content).toEqual([
+      {
+        type: 'search_result',
+        source: 'https://example.com/1',
+        title: 'one',
+        content: [{ type: 'text', text: 'result' }]
+      },
+      {
+        type: 'document',
+        source: {
+          type: 'content',
+          content: [{ type: 'image', source: { type: 'base64', data: 'AA==' } }]
+        }
+      }
+    ])
+    expect(arbitraryToolInput).toEqual({
+      type: 'search_result',
+      content: [{ type: 'text', text: '' }]
+    })
+  })
+
+  it('preserves malformed text blocks for strict validation', () => {
+    const body = {
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'text' }, { type: 'text', text: null }, { type: 'text', text: 0 }]
+        }
+      ]
+    }
+    const snapshot = JSON.parse(JSON.stringify(body))
+
+    expect(sanitizeAnthropicMessagesRequest(body)).toEqual(unchangedSummary)
+    expect(body).toEqual(snapshot)
+  })
+
+  it('bounds malformed nested content traversal', () => {
+    const body = {
+      messages: [{ role: 'user', content: [] }]
+    }
+    let nested = { type: 'text', text: '' }
+    for (let index = 0; index < 100; index += 1) {
+      nested = {
+        type: 'tool_result',
+        tool_use_id: `tool_${index}`,
+        content: [nested]
+      }
+    }
+    body.messages[0].content.push(nested)
+
+    expect(() => sanitizeAnthropicMessagesRequest(body)).not.toThrow()
+    expect(body.messages).toHaveLength(1)
   })
 
   it('drops only semantically empty messages and keeps the current user input', () => {
@@ -293,5 +454,71 @@ describe('anthropicRequestCompat', () => {
         tools: 'not-an-array'
       })
     ).toEqual(unchangedSummary)
+  })
+})
+
+describe('buildAnthropicErrorResponse', () => {
+  it('builds a standard invalid request error with request id', () => {
+    expect(
+      buildAnthropicErrorResponse('Messages array cannot be empty', {
+        type: 'invalid_request_error',
+        requestId: '  req_local_123  '
+      })
+    ).toEqual({
+      type: 'error',
+      error: {
+        type: 'invalid_request_error',
+        message: 'Messages array cannot be empty'
+      },
+      request_id: 'req_local_123'
+    })
+  })
+
+  it('omits an empty request id and keeps the default API error type', () => {
+    expect(buildAnthropicErrorResponse('', { requestId: '   ' })).toEqual({
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: 'Upstream error'
+      }
+    })
+  })
+})
+
+describe('resolveClientRequestId', () => {
+  it('prefers the NewAPI upstream header', () => {
+    expect(
+      resolveClientRequestId({
+        'x-newapi-request-id': 'newapi-123',
+        'x-oneapi-request-id': 'legacy-456',
+        'x-request-id': 'generic-789'
+      })
+    ).toBe('newapi-123')
+  })
+
+  it('normalizes array values and strips control characters', () => {
+    expect(resolveClientRequestId({ 'x-request-id': ['  req\n-123\t  ', 'ignored'] })).toBe(
+      'req-123'
+    )
+    expect(resolveClientRequestId({})).toBeNull()
+  })
+})
+
+describe('validateAnthropicMessagesRequest', () => {
+  it('accepts a non-empty messages array', () => {
+    expect(
+      validateAnthropicMessagesRequest({ messages: [{ role: 'user', content: 'hello' }] })
+    ).toBeNull()
+  })
+
+  it('rejects invalid request body and message shapes', () => {
+    expect(validateAnthropicMessagesRequest(null)).toBe('Request body must be a valid JSON object')
+    expect(validateAnthropicMessagesRequest([])).toBe('Request body must be a valid JSON object')
+    expect(validateAnthropicMessagesRequest({ messages: 'hello' })).toBe(
+      'Missing or invalid field: messages (must be an array)'
+    )
+    expect(validateAnthropicMessagesRequest({ messages: [] })).toBe(
+      'Messages array cannot be empty'
+    )
   })
 })
