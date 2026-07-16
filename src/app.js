@@ -82,6 +82,7 @@ class Application {
   constructor(options = {}) {
     this.app = express()
     this.server = null
+    this.memoryGuardInterval = null
     this.backgroundTasksEnabled =
       options.backgroundTasksEnabled !== undefined
         ? options.backgroundTasksEnabled
@@ -648,10 +649,71 @@ class Application {
 
       // 🛑 优雅关闭
       this.setupGracefulShutdown()
+
+      // 🛡️ 内存自愈守护
+      this.setupMemoryGuard()
     } catch (error) {
       logger.error('💥 Failed to start server:', error)
       process.exit(1)
     }
+  }
+
+  // 🛡️ 内存自愈守护：worker 进程 RSS 超阈值时主动优雅退出，
+  // 由 cluster primary（自动 fork 替换）/ systemd（Restart=always）/ docker（restart policy）拉起。
+  // 目的：CRS 存在缓慢内存泄漏（长流式请求 buffer 累积），不加干预会涨到触发请求级 503
+  // 内存保护（见 middleware/auth.js 的 requestSizeLimit），导致整台对所有请求（含 /health）不可用。
+  // 提前在保护线之前优雅重启，泄漏永远累积不到出事。任何部署方式通用，不依赖外部脚本。
+  setupMemoryGuard() {
+    if (process.env.MEMORY_GUARD_ENABLED === 'false') {
+      logger.info('🛡️ Memory guard disabled (MEMORY_GUARD_ENABLED=false)')
+      return
+    }
+
+    const os = require('os')
+    const parsePositiveInt = (val, fallback) => {
+      const n = parseInt(val, 10)
+      return Number.isFinite(n) && n > 0 ? n : fallback
+    }
+
+    // 默认阈值 = min(1024MB, 系统总内存 45%)，自适应小内存机器；env 可覆盖为绝对值（MB）
+    const totalMemMb = Math.floor(os.totalmem() / 1024 / 1024)
+    const defaultMaxRssMb = Math.min(1024, Math.floor(totalMemMb * 0.45))
+    const maxRssMb = parsePositiveInt(process.env.MEMORY_GUARD_MAX_RSS_MB, defaultMaxRssMb)
+    const checkIntervalMs = parsePositiveInt(process.env.MEMORY_GUARD_CHECK_INTERVAL_MS, 60000)
+    // 启动后的最小存活时间：避免冷启动误判或阈值配置过低导致的重启风暴
+    const minUptimeMs = parsePositiveInt(process.env.MEMORY_GUARD_MIN_UPTIME_MS, 300000)
+
+    let triggered = false
+    this.memoryGuardInterval = setInterval(() => {
+      if (triggered) {
+        return
+      }
+      const rssMb = Math.round(process.memoryUsage().rss / 1024 / 1024)
+      if (rssMb < maxRssMb) {
+        return
+      }
+      if (process.uptime() * 1000 < minUptimeMs) {
+        logger.warn(
+          `🛡️ Memory guard: RSS ${rssMb}MB >= ${maxRssMb}MB but within min-uptime window, deferring restart`
+        )
+        return
+      }
+      triggered = true
+      logger.warn(
+        `🛡️ Memory guard: RSS ${rssMb}MB >= ${maxRssMb}MB threshold, gracefully restarting this worker`
+      )
+      // 复用现有优雅关闭（SIGTERM → server.close → 清理 → exit(0)），由上层机制自动拉起
+      process.kill(process.pid, 'SIGTERM')
+    }, checkIntervalMs)
+
+    // 定时器不应阻止进程正常退出
+    if (this.memoryGuardInterval.unref) {
+      this.memoryGuardInterval.unref()
+    }
+
+    logger.info(
+      `🛡️ Memory guard enabled: maxRss=${maxRssMb}MB (total=${totalMemMb}MB), checkInterval=${checkIntervalMs}ms, minUptime=${minUptimeMs}ms`
+    )
   }
 
   // 📊 初始化缓存监控
@@ -852,6 +914,15 @@ class Application {
     const shutdown = async (signal) => {
       logger.info(`🛑 Received ${signal}, starting graceful shutdown...`)
       logger.info('🔄 Performing graceful shutdown...')
+
+      try {
+        if (this.memoryGuardInterval) {
+          clearInterval(this.memoryGuardInterval)
+          this.memoryGuardInterval = null
+        }
+      } catch (error) {
+        logger.error('❌ Error clearing memory guard interval:', error)
+      }
 
       try {
         cacheMonitor.stopAllIntervals()
