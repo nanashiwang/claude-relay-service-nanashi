@@ -1202,6 +1202,24 @@ router.post('/:accountId/reset-status', authenticateAdmin, async (req, res) => {
   }
 })
 
+router.post('/usage/refresh', authenticateAdmin, async (req, res) => {
+  try {
+    const result = await openaiAccountService.refreshCodexUsageBatch({
+      limit: req.body?.limit,
+      concurrency: req.body?.concurrency,
+      maxAgeSeconds: req.body?.maxAgeSeconds
+    })
+    return res.json({ success: true, data: result })
+  } catch (error) {
+    logger.error('刷新 OpenAI Codex 用量失败:', error)
+    return res.status(500).json({
+      success: false,
+      message: '刷新 OpenAI Codex 用量失败',
+      error: error.message
+    })
+  }
+})
+
 // 切换 OpenAI 账户调度状态
 router.put('/:accountId/toggle-schedulable', authenticateAdmin, async (req, res) => {
   try {

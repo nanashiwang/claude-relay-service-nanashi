@@ -195,6 +195,68 @@ function buildCodexUsageSnapshot(accountData) {
   }
 }
 
+function normalizeCodexUsageWindow(rawWindow, nowSeconds) {
+  if (!rawWindow || typeof rawWindow !== 'object') {
+    return null
+  }
+
+  const usedPercent = toNumberOrNull(rawWindow.used_percent ?? rawWindow.usedPercent)
+  const windowSeconds = toNumberOrNull(
+    rawWindow.limit_window_seconds ?? rawWindow.limitWindowSeconds
+  )
+  const resetAt = toNumberOrNull(rawWindow.reset_at ?? rawWindow.resetAt)
+  let resetAfterSeconds = toNumberOrNull(
+    rawWindow.reset_after_seconds ?? rawWindow.resetAfterSeconds
+  )
+
+  if (resetAfterSeconds === null && resetAt !== null) {
+    resetAfterSeconds = Math.max(0, Math.round(resetAt - nowSeconds))
+  }
+
+  if (usedPercent === null && windowSeconds === null && resetAfterSeconds === null) {
+    return null
+  }
+
+  return {
+    usedPercent,
+    resetAfterSeconds,
+    windowMinutes: windowSeconds !== null ? windowSeconds / 60 : null
+  }
+}
+
+function normalizeCodexUsagePayload(payload, now = Date.now()) {
+  const rateLimit = payload?.rate_limit || payload?.rateLimit
+  if (!rateLimit || typeof rateLimit !== 'object') {
+    throw new Error('OpenAI usage response is missing rate_limit')
+  }
+
+  const nowSeconds = Math.floor(now / 1000)
+  const primary = normalizeCodexUsageWindow(
+    rateLimit.primary_window || rateLimit.primaryWindow,
+    nowSeconds
+  )
+  const secondary = normalizeCodexUsageWindow(
+    rateLimit.secondary_window || rateLimit.secondaryWindow,
+    nowSeconds
+  )
+
+  if (!primary && !secondary) {
+    throw new Error('OpenAI usage response contains no rate limit windows')
+  }
+
+  return {
+    primaryUsedPercent: primary?.usedPercent ?? null,
+    primaryResetAfterSeconds: primary?.resetAfterSeconds ?? null,
+    primaryWindowMinutes: primary?.windowMinutes ?? null,
+    secondaryUsedPercent: secondary?.usedPercent ?? null,
+    secondaryResetAfterSeconds: secondary?.resetAfterSeconds ?? null,
+    secondaryWindowMinutes: secondary?.windowMinutes ?? null,
+    primaryOverSecondaryPercent: toNumberOrNull(
+      rateLimit.primary_over_secondary_limit_percent ?? rateLimit.primaryOverSecondaryLimitPercent
+    )
+  }
+}
+
 function buildRateLimitInfoFromAccountSnapshot(accountData) {
   const status = accountData.rateLimitStatus || 'normal'
   const rateLimitedAt = accountData.rateLimitedAt || null
@@ -1387,6 +1449,148 @@ async function updateCodexUsageSnapshot(accountId, usageSnapshot) {
   await client.hset(`${OPENAI_ACCOUNT_KEY_PREFIX}${accountId}`, updates)
 }
 
+async function refreshCodexUsage(accountId) {
+  let tokenRefreshed = false
+
+  for (;;) {
+    let account = await getAccount(accountId)
+    if (!account) {
+      throw new Error('Account not found')
+    }
+
+    if (isTokenExpired(account)) {
+      if (tokenRefreshed) {
+        throw new Error('OpenAI access token is still expired after refresh')
+      }
+      await refreshAccountToken(accountId)
+      tokenRefreshed = true
+      continue
+    }
+
+    const accessToken = decrypt(account.accessToken)
+    if (!accessToken) {
+      throw new Error('OpenAI access token is unavailable')
+    }
+
+    const headers = {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+      'User-Agent': 'codex-cli',
+      originator: 'codex_cli_rs'
+    }
+    const chatgptAccountId = account.accountId || account.chatgptUserId
+    if (chatgptAccountId) {
+      headers['ChatGPT-Account-Id'] = chatgptAccountId
+    }
+
+    const requestOptions = {
+      headers,
+      timeout: Math.min(config.requestTimeout || 600000, 15000),
+      validateStatus: () => true
+    }
+    const proxyAgent = ProxyHelper.createProxyAgent(account.proxy)
+    if (proxyAgent) {
+      requestOptions.httpAgent = proxyAgent
+      requestOptions.httpsAgent = proxyAgent
+      requestOptions.proxy = false
+    }
+
+    const response = await axios.get('https://chatgpt.com/backend-api/wham/usage', requestOptions)
+    if (response.status === 401 && !tokenRefreshed && account.refreshToken) {
+      await refreshAccountToken(accountId)
+      tokenRefreshed = true
+      continue
+    }
+    if (response.status < 200 || response.status >= 300) {
+      const error = new Error(`OpenAI usage request failed with HTTP ${response.status}`)
+      error.status = response.status
+      throw error
+    }
+
+    const usageSnapshot = normalizeCodexUsagePayload(response.data)
+    await updateCodexUsageSnapshot(accountId, usageSnapshot)
+
+    account = await getAccount(accountId)
+    return {
+      id: accountId,
+      codexUsage: buildCodexUsageSnapshot(account || {})
+    }
+  }
+}
+
+function isCompleteCodexUsage(codexUsage) {
+  const windows = [codexUsage?.primary, codexUsage?.secondary]
+    .map((window) => toNumberOrNull(window?.windowMinutes))
+    .filter((minutes) => minutes !== null && minutes > 0)
+
+  return (
+    windows.some((minutes) => minutes < 24 * 60) && windows.some((minutes) => minutes >= 24 * 60)
+  )
+}
+
+async function refreshCodexUsageBatch(options = {}) {
+  const limit = Math.min(50, Math.max(1, Number.parseInt(options.limit, 10) || 10))
+  const concurrency = Math.min(5, Math.max(1, Number.parseInt(options.concurrency, 10) || 3))
+  const maxAgeSeconds = Math.min(
+    3600,
+    Math.max(60, Number.parseInt(options.maxAgeSeconds, 10) || 900)
+  )
+  const incompleteAgeSeconds = Math.min(maxAgeSeconds, 60)
+  const now = Date.now()
+  const accounts = await getAllAccounts()
+
+  const candidates = accounts
+    .map((account) => {
+      const updatedAt = Date.parse(account.codexUsage?.updatedAt || '')
+      const ageSeconds = Number.isFinite(updatedAt)
+        ? Math.max(0, Math.floor((now - updatedAt) / 1000))
+        : Number.POSITIVE_INFINITY
+      const complete = isCompleteCodexUsage(account.codexUsage)
+      return { id: account.id, ageSeconds, complete }
+    })
+    .filter(
+      (account) =>
+        account.ageSeconds >= maxAgeSeconds ||
+        (!account.complete && account.ageSeconds >= incompleteAgeSeconds)
+    )
+    .sort((left, right) => right.ageSeconds - left.ageSeconds)
+    .slice(0, limit)
+
+  const settled = new Array(candidates.length)
+  let cursor = 0
+  const worker = async () => {
+    for (;;) {
+      const index = cursor
+      cursor += 1
+      if (index >= candidates.length) {
+        return
+      }
+      try {
+        settled[index] = { value: await refreshCodexUsage(candidates[index].id) }
+      } catch (error) {
+        settled[index] = {
+          error: {
+            id: candidates[index].id,
+            message: error.message,
+            status: error.status || null
+          }
+        }
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, candidates.length) }, () => worker())
+  )
+
+  return {
+    accounts: settled.filter((item) => item?.value).map((item) => item.value),
+    errors: settled.filter((item) => item?.error).map((item) => item.error),
+    selected: candidates.length,
+    total: accounts.length
+  }
+}
+
 module.exports = {
   createAccount,
   getAccount,
@@ -1405,6 +1609,8 @@ module.exports = {
   updateAccountUsage,
   recordUsage, // 鍒悕锛屾寚鍚憉pdateAccountUsage
   updateCodexUsageSnapshot,
+  refreshCodexUsage,
+  refreshCodexUsageBatch,
   encrypt,
   decrypt,
   generateEncryptionKey,
