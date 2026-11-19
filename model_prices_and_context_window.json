@@ -31033,6 +31033,7 @@
         "supports_audio_input": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_native_streaming": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -31089,6 +31090,7 @@
         "supports_audio_input": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -31138,6 +31140,7 @@
         "supports_audio_input": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -31201,6 +31204,7 @@
         "supports_audio_input": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -31271,6 +31275,7 @@
         "supports_audio_input": true,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -31419,6 +31424,7 @@
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_native_streaming": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -31464,6 +31470,7 @@
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -31594,6 +31601,7 @@
         "supports_audio_input": true,
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -31784,6 +31792,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "rpm": 1000,
+        "supports_logprobs": false,
         "tpm": 4000000,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_token_flex": 6e-06,
@@ -31832,6 +31841,7 @@
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
         "rpm": 1000,
+        "supports_logprobs": false,
         "tpm": 4000000,
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
@@ -31904,6 +31914,7 @@
         "supports_audio_input": true,
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -32103,6 +32114,7 @@
         "input_cost_per_token_flex": 1.5e-07,
         "input_cost_per_token_priority": 5.4e-07,
         "litellm_provider": "gemini",
+        "supports_logprobs": false,
         "supports_reasoning": false,
         "max_input_tokens": 65536,
         "max_output_tokens": 32768,
@@ -32168,6 +32180,7 @@
         "output_cost_per_image_token_batches": 6e-05,
         "output_cost_per_token": 1.2e-05,
         "rpm": 1000,
+        "supports_logprobs": false,
         "tpm": 4000000,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_token_flex": 6e-06,
@@ -32215,6 +32228,7 @@
         "output_cost_per_image_token": 0.00012,
         "output_cost_per_token": 1.2e-05,
         "rpm": 1000,
+        "supports_logprobs": false,
         "tpm": 4000000,
         "output_cost_per_token_batches": 6e-06,
         "output_cost_per_token_flex": 6e-06,
@@ -32258,6 +32272,11 @@
         "output_cost_per_image_token_batches": 3e-05,
         "output_cost_per_token": 3e-06,
         "output_cost_per_token_batches": 1.5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "high"
+        ],
         "rpm": 1000.0,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "search_free_requests": {"count": 5000, "period": "month", "shared_group": "gemini-3"},
@@ -32277,6 +32296,7 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -32316,6 +32336,7 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -32457,6 +32478,7 @@
         ],
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -32516,6 +32538,7 @@
         ],
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -32717,6 +32740,7 @@
         "supports_audio_input": true,
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -32778,6 +32802,7 @@
         "supports_audio_input": true,
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -32837,6 +32862,7 @@
         ],
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -32901,6 +32927,7 @@
         "supports_audio_output": false,
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -32968,6 +32995,7 @@
         "supports_audio_output": false,
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -33029,6 +33057,7 @@
         "supports_audio_output": false,
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -33092,6 +33121,7 @@
         "supports_audio_output": false,
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -33187,6 +33217,7 @@
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -33256,6 +33287,7 @@
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -34837,7 +34869,7 @@
     "chatgpt/gpt-5.6-luna": {
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.6-luna",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -34857,7 +34889,7 @@
     "chatgpt/gpt-5.6-sol": {
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.6-sol",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -34877,7 +34909,7 @@
     "chatgpt/gpt-5.6-terra": {
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.6-terra",
-        "max_input_tokens": 1050000,
+        "max_input_tokens": 922000,
         "max_output_tokens": 128000,
         "mode": "responses",
         "supported_endpoints": [
@@ -55294,6 +55326,7 @@
         ],
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -55342,6 +55375,7 @@
             "/v1/images/edits",
             "/v1/batch"
         ],
+        "supports_logprobs": false,
         "supports_reasoning": false
     },
     "vertex_ai/gemini-3-pro-image-preview": {
@@ -55409,6 +55443,7 @@
             "/v1/images/edits",
             "/v1/batch"
         ],
+        "supports_logprobs": false,
         "supports_reasoning": false
     },
     "vertex_ai/gemini-3.1-flash-image-preview": {
@@ -55476,6 +55511,7 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": false,
@@ -55586,6 +55622,7 @@
         "supports_audio_input": true,
         "supports_audio_output": false,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -55641,6 +55678,7 @@
         "supports_audio_output": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
@@ -62477,6 +62515,7 @@
         ],
         "supports_audio_input": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -67501,16 +67540,16 @@
         "supports_vision": true
     },
     "fireworks_ai/accounts/fireworks/routers/kimi-latest": {
-        "cache_read_input_token_cost": 3e-07,
-        "cache_read_input_token_cost_priority": 3.75e-07,
-        "input_cost_per_token": 3e-06,
-        "input_cost_per_token_priority": 3.75e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_priority": 3e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_priority": 3e-06,
         "litellm_provider": "fireworks_ai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
-        "output_cost_per_token_priority": 1.875e-05,
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_priority": 1.5e-05,
         "reasoning_effort_levels": [
             "low",
             "high",
@@ -67519,13 +67558,14 @@
         "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
         "supports_function_calling": true,
         "supports_mid_conversation_system": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
     "fireworks_ai/kimi-latest": {
-        "alias_of": "fireworks_ai/accounts/fireworks/models/kimi-k3"
+        "alias_of": "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro"
     },
     "fireworks_ai/deepseek-v4-flash-0731": {
         "cache_read_input_token_cost": 7e-09,
@@ -80618,6 +80658,12 @@
         "output_cost_per_image_token_batches": 1.5e-05,
         "output_cost_per_token": 7.5e-06,
         "output_cost_per_token_batches": 3.75e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "medium",
+            "high"
+        ],
         "rpm": 1000.0,
         "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
@@ -80636,6 +80682,8 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": false,
         "supports_reasoning": true,
@@ -80686,6 +80734,7 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -80733,6 +80782,8 @@
             "image"
         ],
         "supports_function_calling": false,
+        "supports_logprobs": false,
+        "supports_minimal_reasoning_effort": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -81767,6 +81818,7 @@
         "supports_audio_output": false,
         "supports_computer_use": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_parallel_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -81922,6 +81974,7 @@
         "supports_computer_use": true,
         "supports_continuation": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -91535,6 +91588,7 @@
         "supports_computer_use": true,
         "supports_continuation": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -104353,6 +104407,7 @@
         "supports_computer_use": true,
         "supports_continuation": true,
         "supports_function_calling": true,
+        "supports_logprobs": false,
         "supports_minimal_reasoning_effort": false,
         "supports_native_streaming": true,
         "supports_parallel_function_calling": true,
@@ -121665,7 +121720,8 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "thinking_always_on": true
+        "thinking_always_on": true,
+        "token_count_model": {"model":"anthropic.claude-fable-5-1","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-4-8": {
         "bedrock_converse_supports_strict_tools": false,
@@ -121699,11 +121755,7 @@
         "supports_tool_search": true,
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
-        "token_count_model": {
-            "litellm_provider": "bedrock_mantle",
-            "model": "anthropic.claude-opus-4-8",
-            "region": "us-east-1"
-        }
+        "token_count_model": {"model":"anthropic.claude-opus-4-8","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -121737,11 +121789,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "thinking_on_by_default": true,
-        "token_count_model": {
-            "litellm_provider": "bedrock_mantle",
-            "model": "anthropic.claude-opus-5",
-            "region": "us-east-1"
-        }
+        "token_count_model": {"model":"anthropic.claude-opus-5","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5": {
         "bedrock_converse_supports_strict_tools": false,
@@ -121776,11 +121824,7 @@
         "supports_vision": true,
         "supports_xhigh_reasoning_effort": true,
         "thinking_on_by_default": true,
-        "token_count_model": {
-            "litellm_provider": "bedrock_mantle",
-            "model": "anthropic.claude-sonnet-5",
-            "region": "us-east-1"
-        }
+        "token_count_model": {"model":"anthropic.claude-sonnet-5","litellm_provider":"bedrock_mantle","region":"us-gov-west-1"}
     },
     "fal_ai/fal-ai/veo3": {
         "litellm_provider": "fal_ai",
@@ -122126,5 +122170,213 @@
         "supported_output_modalities": [
             "video"
         ]
+    },
+    "databricks/system.ai.gpt-6-2-astra": {
+        "cache_creation_input_token_cost": 1e-05,
+        "cache_creation_input_token_cost_above_272k_tokens": 2e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 4e-05,
+        "cache_creation_input_token_cost_priority": 2e-05,
+        "cache_read_input_token_cost": 4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 1.6e-06,
+        "cache_read_input_token_cost_priority": 8e-07,
+        "input_cost_per_token": 8e-06,
+        "input_cost_per_token_above_272k_tokens": 1.6e-05,
+        "input_cost_per_token_above_272k_tokens_priority": 3.2e-05,
+        "input_cost_per_token_priority": 1.6e-05,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "metadata": {"notes":"GPT-6.2 Astra on Databricks is available only through Unity Gateway with the model service name system.ai.gpt-6-2-astra. The Databricks pricing pages list no row for it yet, so prices are the Standard and Fast (priority) rates on the OpenAI pricing page for gpt-6.2-astra with OpenAI's 272K long context threshold, and no '*_dbu_cost_per_token' fields are published. Replace them with the Databricks DBU rates once Databricks publishes them."},
+        "mode": "chat",
+        "output_cost_per_token": 4e-05,
+        "output_cost_per_token_above_272k_tokens": 6e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 0.00012,
+        "output_cost_per_token_priority": 8e-05,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "databricks/system.ai.gpt-6-2-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens_priority": 1e-05,
+        "cache_creation_input_token_cost_priority": 5e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens_priority": 4e-07,
+        "cache_read_input_token_cost_priority": 2e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "input_cost_per_token_above_272k_tokens_priority": 8e-06,
+        "input_cost_per_token_priority": 4e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "metadata": {"notes":"GPT-6.2 Sol on Databricks is available only through Unity Gateway with the model service name system.ai.gpt-6-2-sol. The Databricks pricing pages list no row for it yet, so prices are the Standard and Fast (priority) rates on the OpenAI pricing page for gpt-6.2-sol with OpenAI's 272K long context threshold, and no '*_dbu_cost_per_token' fields are published. Replace them with the Databricks DBU rates once Databricks publishes them."},
+        "mode": "responses",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_272k_tokens": 1.5e-05,
+        "output_cost_per_token_above_272k_tokens_priority": 3e-05,
+        "output_cost_per_token_priority": 2e-05,
+        "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "gemini/gemini-4-neon": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "cache_read_input_token_cost_batches": 7.5e-08,
+        "cache_read_input_token_cost_flex": 7.5e-08,
+        "cache_read_input_token_cost_priority": 2.7e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token": 3e-06,
+        "input_cost_per_token_batches": 1.5e-06,
+        "input_cost_per_token_flex": 1.5e-06,
+        "input_cost_per_token_priority": 5.4e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1.5e-05,
+        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_batches": 7.5e-06,
+        "output_cost_per_token_flex": 7.5e-06,
+        "output_cost_per_token_priority": 2.7e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "rpm": 2000.0,
+        "search_context_cost_per_query": {"search_context_size_low":0.014,"search_context_size_medium":0.014,"search_context_size_high":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
+        "source": "https://aistudio.google.com/docs/pricing#gemini-4-neon",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": true,
+        "supports_continuation": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
+        "tpm": 800000.0,
+        "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/gemini-4-neon": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "cache_read_input_token_cost_batches": 7.5e-08,
+        "cache_read_input_token_cost_priority": 2.7e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_audio_token": 3e-06,
+        "input_cost_per_audio_token_batches": 1.5e-06,
+        "input_cost_per_audio_token_priority": 5.4e-06,
+        "input_cost_per_token": 3e-06,
+        "input_cost_per_token_batches": 1.5e-06,
+        "input_cost_per_token_priority": 5.4e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 1.5e-05,
+        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token_batches": 7.5e-06,
+        "output_cost_per_token_priority": 2.7e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "regional_endpoint_uplift_multiplier": 1.1,
+        "search_context_cost_per_query": {"search_context_size_high":0.014,"search_context_size_low":0.014,"search_context_size_medium":0.014},
+        "search_free_requests": {"count":5000,"period":"month","shared_group":"gemini-3"},
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": true,
+        "supports_continuation": true,
+        "supports_function_calling": true,
+        "supports_logprobs": false,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
+        "web_search_billing_unit": "per_query"
+    },
+    "github_copilot/gemini-4-neon": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "github_copilot",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://raw.githubusercontent.com/github/docs/main/data/tables/copilot/models-and-pricing.yml",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true,
+        "supports_vision": true
     }
 }
